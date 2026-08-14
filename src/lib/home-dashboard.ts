@@ -20,6 +20,7 @@ import {
   type Quarter,
 } from "@/lib/indicator-data";
 import type { WorkspaceModuleId } from "@/lib/navigation";
+import type { ManagementReviewRecord } from "@/lib/management-review-data";
 import type { SupplierAuditCalendarEvent } from "@/lib/quality-parties-data";
 import type { ActiveSession } from "@/lib/session-data";
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
@@ -62,6 +63,7 @@ export interface HomeDashboardSources {
     scope: string;
     status: string;
   }>;
+  managementReview?: ManagementReviewRecord | null;
 }
 
 export interface HomeDocumentMetric {
@@ -518,22 +520,615 @@ export function buildHomeDashboard(
       label: "Indicadores",
       value: `${pendingIndicatorCaptures} pendientes`,
       detail: indicatorCompliance === "Sin captura" ? "Sin resultados del trimestre" : `${indicatorCompliance} de cumplimiento`,
-      tone: pendingIndicatorCaptures > 0 ? "warni◊Æ8∂âûÀk∫wµÁ@âÖ——ïπ—•Ω∏à∞(ÄÄÄÄÄÅÖ…ïÑËÅ¡…ΩçïÕÕ	Â%êπùï–°ëΩç’µïπ–π¡…ΩçïÕÕ%ê§¸ππÖµîÄ¸¸ÅëΩç’µïπ–πΩ›πï»∞(ÄÄÄÄÄÅ¡…ΩçïÕÕ%êËÅëΩç’µïπ–π¡…ΩçïÕÕ%ê∞(ÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅŸï…Õ•Ω∏¸πŸÖ±•ëÖ—Ω»∞(ÄÄÄÄÄÅÕ—Ö—’ÃËÄâ¡ïπë•πúà∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅëΩç’µïπ–π•ê∞(ÄÄÄÅÙ§Ï(ÄÅÙ§Ï(ÄÅ…ï©ïç—ïëΩç’µïπ—ÃπôΩ…Öç††°ëΩç’µïπ–§ÄÙ¯ÅÏ(ÄÄÄÅçΩπÕ–ÅŸï…Õ•Ω∏ÄÙÅùï—]Ω…≠•πùYï…Õ•Ω∏°ëΩç’µïπ–§Ï(ÄÄÄÅ—ÖÕ≠Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅçΩ……ïç–¥ëÌëΩç’µïπ–π•ëıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅΩ……ïù•»ÄëÌëΩç’µïπ–πçΩëïıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅŸï…Õ•Ω∏¸π…ï©ïç—•ΩπIïÖÕΩ∏Ä¸¸ÅëΩç’µïπ–ππÖµî∞(ÄÄÄÄÄÅµΩë’±îËÄâëΩç’µïπ—Ãà∞(ÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâΩç’µïπ—ΩÃà∞(ÄÄÄÄÄÅ¡…•Ω…•—‰ËÄâç…•—•çÖ∞à∞(ÄÄÄÄÄÅÖ…ïÑËÅ¡…ΩçïÕÕ	Â%êπùï–°ëΩç’µïπ–π¡…ΩçïÕÕ%ê§¸ππÖµîÄ¸¸ÅëΩç’µïπ–πΩ›πï»∞(ÄÄÄÄÄÅ¡…ΩçïÕÕ%êËÅëΩç’µïπ–π¡…ΩçïÕÕ%ê∞(ÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅŸï…Õ•Ω∏¸π’¡±ΩÖëïë	‰∞(ÄÄÄÄÄÅÕ—Ö—’ÃËÄâ…ï©ïç—ïêà∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅëΩç’µïπ–π•ê∞(ÄÄÄÅÙ§Ï(ÄÅÙ§Ï(ÄÅÖç—•ΩπÃ(ÄÄÄÄπô•±—ï»†°Öç—•Ω∏§ÄÙ¯ÅÖç—•Ω∏πÕ—Ö—’ÃÄÑÙÙÄâç±ΩÕïêà§(ÄÄÄÄπôΩ…Öç††°Öç—•Ω∏§ÄÙ¯ÅÏ(ÄÄÄÄÄÅçΩπÕ–ÅΩŸï…ë’îÄÙÅ•ÕΩ……ïç—•Ÿïç—•Ωπ=Ÿï…ë’î°Öç—•Ω∏∞Å—ΩëÖ‰§Ï(ÄÄÄÄÄÅçΩπÕ–Å…ïµÖ•π•πùÖÂÃÄÙÅëÖÂÕ	ï—›ïï∏°—ΩëÖ‰∞ÅÖç—•Ω∏πë’ïÖ—î§Ï(ÄÄÄÄÄÅ—ÖÕ≠Ãπ¡’Õ†°Ï(ÄÄÄÄÄÄÄÅ•êËÅÅÖç—•Ω∏¥ëÌÖç—•Ω∏π•ëıÄ∞(ÄÄÄÄÄÄÄÅ—•—±îËÅÄëÌÖç—•Ω∏πôΩ±•ΩÙÉ
-‹ÄëÌÖç—•Ω∏π—•—±ïıÄ∞(ÄÄÄÄÄÄÄÅëï—Ö•∞ËÅΩŸï…ë’î(ÄÄÄÄÄÄÄÄÄÄ¸ÅÅYïπçßÃÅ°ÖçîÄëÌ5Ö—†πÖâÃ°…ïµÖ•π•πùÖÂÃ•ÙÅìµÖÕÄ(ÄÄÄÄÄÄÄÄÄÄËÅÄëÌ5Ö—†πµÖ‡°…ïµÖ•π•πùÖÂÃ∞Ä¿•ÙÅìµÖÃÅ¡Ö…ÑÅï∞ÅŸïπç•µ•ïπ—ΩÄ∞(ÄÄÄÄÄÄÄÅµΩë’±îËÄâçΩ……ïç—•ŸîµÖç—•ΩπÃà∞(ÄÄÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâIΩΩ–…Ö’Õîà∞(ÄÄÄÄÄÄÄÅ¡…•Ω…•—‰ËÅΩŸï…ë’îÄ¸Äâç…•—•çÖ∞àÄËÅ…ïµÖ•π•πùÖÂÃÄÙÄƒ–Ä¸ÄâÖ——ïπ—•Ω∏àÄËÄâπΩ…µÖ∞à∞(ÄÄÄÄÄÄÄÅë’ïÖ—îËÅÖç—•Ω∏πë’ïÖ—î∞(ÄÄÄÄÄÄÄÅÖ…ïÑËÅÖç—•Ω∏πÖ…ïÑ∞(ÄÄÄÄÄÄÄÅ¡…ΩçïÕÕ%êËÅ¡…ΩçïÕÕÖ—Ö±Ωúπô•πê†°¡…ΩçïÕÃ§ÄÙ¯Å¡…ΩçïÕÃππÖµîÄÙÙÙÅÖç—•Ω∏πÖ…ïÑ§¸π•ê∞(ÄÄÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅÖç—•Ω∏πΩ›πï»∞(ÄÄÄÄÄÄÄÅÕ—Ö—’ÃËÅÖç—•Ω∏πÕ—Ö—’Ã∞(ÄÄÄÄÄÄÄÅ—Ö…ùï—%êËÅÖç—•Ω∏π•ê∞(ÄÄÄÄÄÅÙ§Ï(ÄÄÄÅÙ§Ï(ÄÅÖÕÕï—Ã(ÄÄÄÄπô•±—ï»†°ÖÕÕï–§ÄÙ¯Åùï—ÕÕï—’ïM—Ö—’Ã°ÖÕÕï–∞Å—ΩëÖ‰§ÄÑÙÙÄâç’……ïπ–à§(ÄÄÄÄπôΩ…Öç††°ÖÕÕï–§ÄÙ¯ÅÏ(ÄÄÄÄÄÅçΩπÕ–ÅΩŸï…ë’îÄÙÅùï—ÕÕï—’ïM—Ö—’Ã°ÖÕÕï–∞Å—ΩëÖ‰§ÄÙÙÙÄâΩŸï…ë’îàÏ(ÄÄÄÄÄÅ—ÖÕ≠Ãπ¡’Õ†°Ï(ÄÄÄÄÄÄÄÅ•êËÅÅÖÕÕï–¥ëÌÖÕÕï–π•ëıÄ∞(ÄÄÄÄÄÄÄÅ—•—±îËÅÄëÌÖÕÕï–πçΩëïÙÉ
-‹ÄëÌÖÕÕï–ππÖµïıÄ∞(ÄÄÄÄÄÄÄÅëï—Ö•∞ËÅΩŸï…ë’îÄ¸ÄâÖ±•â…ÖçßÕ∏ÅºÅŸï…•ô•çÖçßÕ∏ÅŸïπç•ëÑàÄËÄâY•ùïπç•ÑÅ¡ÀÕ·•µÑÅÑÅ—ï…µ•πÖ»à∞(ÄÄÄÄÄÄÄÅµΩë’±îËÄâçÖ±•â…Ö—•ΩπÃà∞(ÄÄÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâÖ±•â…Öç•ΩπïÃà∞(ÄÄÄÄÄÄÄÅ¡…•Ω…•—‰ËÅΩŸï…ë’îÄ¸Äâç…•—•çÖ∞àÄËÄâÖ——ïπ—•Ω∏à∞(ÄÄÄÄÄÄÄÅë’ïÖ—îËÅÖÕÕï–ππï·—’ïÖ—î∞(ÄÄÄÄÄÄÄÅÖ…ïÑËÅÖÕÕï–π±ΩçÖ—•Ω∏∞(ÄÄÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅÖÕÕï–πΩ›πï»∞(ÄÄÄÄÄÄÄÅÕ—Ö—’ÃËÅΩŸï…ë’îÄ¸ÄâΩŸï…ë’îàÄËÄâë’ï}ÕΩΩ∏à∞(ÄÄÄÄÄÄÄÅ—Ö…ùï—%êËÅÖÕÕï–π•ê∞(ÄÄÄÄÄÅÙ§Ï(ÄÄÄÅÙ§Ï(ÄÅ•πë•çÖ—Ω…ÃπôΩ…Öç††°•πë•çÖ—Ω»§ÄÙ¯ÅÏ(ÄÄÄÅçΩπÕ–ÅΩŸï…ë’ïE’Ö…—ï»ÄÙÅl∏∏π≈’Ö…—ï…Õt(ÄÄÄÄÄÄπ…ïŸï…Õî†§(ÄÄÄÄÄÄπô•πê†°≈’Ö…—ï»§ÄÙ¯ÅÏ(ÄÄÄÄÄÄÄÅçΩπÕ–ÅÕç°ïë’±ïëÖ—îÄÙÅ•πë•çÖ—Ω»πÕç°ïë’±ïmM—…•πú°πΩ‹πùï—’±±eïÖ»†§•t¸πm≈’Ö…—ï…tÏ(ÄÄÄÄÄÄÄÅ…ï—’…∏Ä†(ÄÄÄÄÄÄÄÄÄÅÕç°ïë’±ïëÖ—îÄòò(ÄÄÄÄÄÄÄÄÄÅÕç°ïë’±ïëÖ—îÄÙÅ—ΩëÖ‰Äòò(ÄÄÄÄÄÄÄÄÄÄÖùï—%πë•çÖ—Ω…IïçΩ…ê†(ÄÄÄÄÄÄÄÄÄÄÄÅÕΩ’…çïÃπ•πë•çÖ—Ω…IïÕ’±—Ã∞(ÄÄÄÄÄÄÄÄÄÄÄÅ•πë•çÖ—Ω»π•ê∞(ÄÄÄÄÄÄÄÄÄÄÄÅπΩ‹πùï—’±±eïÖ»†§∞(ÄÄÄÄÄÄÄÄÄÄÄÅ≈’Ö…—ï»∞(ÄÄÄÄÄÄÄÄÄÄ§(ÄÄÄÄÄÄÄÄ§Ï(ÄÄÄÄÄÅÙ§Ï(ÄÄÄÅ•òÄ†ÖΩŸï…ë’ïE’Ö…—ï»§Å…ï—’…∏Ï(ÄÄÄÅ—ÖÕ≠Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅ•πë•çÖ—Ω»¥ëÌ•πë•çÖ—Ω»π•ëÙ¥ëÌΩŸï…ë’ïE’Ö…—ï…ıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅÖ¡—’…Ö»ÄëÌ•πë•çÖ—Ω»π•ëıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅÄëÌ•πë•çÖ—Ω»ππÖµïÙÉ
-‹ÄëÌΩŸï…ë’ïE’Ö…—ï…ıÄ∞(ÄÄÄÄÄÅµΩë’±îËÄâ•πë•çÖ—Ω…Ãà∞(ÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâ%πë•çÖëΩ…ïÃà∞(ÄÄÄÄÄÅ¡…•Ω…•—‰ËÄâÖ——ïπ—•Ω∏à∞(ÄÄÄÄÄÅë’ïÖ—îËÅ•πë•çÖ—Ω»πÕç°ïë’±ïmM—…•πú°πΩ‹πùï—’±±eïÖ»†§•t¸πmΩŸï…ë’ïE’Ö…—ï…t∞(ÄÄÄÄÄÅÖ…ïÑËÅ•πë•çÖ—Ω»πÖ…ïÑ∞(ÄÄÄÄÄÅ¡…ΩçïÕÕ%êËÅ•πë•çÖ—Ω»π¡…ΩçïÕÕ%ê∞(ÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅ•πë•çÖ—Ω»π±ïÖëï»∞(ÄÄÄÄÄÅÕ—Ö—’ÃËÄâπΩ—}’¡±ΩÖëïêà∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅ•πë•çÖ—Ω»π•ê∞(ÄÄÄÅÙ§Ï(ÄÅÙ§Ï(ÄÅÕ’¡¡±•ï…’ë•—Ã(ÄÄÄÄπô•±—ï»†(ÄÄÄÄÄÄ°Ö’ë•–§ÄÙ¯(ÄÄÄÄÄÄÄÅlâA…Ωù…ÖµÖëÑà∞ÄâAïπë•ïπ—îâtπ•πç±’ëïÃ°Ö’ë•–πÕ—Ö—’Ã§ÄòòÅÖ’ë•–πëÖ—îÄ¯ÙÅ—ΩëÖ‰∞(ÄÄÄÄ§(ÄÄÄÄπôΩ…Öç††°Ö’ë•–§ÄÙ¯ÅÏ(ÄÄÄÄÄÅçΩπÕ–Å…ïµÖ•π•πùÖÂÃÄÙÅëÖÂÕ	ï—›ïï∏°—ΩëÖ‰∞ÅÖ’ë•–πëÖ—î§Ï(ÄÄÄÄÄÅ—ÖÕ≠Ãπ¡’Õ†°Ï(ÄÄÄÄÄÄÄÅ•êËÅÅÖ’ë•–¥ëÌÖ’ë•–π•ëıÄ∞(ÄÄÄÄÄÄÄÅ—•—±îËÅÅ’ë•—ΩÀµÑÉ
-‹ÄëÌÖ’ë•–πÕ’¡¡±•ï…9ÖµïıÄ∞(ÄÄÄÄÄÄÄÅëï—Ö•∞ËÅÄëÌÖ’ë•–π≈’Ö±•—Â1ïŸï±ÙîÅëîÅπ•Ÿï∞ÅëîÅçÖ±•ëÖëÄ∞(ÄÄÄÄÄÄÄÅµΩë’±îËÄâÖ’ë•—Ãà∞(ÄÄÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâ’ë•—ΩÀµÖÃà∞(ÄÄÄÄÄÄÄÅ¡…•Ω…•—‰ËÅ…ïµÖ•π•πùÖÂÃÄÙÄƒ–Ä¸ÄâÖ——ïπ—•Ω∏àÄËÄâπΩ…µÖ∞à∞(ÄÄÄÄÄÄÄÅë’ïÖ—îËÅÖ’ë•–πëÖ—î∞(ÄÄÄÄÄÄÄÅÖ…ïÑËÄâΩµ¡…ÖÃà∞(ÄÄÄÄÄÄÄÅ¡…ΩçïÕÕ%êËÄâ@¥ƒ¿à∞(ÄÄÄÄÄÄÄÅ…ïÕ¡ΩπÕ•â±îËÅÖ’ë•–πÕ’¡¡±•ï…9Öµî∞(ÄÄÄÄÄÄÄÅÕ—Ö—’ÃËÅÖ’ë•–πÕ—Ö—’Ã∞(ÄÄÄÄÄÄÄÅ—Ö…ùï—%êËÅÖ’ë•–π•ê∞(ÄÄÄÄÄÅÙ§Ï(ÄÄÄÅÙ§Ï((ÄÅ…ï—’…∏Å—ÖÕ≠ÃπÕΩ…–†°±ïô–∞Å…•ù°–§ÄÙ¯ÅÏ(ÄÄÄÅçΩπÕ–Å¡…•Ω…•—Â•ôôï…ïπçîÄÙÅ¡…•Ω…•—Â=…ëï…m±ïô–π¡…•Ω…•—ÂtÄ¥Å¡…•Ω…•—Â=…ëï…m…•ù°–π¡…•Ω…•—ÂtÏ(ÄÄÄÅ•òÄ°¡…•Ω…•—Â•ôôï…ïπçîÄÑÙÙÄ¿§Å…ï—’…∏Å¡…•Ω…•—Â•ôôï…ïπçîÏ(ÄÄÄÅ•òÄ†Ö±ïô–πë’ïÖ—î§Å…ï—’…∏ÄƒÏ(ÄÄÄÅ•òÄ†Ö…•ù°–πë’ïÖ—î§Å…ï—’…∏Ä¥ƒÏ(ÄÄÄÅ…ï—’…∏Å±ïô–πë’ïÖ—îπ±ΩçÖ±ïΩµ¡Ö…î°…•ù°–πë’ïÖ—î§Ï(ÄÅÙ§Ï)Ù()ô’πç—•Ω∏Åâ’•±ëIïçïπ—ç—•Ÿ•—‰†(ÄÅëΩç’µïπ—ÃËÅΩπ—…Ω±±ïëΩç’µïπ—mt∞(ÄÅÖç—•ΩπÃËÅΩ……ïç—•Ÿïç—•Ωπmt∞(ÄÅÖ’ë•—ÃËÅM’¡¡±•ï…’ë•—Ö±ïπëÖ…Ÿïπ—mt∞(§ÅÏ(ÄÅçΩπÕ–ÅëΩç’µïπ—ç—•Ÿ•—‰ËÅ!Ωµïç—•Ÿ•—ÂmtÄÙÅëΩç’µïπ—Ãπô±Ö—5Ö¿†°ëΩç’µïπ–§ÄÙ¯(ÄÄÄÅëΩç’µïπ–πŸï…Õ•ΩπÃπÕ±•çî†¿∞Ä»§πµÖ¿†°Ÿï…Õ•Ω∏§ÄÙ¯Ä°Ï(ÄÄÄÄÄÅ•êËÅÅëΩç’µïπ–¥ëÌŸï…Õ•Ω∏π•ëıÄ∞(ÄÄÄÄÄÅÖç—Ω»ËÅŸï…Õ•Ω∏πÖ’—°Ω…•Èïë	‰Ä¸¸ÅŸï…Õ•Ω∏π’¡±ΩÖëïë	‰∞(ÄÄÄÄÄÅëïÕç…•¡—•Ω∏ËÅÄëÌëΩç’µïπ—M—Ö—’Õç—•Ω∏°Ÿï…Õ•Ω∏πÕ—Ö—’Ã•ÙÄëÌëΩç’µïπ–πçΩëïÙÅ…ïŸ•ÕßÕ∏ÄëÌŸï…Õ•Ω∏π…ïŸ•Õ•ΩπıÄ∞(ÄÄÄÄÄÅΩçç’……ïë–ËÅŸï…Õ•Ω∏πµΩë•ô•ïë–∞(ÄÄÄÄÄÅµΩë’±îËÄâëΩç’µïπ—ÃàÅÖÃÅçΩπÕ–∞(ÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâΩç’µïπ—ΩÃà∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅëΩç’µïπ–π•ê∞(ÄÄÄÅÙ§§∞(ÄÄ§Ï(ÄÅçΩπÕ–ÅÖç—•Ωπç—•Ÿ•—‰ËÅ!Ωµïç—•Ÿ•—ÂmtÄÙÅÖç—•ΩπÃπµÖ¿†°Öç—•Ω∏§ÄÙ¯Ä°Ï(ÄÄÄÅ•êËÅÅçΩ……ïç—•Ÿî¥ëÌÖç—•Ω∏π•ëıÄ∞(ÄÄÄÅÖç—Ω»ËÅÖç—•Ω∏πΩ›πï»∞(ÄÄÄÅëïÕç…•¡—•Ω∏ËÅÅ…ïù•Õ—ÀÃÄëÌÖç—•Ω∏πôΩ±•ΩÙÉ
-‹ÄëÌÖç—•Ω∏π—•—±ïıÄ∞(ÄÄÄÅΩçç’……ïë–ËÅÄëÌÖç—•Ω∏πç…ïÖ—ïë—ıPƒ»Ë¿¿Ë¿¿∏¿¿¡iÄ∞(ÄÄÄÅµΩë’±îËÄâçΩ……ïç—•ŸîµÖç—•ΩπÃà∞(ÄÄÄÅµΩë’±ï1Öâï∞ËÄâIΩΩ–…Ö’Õîà∞(ÄÄÄÅ—Ö…ùï—%êËÅÖç—•Ω∏π•ê∞(ÄÅÙ§§Ï(ÄÅçΩπÕ–ÅÖ’ë•—ç—•Ÿ•—‰ËÅ!Ωµïç—•Ÿ•—ÂmtÄÙÅÖ’ë•—Ã(ÄÄÄÄπô•±—ï»†°Ö’ë•–§ÄÙ¯ÅÖ’ë•–πÕ—Ö—’ÃÄÙÙÙÄâIïÖ±•ÈÖëÑà§(ÄÄÄÄπµÖ¿†°Ö’ë•–§ÄÙ¯Ä°Ï(ÄÄÄÄÄÅ•êËÅÅÖ’ë•–µÖç—•Ÿ•—‰¥ëÌÖ’ë•–π•ëıÄ∞(ÄÄÄÄÄÅÖç—Ω»ËÄâÖ±•ëÖêÅA…ΩŸïïëΩ…ïÃà∞(ÄÄÄÄÄÅëïÕç…•¡—•Ω∏ËÅÅ…ïù•Õ—ÀÃÅï∞Å…ïÕ’±—ÖëºÅëîÅÖ’ë•—ΩÀµÑÅëîÄëÌÖ’ë•–πÕ’¡¡±•ï…9ÖµïıÄ∞(ÄÄÄÄÄÅΩçç’……ïë–ËÅÄëÌÖ’ë•–πëÖ—ïıPƒ»Ë¿¿Ë¿¿∏¿¿¡iÄ∞(ÄÄÄÄÄÅµΩë’±îËÄâÖ’ë•—Ãà∞(ÄÄÄÄÄÅµΩë’±ï1Öâï∞ËÄâ’ë•—ΩÀµÖÃà∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅÖ’ë•–π•ê∞(ÄÄÄÅÙ§§Ï((ÄÅ…ï—’…∏Ål∏∏πëΩç’µïπ—ç—•Ÿ•—‰∞Ä∏∏πÖç—•Ωπç—•Ÿ•—‰∞Ä∏∏πÖ’ë•—ç—•Ÿ•—ÂtπÕΩ…–†°±ïô–∞Å…•ù°–§ÄÙ¯(ÄÄÄÅ…•ù°–πΩçç’……ïë–π±ΩçÖ±ïΩµ¡Ö…î°±ïô–πΩçç’……ïë–§∞(ÄÄ§Ï)Ù()ô’πç—•Ω∏Åâ’•±ëU¡çΩµ•πùŸïπ—Ã†(ÄÅÖç—•ΩπÃËÅΩ……ïç—•Ÿïç—•Ωπmt∞(ÄÅÖÕÕï—ÃËÅ5ïÖÕ’…ïµïπ—ÕÕï—mt∞(ÄÅÕ’¡¡±•ï…’ë•—ÃËÅM’¡¡±•ï…’ë•—Ö±ïπëÖ…Ÿïπ—mt∞(ÄÅï·—ï…πÖ±’ë•—ÃËÅ!ΩµïÖÕ°âΩÖ…ëMΩ’…çïÕlâï·—ï…πÖ±’ë•—Ãât∞(ÄÅ—ΩëÖ‰ËÅÕ—…•πú∞(§ÅÏ(ÄÅçΩπÕ–ÅïŸïπ—ÃËÅ!ΩµïU¡çΩµ•πùŸïπ—mtÄÙÅmtÏ(ÄÅÖç—•ΩπÃ(ÄÄÄÄπô•±—ï»†°Öç—•Ω∏§ÄÙ¯ÅÖç—•Ω∏πÕ—Ö—’ÃÄÑÙÙÄâç±ΩÕïêàÄòòÅÖç—•Ω∏πë’ïÖ—îÄ¯ÙÅ—ΩëÖ‰§(ÄÄÄÄπôΩ…Öç††°Öç—•Ω∏§ÄÙ¯ÅïŸïπ—Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅïŸïπ–µÖç—•Ω∏¥ëÌÖç—•Ω∏π•ëıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅYïπç•µ•ïπ—ºÄëÌÖç—•Ω∏πôΩ±•ΩıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅÖç—•Ω∏π—•—±î∞(ÄÄÄÄÄÅëÖ—îËÅÖç—•Ω∏πë’ïÖ—î∞(ÄÄÄÄÄÅµΩë’±îËÄâçΩ……ïç—•ŸîµÖç—•ΩπÃà∞(ÄÄÄÄÄÅ—ΩπîËÅëÖÂÕ	ï—›ïï∏°—ΩëÖ‰∞ÅÖç—•Ω∏πë’ïÖ—î§ÄÙÄƒ–Ä¸Äâ›Ö…π•πúàÄËÄâπï’—…Ö∞à∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅÖç—•Ω∏π•ê∞(ÄÄÄÅÙ§§Ï(ÄÅÖÕÕï—Ã(ÄÄÄÄπô•±—ï»†°ÖÕÕï–§ÄÙ¯ÅÖÕÕï–ππï·—’ïÖ—îÄ¯ÙÅ—ΩëÖ‰§(ÄÄÄÄπôΩ…Öç††°ÖÕÕï–§ÄÙ¯ÅïŸïπ—Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅïŸïπ–µÖÕÕï–¥ëÌÖÕÕï–π•ëıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅY•ùïπç•ÑÄëÌÖÕÕï–πçΩëïıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅÖÕÕï–ππÖµî∞(ÄÄÄÄÄÅëÖ—îËÅÖÕÕï–ππï·—’ïÖ—î∞(ÄÄÄÄÄÅµΩë’±îËÄâçÖ±•â…Ö—•ΩπÃà∞(ÄÄÄÄÄÅ—ΩπîËÅùï—ÕÕï—’ïM—Ö—’Ã°ÖÕÕï–∞Å—ΩëÖ‰§ÄÙÙÙÄâë’ï}ÕΩΩ∏àÄ¸Äâ›Ö…π•πúàÄËÄâπï’—…Ö∞à∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅÖÕÕï–π•ê∞(ÄÄÄÅÙ§§Ï(ÄÅÕ’¡¡±•ï…’ë•—Ã(ÄÄÄÄπô•±—ï»†°Ö’ë•–§ÄÙ¯ÅÖ’ë•–πëÖ—îÄ¯ÙÅ—ΩëÖ‰ÄòòÅÖ’ë•–πÕ—Ö—’ÃÄÑÙÙÄâÖπçï±ÖëÑà§(ÄÄÄÄπôΩ…Öç††°Ö’ë•–§ÄÙ¯ÅïŸïπ—Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅïŸïπ–µÕ’¡¡±•ï»µÖ’ë•–¥ëÌÖ’ë•–π•ëıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅ’ë•—ΩÀµÑÄëÌÖ’ë•–πÕ’¡¡±•ï…9ÖµïıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅÄëÌÖ’ë•–π≈’Ö±•—Â1ïŸï±ÙîÅëîÅπ•Ÿï∞ÅëîÅçÖ±•ëÖëÄ∞(ÄÄÄÄÄÅëÖ—îËÅÖ’ë•–πëÖ—î∞(ÄÄÄÄÄÅµΩë’±îËÄâÖ’ë•—Ãà∞(ÄÄÄÄÄÅ—ΩπîËÄâπï’—…Ö∞à∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅÖ’ë•–π•ê∞(ÄÄÄÅÙ§§Ï(ÄÅï·—ï…πÖ±’ë•—Ã(ÄÄÄÄπô•±—ï»†°Ö’ë•–§ÄÙ¯ÅÖ’ë•–πëÖ—îÄ¯ÙÅ—ΩëÖ‰§(ÄÄÄÄπôΩ…Öç††°Ö’ë•–§ÄÙ¯ÅïŸïπ—Ãπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅÅïŸïπ–µï·—ï…πÖ∞µÖ’ë•–¥ëÌÖ’ë•–π•ëıÄ∞(ÄÄÄÄÄÅ—•—±îËÅÅ’ë•—ΩÀµÑÅï·—ï…πÑÉ
-‹ÄëÌÖ’ë•–π¡Ö…—ÂıÄ∞(ÄÄÄÄÄÅëï—Ö•∞ËÅÖ’ë•–πÕçΩ¡î∞(ÄÄÄÄÄÅëÖ—îËÅÖ’ë•–πëÖ—î∞(ÄÄÄÄÄÅµΩë’±îËÄâç’Õ—Ωµï…Ãà∞(ÄÄÄÄÄÅ—ΩπîËÄâπï’—…Ö∞à∞(ÄÄÄÄÄÅ—Ö…ùï—%êËÅÖ’ë•–π•ê∞(ÄÄÄÅÙ§§Ï(ÄÅ…ï—’…∏ÅïŸïπ—ÃπÕΩ…–†°±ïô–∞Å…•ù°–§ÄÙ¯Å±ïô–πëÖ—îπ±ΩçÖ±ïΩµ¡Ö…î°…•ù°–πëÖ—î§§Ï)Ù()ô’πç—•Ω∏Åâ’•±ëMïÖ…ç°%πëï‡°Ï(ÄÅëΩç’µïπ—Ã∞(ÄÅÖç—•ΩπÃ∞(ÄÅÖÕÕï—Ã∞(ÄÅ•πë•çÖ—Ω…Ã∞(ÄÅÕ’¡¡±•ï…’ë•—Ã∞(ÄÅÕïÕÕ•Ω∏∞)ÙËÅÏ(ÄÅëΩç’µïπ—ÃËÅΩπ—…Ω±±ïëΩç’µïπ—mtÏ(ÄÅÖç—•ΩπÃËÅΩ……ïç—•Ÿïç—•ΩπmtÏ(ÄÅÖÕÕï—ÃËÅ5ïÖÕ’…ïµïπ—ÕÕï—mtÏ(ÄÅ•πë•çÖ—Ω…ÃËÅΩπô•ù’…ïë%πë•çÖ—Ω…mtÏ(ÄÅÕ’¡¡±•ï…’ë•—ÃËÅM’¡¡±•ï…’ë•—Ö±ïπëÖ…Ÿïπ—mtÏ(ÄÅÕïÕÕ•Ω∏ËÅç—•ŸïMïÕÕ•Ω∏Ï)Ù§ÅÏ(ÄÅçΩπÕ–Å•—ïµÃËÅ!ΩµïMïÖ…ç°IïÕ’±—mtÄÙÅmtÏ(ÄÅëΩç’µïπ—ÃπôΩ…Öç††°ëΩç’µïπ–§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅëΩç’µïπ–π•ê∞(ÄÄÄÅ—•—±îËÅÄëÌëΩç’µïπ–πçΩëïÙÉ
-‹ÄëÌëΩç’µïπ–ππÖµïıÄ∞(ÄÄÄÅµï—ÑËÅÅΩç’µïπ—ºÉ
-‹ÄëÌ¡…ΩçïÕÕÖ—Ö±Ωúπô•πê†°¡…ΩçïÕÃ§ÄÙ¯Å¡…ΩçïÕÃπ•êÄÙÙÙÅëΩç’µïπ–π¡…ΩçïÕÕ%ê§¸ππÖµîÄ¸¸ÅëΩç’µïπ–π¡…ΩçïÕÕ%ëıÄ∞(ÄÄÄÅµΩë’±îËÄâëΩç’µïπ—Ãà∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅmëΩç’µïπ–πçΩëî∞ÅëΩç’µïπ–ππÖµî∞ÅëΩç’µïπ–πΩ›πï»∞ÅëΩç’µïπ–π¡…ΩçïÕÕ%ëtπ©Ω•∏†àÄà§∞(ÄÅÙ§§Ï(ÄÅÖç—•ΩπÃπôΩ…Öç††°Öç—•Ω∏§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅÖç—•Ω∏π•ê∞(ÄÄÄÅ—•—±îËÅÄëÌÖç—•Ω∏πôΩ±•ΩÙÉ
-‹ÄëÌÖç—•Ω∏π—•—±ïıÄ∞(ÄÄÄÅµï—ÑËÅÅççßÕ∏ÅçΩ……ïç—•ŸÑÉ
-‹ÄëÌÖç—•Ω∏πÖ…ïÖıÄ∞(ÄÄÄÅµΩë’±îËÄâçΩ……ïç—•ŸîµÖç—•ΩπÃà∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅmÖç—•Ω∏πôΩ±•º∞ÅÖç—•Ω∏π—•—±î∞ÅÖç—•Ω∏π¡…Ωâ±ï¥∞ÅÖç—•Ω∏πÖ…ïÑ∞ÅÖç—•Ω∏πΩ›πï…tπ©Ω•∏†àÄà§∞(ÄÅÙ§§Ï(ÄÅÖÕÕï—ÃπôΩ…Öç††°ÖÕÕï–§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅÖÕÕï–π•ê∞(ÄÄÄÅ—•—±îËÅÄëÌÖÕÕï–πçΩëïÙÉ
-‹ÄëÌÖÕÕï–ππÖµïıÄ∞(ÄÄÄÅµï—ÑËÅÅÖ±•â…ÖçßÕ∏É
-‹ÄëÌÖÕÕï–π±ΩçÖ—•ΩπıÄ∞(ÄÄÄÅµΩë’±îËÄâçÖ±•â…Ö—•ΩπÃà∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅmÖÕÕï–πçΩëî∞ÅÖÕÕï–ππÖµî∞ÅÖÕÕï–π±ΩçÖ—•Ω∏∞ÅÖÕÕï–πΩ›πï…tπ©Ω•∏†àÄà§∞(ÄÅÙ§§Ï(ÄÅ•πë•çÖ—Ω…ÃπôΩ…Öç††°•πë•çÖ—Ω»§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅ•πë•çÖ—Ω»π•ê∞(ÄÄÄÅ—•—±îËÅÄëÌ•πë•çÖ—Ω»π•ëÙÉ
-‹ÄëÌ•πë•çÖ—Ω»ππÖµïıÄ∞(ÄÄÄÅµï—ÑËÅÅ%πë•çÖëΩ»É
-‹ÄëÌ•πë•çÖ—Ω»πÖ…ïÖıÄ∞(ÄÄÄÅµΩë’±îËÄâ•πë•çÖ—Ω…Ãà∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅm•πë•çÖ—Ω»π•ê∞Å•πë•çÖ—Ω»ππÖµî∞Å•πë•çÖ—Ω»πÖ…ïÑ∞Å•πë•çÖ—Ω»π±ïÖëï»∞Å•πë•çÖ—Ω»πµï—…•çtπ©Ω•∏†àÄà§∞(ÄÅÙ§§Ï(ÄÅÕ’¡¡±•ï…’ë•—ÃπôΩ…Öç††°Ö’ë•–§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅÖ’ë•–π•ê∞(ÄÄÄÅ—•—±îËÅÄëÌÖ’ë•–π•ëÙÉ
-‹ÄëÌÖ’ë•–πÕ’¡¡±•ï…9ÖµïıÄ∞(ÄÄÄÅµï—ÑËÅÅ’ë•—ΩÀµÑÉ
-‹ÄëÌÖ’ë•–πëÖ—ïıÄ∞(ÄÄÄÅµΩë’±îËÄâÖ’ë•—Ãà∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅmÖ’ë•–π•ê∞ÅÖ’ë•–πÕ’¡¡±•ï…Ωëî∞ÅÖ’ë•–πÕ’¡¡±•ï…9Öµî∞ÅÖ’ë•–πÕ—Ö—’Õtπ©Ω•∏†àÄà§∞(ÄÅÙ§§Ï(ÄÅ¡…ΩçïÕÕÖ—Ö±Ωú(ÄÄÄÄπô•±—ï»†(ÄÄÄÄÄÄ°¡…ΩçïÕÃ§ÄÙ¯(ÄÄÄÄÄÄÄÅÕïÕÕ•Ω∏π’Õï…QÂ¡îÄÙÙÙÄâëµ•π•Õ—…ÖëΩ»àÅÒ(ÄÄÄÄÄÄÄÅÕïÕÕ•Ω∏πÖÕÕ•ùπïëA…ΩçïÕÕ%ëÃπ•πç±’ëïÃ°¡…ΩçïÕÃπ•ê§ÅÒ(ÄÄÄÄÄÄÄÄ°¡…ΩçïÕÃπ¡Ö…ïπ—%êÄòòÅÕïÕÕ•Ω∏πÖÕÕ•ùπïëA…ΩçïÕÕ%ëÃπ•πç±’ëïÃ°¡…ΩçïÕÃπ¡Ö…ïπ—%ê§§∞(ÄÄÄÄ§(ÄÄÄÄπôΩ…Öç††°¡…ΩçïÕÃ§ÄÙ¯Å•—ïµÃπ¡’Õ†°Ï(ÄÄÄÄÄÅ•êËÅ¡…ΩçïÕÃπ•ê∞(ÄÄÄÄÄÅ—•—±îËÅÄëÌ¡…ΩçïÕÃπ•ëÙÉ
-‹ÄëÌ¡…ΩçïÕÃππÖµïıÄ∞(ÄÄÄÄÄÅµï—ÑËÅ¡…ΩçïÕÃπ±ïŸï∞ÄÙÙÙÄâ¡…ΩçïÕÃàÄ¸ÄâA…ΩçïÕºàÄËÄâM’â¡…ΩçïÕºà∞(ÄÄÄÄÄÅµΩë’±îËÄâ¡…ΩçïÕÕïÃà∞(ÄÄÄÄÄÅÕïÖ…ç°Qï·–ËÅm¡…ΩçïÕÃπ•ê∞Å¡…ΩçïÕÃππÖµî∞Å¡…ΩçïÕÃπÕΩ’…çï1Öâï±tπ©Ω•∏†àÄà§∞(ÄÄÄÅÙ§§Ï(ÄÅ•—ïµÃπ¡’Õ†°Ï(ÄÄÄÅ•êËÅÕïÕÕ•Ω∏π’Õï…%ê∞(ÄÄÄÅ—•—±îËÅÕïÕÕ•Ω∏ππÖµî∞(ÄÄÄÅµï—ÑËÅÄëÌÕïÕÕ•Ω∏π¡ΩÕ•—•ΩπÙÉ
-‹ÄëÌÕïÕÕ•Ω∏πëï¡Ö…—µïπ—ıÄ∞(ÄÄÄÅµΩë’±îËÄâΩ…ùÖπ•ÈÖ—•Ω∏à∞(ÄÄÄÅÕïÖ…ç°Qï·–ËÅmÕïÕÕ•Ω∏ππÖµî∞ÅÕïÕÕ•Ω∏π¡ΩÕ•—•Ω∏∞ÅÕïÕÕ•Ω∏πëï¡Ö…—µïπ—tπ©Ω•∏†àÄà§∞(ÄÅÙ§Ï(ÄÅ…ï—’…∏Å•—ïµÃÏ)Ù()ô’πç—•Ω∏Åâ’•±ë•±—ï…=¡—•ΩπÃ°Ï(ÄÅëΩç’µïπ—Ã∞(ÄÅÖç—•ΩπÃ∞(ÄÅÖÕÕï—Ã∞(ÄÅ•πë•çÖ—Ω…Ã∞(ÄÅÕ’¡¡±•ï…’ë•—Ã∞)ÙËÅÏ(ÄÅëΩç’µïπ—ÃËÅΩπ—…Ω±±ïëΩç’µïπ—mtÏ(ÄÅÖç—•ΩπÃËÅΩ……ïç—•Ÿïç—•ΩπmtÏ(ÄÅÖÕÕï—ÃËÅ5ïÖÕ’…ïµïπ—ÕÕï—mtÏ(ÄÅ•πë•çÖ—Ω…ÃËÅΩπô•ù’…ïë%πë•çÖ—Ω…mtÏ(ÄÅÕ’¡¡±•ï…’ë•—ÃËÅM’¡¡±•ï…’ë•—Ö±ïπëÖ…Ÿïπ—mtÏ)Ù§ÅÏ(ÄÅçΩπÕ–Å¡…ΩçïÕÕ%ëÃÄÙÅπï‹ÅMï–°ëΩç’µïπ—ÃπµÖ¿†°ëΩç’µïπ–§ÄÙ¯ÅëΩç’µïπ–π¡…ΩçïÕÕ%ê§§Ï(ÄÅ•πë•çÖ—Ω…ÃπôΩ…Öç††°•πë•çÖ—Ω»§ÄÙ¯Å¡…ΩçïÕÕ%ëÃπÖëê°•πë•çÖ—Ω»π¡…ΩçïÕÕ%ê§§Ï(ÄÅçΩπÕ–ÅÖ…ïÖÃÄÙÅπï‹ÅMï–ÒÕ—…•πú¯†§Ï(ÄÅëΩç’µïπ—ÃπôΩ…Öç††°ëΩç’µïπ–§ÄÙ¯ÅÏ(ÄÄÄÅçΩπÕ–Å¡…ΩçïÕÃÄÙÅ¡…ΩçïÕÕÖ—Ö±Ωúπô•πê†°•—ï¥§ÄÙ¯Å•—ï¥π•êÄÙÙÙÅëΩç’µïπ–π¡…ΩçïÕÕ%ê§Ï(ÄÄÄÅ•òÄ°¡…ΩçïÕÃ§ÅÖ…ïÖÃπÖëê°¡…ΩçïÕÃππÖµî§Ï(ÄÅÙ§Ï(ÄÅÖç—•ΩπÃπôΩ…Öç††°Öç—•Ω∏§ÄÙ¯ÅÖ…ïÖÃπÖëê°Öç—•Ω∏πÖ…ïÑ§§Ï(ÄÅÖÕÕï—ÃπôΩ…Öç††°ÖÕÕï–§ÄÙ¯ÅÖ…ïÖÃπÖëê°ÖÕÕï–π±ΩçÖ—•Ω∏§§Ï(ÄÅ•πë•çÖ—Ω…ÃπôΩ…Öç††°•πë•çÖ—Ω»§ÄÙ¯ÅÖ…ïÖÃπÖëê°•πë•çÖ—Ω»πÖ…ïÑ§§Ï(ÄÅ•òÄ°Õ’¡¡±•ï…’ë•—Ãπ±ïπù—†§ÅÖ…ïÖÃπÖëê†âΩµ¡…ÖÃà§Ï(ÄÅçΩπÕ–Å…ïÕ¡ΩπÕ•â±ïÃÄÙÅπï‹ÅMï–ÒÕ—…•πú¯†§Ï(ÄÅëΩç’µïπ—ÃπôΩ…Öç††°ëΩç’µïπ–§ÄÙ¯ÅÏ(ÄÄÄÅçΩπÕ–ÅŸï…Õ•Ω∏ÄÙÅùï—]Ω…≠•πùYï…Õ•Ω∏°ëΩç’µïπ–§Ï(ÄÄÄÅ•òÄ°Ÿï…Õ•Ω∏¸π’¡±ΩÖëïë	‰§Å…ïÕ¡ΩπÕ•â±ïÃπÖëê°Ÿï…Õ•Ω∏π’¡±ΩÖëïë	‰§Ï(ÄÄÄÅ•òÄ°Ÿï…Õ•Ω∏¸πŸÖ±•ëÖ—Ω»§Å…ïÕ¡ΩπÕ•â±ïÃπÖëê°Ÿï…Õ•Ω∏πŸÖ±•ëÖ—Ω»§Ï(ÄÅÙ§Ï(ÄÅÖç—•ΩπÃπôΩ…Öç††°Öç—•Ω∏§ÄÙ¯Å…ïÕ¡ΩπÕ•â±ïÃπÖëê°Öç—•Ω∏πΩ›πï»§§Ï(ÄÅÖÕÕï—ÃπôΩ…Öç††°ÖÕÕï–§ÄÙ¯Å…ïÕ¡ΩπÕ•â±ïÃπÖëê°ÖÕÕï–πΩ›πï»§§Ï(ÄÅ•πë•çÖ—Ω…ÃπôΩ…Öç††°•πë•çÖ—Ω»§ÄÙ¯Å…ïÕ¡ΩπÕ•â±ïÃπÖëê°•πë•çÖ—Ω»π±ïÖëï»§§Ï((ÄÅ…ï—’…∏ÅÏ(ÄÄÄÅÖ…ïÖÃËÅl∏∏πÖ…ïÖÕtπÕΩ…–†°±ïô–∞Å…•ù°–§ÄÙ¯Å±ïô–π±ΩçÖ±ïΩµ¡Ö…î°…•ù°–∞ÄâïÃà§§∞(ÄÄÄÅ¡…ΩçïÕÕïÃËÅ¡…ΩçïÕÕÖ—Ö±Ωú(ÄÄÄÄÄÄπô•±—ï»†°¡…ΩçïÕÃ§ÄÙ¯Å¡…ΩçïÕÕ%ëÃπ°ÖÃ°¡…ΩçïÕÃπ•ê§§(ÄÄÄÄÄÄπµÖ¿†°¡…ΩçïÕÃ§ÄÙ¯Ä°ÏÅ•êËÅ¡…ΩçïÕÃπ•ê∞ÅπÖµîËÅ¡…ΩçïÕÃππÖµîÅÙ§§∞(ÄÄÄÅ…ïÕ¡ΩπÕ•â±ïÃËÅl∏∏π…ïÕ¡ΩπÕ•â±ïÕtπÕΩ…–†°±ïô–∞Å…•ù°–§ÄÙ¯Å±ïô–π±ΩçÖ±ïΩµ¡Ö…î°…•ù°–∞ÄâïÃà§§∞(ÄÄÄÅÕ—Ö—’ÕïÃËÅl(ÄÄÄÄÄÄ∏∏π=â©ïç–πïπ—…•ïÃ°ëΩç’µïπ—M—Ö—’Õ1Öâï±Ã§πµÖ¿†°mŸÖ±’î∞Å±Öâï±t§ÄÙ¯ÅÄëÌŸÖ±’ïıëÌ±Öâï±ıÄ§∞(ÄÄÄÄÄÄ∏∏π=â©ïç–πïπ—…•ïÃ°•πë•çÖ—Ω…M—Ö—’Õ1Öâï±Ã§πµÖ¿†°mŸÖ±’î∞Å±Öâï±t§ÄÙ¯ÅÄëÌŸÖ±’ïıëÌ±Öâï±ıÄ§∞(ÄÄÄÄÄÄâΩŸï…ë’ïÒYïπç•ëºà∞(ÄÄÄÄÄÄâë’ï}ÕΩΩπÒAÀÕ·•µºÅÑÅŸïπçï»à∞(ÄÄÄÄÄÄâΩ¡ïπÒâ•ï…—Ñà∞(ÄÄÄÄÄÄâç±ΩÕïëÒï……ÖëÑà∞(ÄÄÄÄÄÄâA…Ωù…ÖµÖëÖÒA…Ωù…ÖµÖëÑà∞(ÄÄÄÄÄÄâIïÖ±•ÈÖëÖÒIïÖ±•ÈÖëÑà∞(ÄÄÄÄÄÄâAïπë•ïπ—ïÒAïπë•ïπ—îà∞(ÄÄÄÅtπô•±—ï»†°ŸÖ±’î∞Å•πëï‡∞ÅŸÖ±’ïÃ§ÄÙ¯ÅŸÖ±’ïÃπ•πëï·=ò°ŸÖ±’î§ÄÙÙÙÅ•πëï‡§∞(ÄÅÙÏ)Ù()ô’πç—•Ω∏ÅµÖ—ç°ïÕ•±—ï…Ã†(ÄÅô•±—ï…ÃËÅ!ΩµïÖÕ°âΩÖ…ë•±—ï…Ã∞(ÄÅ…ïçΩ…êËÅÏ(ÄÄÄÅÖ…ïÑ¸ËÅÕ—…•πúÏ(ÄÄÄÅ¡…ΩçïÕÕ%ê¸ËÅÕ—…•πúÏ(ÄÄÄÅ…ïÕ¡ΩπÕ•â±î¸ËÅÕ—…•πúÏ(ÄÄÄÅÕ—Ö—’Ã¸ËÅÕ—…•πúÏ(ÄÄÄÅµΩë’±îËÅ]Ω…≠Õ¡Öçï5Ωë’±ï%êÏ(ÄÄÄÅëÖ—î¸ËÅÕ—…•πúÏ(ÄÅÙ∞(§ÅÏ(ÄÅ•òÄ°ô•±—ï…ÃπÖ…ïÑÄÑÙÙÄâÖ±∞àÄòòÅ…ïçΩ…êπÖ…ïÑÄÑÙÙÅô•±—ï…ÃπÖ…ïÑ§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ•òÄ°ô•±—ï…Ãπ¡…ΩçïÕÕ%êÄÑÙÙÄâÖ±∞àÄòòÅ…ïçΩ…êπ¡…ΩçïÕÕ%êÄÑÙÙÅô•±—ï…Ãπ¡…ΩçïÕÕ%ê§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ•òÄ°ô•±—ï…Ãπ…ïÕ¡ΩπÕ•â±îÄÑÙÙÄâÖ±∞àÄòòÅ…ïçΩ…êπ…ïÕ¡ΩπÕ•â±îÄÑÙÙÅô•±—ï…Ãπ…ïÕ¡ΩπÕ•â±î§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ•òÄ°ô•±—ï…ÃπÕ—Ö—’ÃÄÑÙÙÄâÖ±∞àÄòòÅ…ïçΩ…êπÕ—Ö—’ÃÄÑÙÙÅô•±—ï…ÃπÕ—Ö—’Ã§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ•òÄ°ô•±—ï…ÃπµΩë’±îÄÑÙÙÄâÖ±∞àÄòòÅ…ïçΩ…êπµΩë’±îÄÑÙÙÅô•±—ï…ÃπµΩë’±î§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅçΩπÕ–ÅëÖ—îÄÙÅ…ïçΩ…êπëÖ—î¸πÕ±•çî†¿∞Äƒ¿§Ï(ÄÅ•òÄ°ô•±—ï…Ãπô…Ω¥ÄòòÄ†ÖëÖ—îÅÒÅëÖ—îÄÅô•±—ï…Ãπô…Ω¥§§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ•òÄ°ô•±—ï…Ãπ—ºÄòòÄ†ÖëÖ—îÅÒÅëÖ—îÄ¯Åô•±—ï…Ãπ—º§§Å…ï—’…∏ÅôÖ±ÕîÏ(ÄÅ…ï—’…∏Å—…’îÏ)Ù()ô’πç—•Ω∏Åùï—%πë•çÖ—Ω…IïçΩ…ê†(ÄÅ…ïÕ’±—ÃËÅ%πë•çÖ—Ω…IïÕ’±—Ã∞(ÄÅ•êËÅÕ—…•πú∞(ÄÅÂïÖ»ËÅπ’µâï»∞(ÄÅ≈’Ö…—ï»ËÅE’Ö…—ï»∞(§ÅÏ(ÄÅ…ï—’…∏Å…ïÕ’±—Õm•ët¸πmM—…•πú°ÂïÖ»•t¸πm≈’Ö…—ï…tÏ)Ù()ô’πç—•Ω∏ÅÕ—Ö…—=ô]ïï¨°πΩ‹ËÅÖ—î§ÅÏ(ÄÅçΩπÕ–ÅŸÖ±’îÄÙÅπï‹ÅÖ—î°Ö—îπUQ°πΩ‹πùï—’±±eïÖ»†§∞ÅπΩ‹πùï—5Ωπ—††§∞ÅπΩ‹πùï—Ö—î†§§§Ï(ÄÅçΩπÕ–ÅëÖ‰ÄÙÅŸÖ±’îπùï—UQÖ‰†§Ï(ÄÅçΩπÕ–ÅëÖÂÕM•πçï5ΩπëÖ‰ÄÙÅëÖ‰ÄÙÙÙÄ¿Ä¸ÄÿÄËÅëÖ‰Ä¥ÄƒÏ(ÄÅŸÖ±’îπÕï—UQÖ—î°ŸÖ±’îπùï—UQÖ—î†§Ä¥ÅëÖÂÕM•πçï5ΩπëÖ‰§Ï(ÄÅ…ï—’…∏ÅŸÖ±’îÏ)Ù()ô’πç—•Ω∏ÅëΩç’µïπ—M—Ö—’Õç—•Ω∏°Õ—Ö—’ÃËÅΩπ—…Ω±±ïëΩç’µïπ—M—Ö—’Ã§ÅÏ(ÄÅçΩπÕ–ÅÖç—•ΩπÃËÅIïçΩ…êÒΩπ—…Ω±±ïëΩç’µïπ—M—Ö—’Ã∞ÅÕ—…•πú¯ÄÙÅÏ(ÄÄÄÅë…Öô–ËÄâÖç—’Ö±•ÎÃÅï∞ÅâΩ……ÖëΩ»Åëîà∞(ÄÄÄÅ¡ïπë•πúËÄâïπŸßÃÅÑÅŸÖ±•ëÖçßÕ∏à∞(ÄÄÄÅç’……ïπ–ËÄâ¡’â±•èÃà∞(ÄÄÄÅ…ï©ïç—ïêËÄâ…ïù•Õ—ÀÃÅ’πÑÅçΩ……ïççßÕ∏Å¡Ö…Ñà∞(ÄÄÄÅΩâÕΩ±ï—îËÄâÕ’Õ—•—’ÁÃÅ±ÑÅŸï…ÕßÕ∏Åëîà∞(ÄÅÙÏ(ÄÅ…ï—’…∏ÅÖç—•ΩπÕmÕ—Ö—’ÕtÏ)Ù()ô’πç—•Ω∏ÅçΩ’π—	ÂM—Ö—’Ã°ŸÖ±’ïÃËÅÕ—…•πùmt§ÅÏ(ÄÅ…ï—’…∏ÅŸÖ±’ïÃπ…ïë’çîÒIïçΩ…êÒÕ—…•πú∞Åπ’µâï»¯¯†°çΩ’π—Ã∞ÅŸÖ±’î§ÄÙ¯ÅÏ(ÄÄÄÅçΩ’π—ÕmŸÖ±’ïtÄÙÄ°çΩ’π—ÕmŸÖ±’ïtÄ¸¸Ä¿§Ä¨ÄƒÏ(ÄÄÄÅ…ï—’…∏ÅçΩ’π—ÃÏ(ÄÅÙ∞ÅÌÙ§Ï)Ù()ï·¡Ω…–Åô’πç—•Ω∏ÅÕïÖ…ç°!ΩµïÖÕ°âΩÖ…ê†(ÄÅ•πëï‡ËÅ!ΩµïMïÖ…ç°IïÕ’±—mt∞(ÄÅ≈’ï…‰ËÅÕ—…•πú∞(ÄÅ±•µ•–ÄÙÄ‡∞(§ÅÏ(ÄÅçΩπÕ–ÅπΩ…µÖ±•ÈïêÄÙÅπΩ…µÖ±•ÈïMïÖ…ç°Qï·–°≈’ï…‰§Ï(ÄÅ•òÄ°πΩ…µÖ±•Èïêπ±ïπù—†ÄÄ»§Å…ï—’…∏ÅmtÏ(ÄÅ…ï—’…∏Å•πëï‡(ÄÄÄÄπô•±—ï»†°•—ï¥§ÄÙ¯ÅπΩ…µÖ±•ÈïMïÖ…ç°Qï·–°ÄëÌ•—ï¥π—•—±ïÙÄëÌ•—ï¥πµï—ÖÙÄëÌ•—ï¥πÕïÖ…ç°Qï·—ıÄ§π•πç±’ëïÃ°πΩ…µÖ±•Èïê§§(ÄÄÄÄπÕ±•çî†¿∞Å±•µ•–§Ï)Ù()ô’πç—•Ω∏ÅπΩ…µÖ±•ÈïMïÖ…ç°Qï·–°ŸÖ±’îËÅÕ—…•πú§ÅÏ(ÄÅ…ï—’…∏ÅŸÖ±’î(ÄÄÄÄππΩ…µÖ±•Èî†â9à§(ÄÄÄÄπ…ï¡±Öçî†Ωmq‘¿Ã¿¿µq‘¿ÃŸôtΩú∞Äàà§(ÄÄÄÄπ—Ω1ΩçÖ±ï1Ω›ï…ÖÕî†âïÃà§(ÄÄÄÄπ—…•¥†§Ï)Ù(
+      tone: pendingIndicatorCaptures > 0 ? "warning" : "success",
+      module: "indicators",
+      sourceConnected: true,
+    },
+    {
+      id: "management-review",
+      label: "Revisi√≥n por la Direcci√≥n",
+      value: sources.managementReview
+        ? sources.managementReview.status === "operations_approved"
+          ? "Autorizada"
+          : sources.managementReview.status === "sgc_approved"
+            ? "Pendiente de Operaciones"
+            : "Borrador por autorizar"
+        : "Lista para generar",
+      detail: sources.managementReview
+        ? `${sources.managementReview.id} ¬∑ ${sources.managementReview.period.label}`
+        : "Consolidaci√≥n de 9 fuentes",
+      tone: sources.managementReview?.status === "operations_approved"
+        ? "success"
+        : sources.managementReview
+          ? "warning"
+          : "neutral",
+      module: "management-review",
+      sourceConnected: true,
+    },
+    {
+      id: "fcca",
+      label: "FCCA",
+      value: "Fuente pendiente",
+      detail: "Sin registros disponibles",
+      tone: "neutral",
+      sourceConnected: false,
+    },
+  ];
+
+  const documentTrend = countByStatus(
+    documents.map((document) => getWorkingVersion(document)?.status ?? "draft"),
+  );
+  const indicatorTrend = countByStatus(
+    indicators.map((indicator) => {
+      const record = getIndicatorRecord(
+        sources.indicatorResults,
+        indicator.id,
+        year,
+        currentQuarter,
+      );
+      return evaluateConfiguredIndicator(
+        indicator,
+        record?.value,
+        year,
+        currentQuarter,
+        now,
+      );
+    }),
+  );
+  const trends: HomeTrend[] = [
+    {
+      id: "indicator-trend",
+      label: "Indicadores del trimestre",
+      detail: currentQuarter,
+      module: "indicators",
+      series: [
+        { label: "Cumple", value: indicatorTrend.compliant ?? 0, tone: "success" },
+        { label: "Marginal", value: indicatorTrend.marginal ?? 0, tone: "warning" },
+        { label: "No cumple", value: indicatorTrend.noncompliant ?? 0, tone: "danger" },
+        { label: "Pendiente", value: (indicatorTrend.pending ?? 0) + (indicatorTrend.not_uploaded ?? 0), tone: "neutral" },
+      ],
+    },
+    {
+      id: "action-trend",
+      label: "Acciones correctivas",
+      detail: "Estado actual",
+      module: "corrective-actions",
+      series: [
+        { label: "Abiertas", value: openActions.length, tone: "warning" },
+        { label: "Cerradas", value: actions.filter((action) => action.status === "closed").length, tone: "success" },
+        { label: "Vencidas", value: overdueActions.length, tone: "danger" },
+      ],
+    },
+    {
+      id: "audit-trend",
+      label: "Auditor√≠as a proveedores",
+      detail: String(year),
+      module: "audits",
+      series: [
+        { label: "Ejecutadas", value: completedAudits.length, tone: "success" },
+        { label: "Programadas", value: supplierAudits.filter((audit) => audit.status === "Programada").length, tone: "neutral" },
+        { label: "Pendientes", value: supplierAudits.filter((audit) => audit.status === "Pendiente").length, tone: "warning" },
+      ],
+    },
+    {
+      id: "document-trend",
+      label: "Control documental",
+      detail: "Versi√≥n de trabajo",
+      module: "documents",
+      series: [
+        { label: "Vigentes", value: currentDocuments.length, tone: "success" },
+        { label: "En validaci√≥n", value: documentTrend.pending ?? 0, tone: "neutral" },
+        { label: "Rechazados", value: documentTrend.rejected ?? 0, tone: "danger" },
+        { label: "Borradores", value: documentTrend.draft ?? 0, tone: "warning" },
+      ],
+    },
+  ];
+
+  const recentActivity = buildRecentActivity(
+    documents,
+    actions,
+    supplierAudits,
+  ).slice(0, 8);
+  const upcomingEvents = buildUpcomingEvents(
+    actions,
+    assets,
+    supplierAudits,
+    accessibleExternalAudits,
+    today,
+  ).slice(0, 10);
+  const searchIndex = buildSearchIndex({
+    documents: accessibleDocuments,
+    actions: accessibleActions,
+    assets: accessibleAssets,
+    indicators: accessibleIndicators,
+    supplierAudits: accessibleSupplierAudits,
+    session: sources.session,
+  });
+
+  const filterOptions = buildFilterOptions({
+    documents: accessibleDocuments,
+    actions: accessibleActions,
+    assets: accessibleAssets,
+    indicators: accessibleIndicators,
+    supplierAudits: accessibleSupplierAudits,
+  });
+
+  return {
+    generatedAt: now.toISOString(),
+    documentMetrics,
+    pendingTasks,
+    alerts,
+    kpis,
+    moduleStatus,
+    trends,
+    recentActivity,
+    upcomingEvents,
+    searchIndex,
+    filterOptions,
+  };
+}
+
+function buildPendingTasks({
+  sources,
+  pendingValidation,
+  rejectedDocuments,
+  actions,
+  assets,
+  indicators,
+  supplierAudits,
+  today,
+  now,
+}: {
+  sources: HomeDashboardSources;
+  documents: ControlledDocument[];
+  pendingValidation: ControlledDocument[];
+  rejectedDocuments: ControlledDocument[];
+  actions: CorrectiveAction[];
+  assets: MeasurementAsset[];
+  indicators: ConfiguredIndicator[];
+  supplierAudits: SupplierAuditCalendarEvent[];
+  today: string;
+  now: Date;
+}) {
+  const processById = new Map(processCatalog.map((process) => [process.id, process]));
+  const tasks: HomeWorkItem[] = [];
+
+  pendingValidation.forEach((document) => {
+    const version = getWorkingVersion(document);
+    tasks.push({
+      id: `validate-${document.id}`,
+      title: `Validar ${document.code}`,
+      detail: document.name,
+      module: "documents",
+      moduleLabel: "Documentos",
+      priority: "attention",
+      area: processById.get(document.processId)?.name ?? document.owner,
+      processId: document.processId,
+      responsible: version?.validator,
+      status: "pending",
+      targetId: document.id,
+    });
+  });
+  rejectedDocuments.forEach((document) => {
+    const version = getWorkingVersion(document);
+    tasks.push({
+      id: `correct-${document.id}`,
+      title: `Corregir ${document.code}`,
+      detail: version?.rejectionReason ?? document.name,
+      module: "documents",
+      moduleLabel: "Documentos",
+      priority: "critical",
+      area: processById.get(document.processId)?.name ?? document.owner,
+      processId: document.processId,
+      responsible: version?.uploadedBy,
+      status: "rejected",
+      targetId: document.id,
+    });
+  });
+  actions
+    .filter((action) => action.status !== "closed")
+    .forEach((action) => {
+      const overdue = isCorrectiveActionOverdue(action, today);
+      const remainingDays = daysBetween(today, action.dueDate);
+      tasks.push({
+        id: `action-${action.id}`,
+        title: `${action.folio} ¬∑ ${action.title}`,
+        detail: overdue
+          ? `Venci√≥ hace ${Math.abs(remainingDays)} d√≠as`
+          : `${Math.max(remainingDays, 0)} d√≠as para el vencimiento`,
+        module: "corrective-actions",
+        moduleLabel: "Root2Cause",
+        priority: overdue ? "critical" : remainingDays <= 14 ? "attention" : "normal",
+        dueDate: action.dueDate,
+        area: action.area,
+        processId: processCatalog.find((process) => process.name === action.area)?.id,
+        responsible: action.owner,
+        status: action.status,
+        targetId: action.id,
+      });
+    });
+  assets
+    .filter((asset) => getAssetDueStatus(asset, today) !== "current")
+    .forEach((asset) => {
+      const overdue = getAssetDueStatus(asset, today) === "overdue";
+      tasks.push({
+        id: `asset-${asset.id}`,
+        title: `${asset.code} ¬∑ ${asset.name}`,
+        detail: overdue ? "Calibraci√≥n o verificaci√≥n vencida" : "Vigencia pr√≥xima a terminar",
+        module: "calibrations",
+        moduleLabel: "Calibraciones",
+        priority: overdue ? "critical" : "attention",
+        dueDate: asset.nextDueDate,
+        area: asset.location,
+        responsible: asset.owner,
+        status: overdue ? "overdue" : "due_soon",
+        targetId: asset.id,
+      });
+    });
+  indicators.forEach((indicator) => {
+    const overdueQuarter = [...quarters]
+      .reverse()
+      .find((quarter) => {
+        const scheduledDate = indicator.schedule[String(now.getFullYear())]?.[quarter];
+        return (
+          scheduledDate &&
+          scheduledDate <= today &&
+          !getIndicatorRecord(
+            sources.indicatorResults,
+            indicator.id,
+            now.getFullYear(),
+            quarter,
+          )
+        );
+      });
+    if (!overdueQuarter) return;
+    tasks.push({
+      id: `indicator-${indicator.id}-${overdueQuarter}`,
+      title: `Capturar ${indicator.id}`,
+      detail: `${indicator.name} ¬∑ ${overdueQuarter}`,
+      module: "indicators",
+      moduleLabel: "Indicadores",
+      priority: "attention",
+      dueDate: indicator.schedule[String(now.getFullYear())]?.[overdueQuarter],
+      area: indicator.area,
+      processId: indicator.processId,
+      responsible: indicator.leader,
+      status: "not_uploaded",
+      targetId: indicator.id,
+    });
+  });
+  supplierAudits
+    .filter(
+      (audit) =>
+        ["Programada", "Pendiente"].includes(audit.status) && audit.date >= today,
+    )
+    .forEach((audit) => {
+      const remainingDays = daysBetween(today, audit.date);
+      tasks.push({
+        id: `audit-${audit.id}`,
+        title: `Auditor√≠a ¬∑ ${audit.supplierName}`,
+        detail: `${audit.qualityLevel}% de nivel de calidad`,
+        module: "audits",
+        moduleLabel: "Auditor√≠as",
+        priority: remainingDays <= 14 ? "attention" : "normal",
+        dueDate: audit.date,
+        area: "Compras",
+        processId: "P-10",
+        responsible: audit.supplierName,
+        status: audit.status,
+        targetId: audit.id,
+      });
+    });
+
+  return tasks.sort((left, right) => {
+    const priorityDifference = priorityOrder[left.priority] - priorityOrder[right.priority];
+    if (priorityDifference !== 0) return priorityDifference;
+    if (!left.dueDate) return 1;
+    if (!right.dueDate) return -1;
+    return left.dueDate.localeCompare(right.dueDate);
+  });
+}
+
+function buildRecentActivity(
+  documents: ControlledDocument[],
+  actions: CorrectiveAction[],
+  audits: SupplierAuditCalendarEvent[],
+) {
+  const documentActivity: HomeActivity[] = documents.flatMap((document) =>
+    document.versions.slice(0, 2).map((version) => ({
+      id: `document-${version.id}`,
+      actor: version.authorizedBy ?? version.uploadedBy,
+      description: `${documentStatusAction(version.status)} ${document.code} revisi√≥n ${version.revision}`,
+      occurredAt: version.modifiedAt,
+      module: "documents" as const,
+      moduleLabel: "Documentos",
+      targetId: document.id,
+    })),
+  );
+  const actionActivity: HomeActivity[] = actions.map((action) => ({
+    id: `corrective-${action.id}`,
+    actor: action.owner,
+    description: `registr√≥ ${action.folio} ¬∑ ${action.title}`,
+    occurredAt: `${action.createdAt}T12:00:00.000Z`,
+    module: "corrective-actions",
+    moduleLabel: "Root2Cause",
+    targetId: action.id,
+  }));
+  const auditActivity: HomeActivity[] = audits
+    .filter((audit) => audit.status === "Realizada")
+    .map((audit) => ({
+      id: `audit-activity-${audit.id}`,
+      actor: "Calidad Proveedores",
+      description: `registr√≥ el resultado de auditor√≠a de ${audit.supplierName}`,
+      occurredAt: `${audit.date}T12:00:00.000Z`,
+      module: "audits",
+      moduleLabel: "Auditor√≠as",
+      targetId: audit.id,
+    }));
+
+  return [...documentActivity, ...actionActivity, ...auditActivity].sort((left, right) =>
+    right.occurredAt.localeCompare(left.occurredAt),
+  );
+}
+
+function buildUpcomingEvents(
+  actions: CorrectiveAction[],
+  assets: MeasurementAsset[],
+  supplierAudits: SupplierAuditCalendarEvent[],
+  externalAudits: HomeDashboardSources["externalAudits"],
+  today: string,
+) {
+  const events: HomeUpcomingEvent[] = [];
+  actions
+    .filter((action) => action.status !== "closed" && action.dueDate >= today)
+    .forEach((action) => events.push({
+      id: `event-action-${action.id}`,
+      title: `Vencimiento ${action.folio}`,
+      detail: action.title,
+      date: action.dueDate,
+      module: "corrective-actions",
+      tone: daysBetween(today, action.dueDate) <= 14 ? "warning" : "neutral",
+      targetId: action.id,
+    }));
+  assets
+    .filter((asset) => asset.nextDueDate >= today)
+    .forEach((asset) => events.push({
+      id: `event-asset-${asset.id}`,
+      title: `Vigencia ${asset.code}`,
+      detail: asset.name,
+      date: asset.nextDueDate,
+      module: "calibrations",
+      tone: getAssetDueStatus(asset, today) === "due_soon" ? "warning" : "neutral",
+      targetId: asset.id,
+    }));
+  supplierAudits
+    .filter((audit) => audit.date >= today && audit.status !== "Cancelada")
+    .forEach((audit) => events.push({
+      id: `event-supplier-audit-${audit.id}`,
+      title: `Auditor√≠a ${audit.supplierName}`,
+      detail: `${audit.qualityLevel}% de nivel de calidad`,
+      date: audit.date,
+      module: "audits",
+      tone: "neutral",
+      targetId: audit.id,
+    }));
+  externalAudits
+    .filter((audit) => audit.date >= today)
+    .forEach((audit) => events.push({
+      id: `event-external-audit-${audit.id}`,
+      title: `Auditor√≠a externa ¬∑ ${audit.party}`,
+      detail: audit.scope,
+      date: audit.date,
+      module: "customers",
+      tone: "neutral",
+      targetId: audit.id,
+    }));
+  return events.sort((left, right) => left.date.localeCompare(right.date));
+}
+
+function buildSearchIndex({
+  documents,
+  actions,
+  assets,
+  indicators,
+  supplierAudits,
+  session,
+}: {
+  documents: ControlledDocument[];
+  actions: CorrectiveAction[];
+  assets: MeasurementAsset[];
+  indicators: ConfiguredIndicator[];
+  supplierAudits: SupplierAuditCalendarEvent[];
+  session: ActiveSession;
+}) {
+  const items: HomeSearchResult[] = [];
+  documents.forEach((document) => items.push({
+    id: document.id,
+    title: `${document.code} ¬∑ ${document.name}`,
+    meta: `Documento ¬∑ ${processCatalog.find((process) => process.id === document.processId)?.name ?? document.processId}`,
+    module: "documents",
+    searchText: [document.code, document.name, document.owner, document.processId].join(" "),
+  }));
+  actions.forEach((action) => items.push({
+    id: action.id,
+    title: `${action.folio} ¬∑ ${action.title}`,
+    meta: `Acci√≥n correctiva ¬∑ ${action.area}`,
+    module: "corrective-actions",
+    searchText: [action.folio, action.title, action.problem, action.area, action.owner].join(" "),
+  }));
+  assets.forEach((asset) => items.push({
+    id: asset.id,
+    title: `${asset.code} ¬∑ ${asset.name}`,
+    meta: `Calibraci√≥n ¬∑ ${asset.location}`,
+    module: "calibrations",
+    searchText: [asset.code, asset.name, asset.location, asset.owner].join(" "),
+  }));
+  indicators.forEach((indicator) => items.push({
+    id: indicator.id,
+    title: `${indicator.id} ¬∑ ${indicator.name}`,
+    meta: `Indicador ¬∑ ${indicator.area}`,
+    module: "indicators",
+    searchText: [indicator.id, indicator.name, indicator.area, indicator.leader, indicator.metric].join(" "),
+  }));
+  supplierAudits.forEach((audit) => items.push({
+    id: audit.id,
+    title: `${audit.id} ¬∑ ${audit.supplierName}`,
+    meta: `Auditor√≠a ¬∑ ${audit.date}`,
+    module: "audits",
+    searchText: [audit.id, audit.supplierCode, audit.supplierName, audit.status].join(" "),
+  }));
+  processCatalog
+    .filter(
+      (process) =>
+        session.userType === "Administrador" ||
+        session.assignedProcessIds.includes(process.id) ||
+        (process.parentId && session.assignedProcessIds.includes(process.parentId)),
+    )
+    .forEach((process) => items.push({
+      id: process.id,
+      title: `${process.id} ¬∑ ${process.name}`,
+      meta: process.level === "process" ? "Proceso" : "Subproceso",
+      module: "processes",
+      searchText: [process.id, process.name, process.sourceLabel].join(" "),
+    }));
+  items.push({
+    id: session.userId,
+    title: session.name,
+    meta: `${session.position} ¬∑ ${session.department}`,
+    module: "organization",
+    searchText: [session.name, session.position, session.department].join(" "),
+  });
+  return items;
+}
+
+function buildFilterOptions({
+  documents,
+  actions,
+  assets,
+  indicators,
+  supplierAudits,
+}: {
+  documents: ControlledDocument[];
+  actions: CorrectiveAction[];
+  assets: MeasurementAsset[];
+  indicators: ConfiguredIndicator[];
+  supplierAudits: SupplierAuditCalendarEvent[];
+}) {
+  const processIds = new Set(documents.map((document) => document.processId));
+  indicators.forEach((indicator) => processIds.add(indicator.processId));
+  const areas = new Set<string>();
+  documents.forEach((document) => {
+    const process = processCatalog.find((item) => item.id === document.processId);
+    if (process) areas.add(process.name);
+  });
+  actions.forEach((action) => areas.add(action.area));
+  assets.forEach((asset) => areas.add(asset.location));
+  indicators.forEach((indicator) => areas.add(indicator.area));
+  if (supplierAudits.length) areas.add("Compras");
+  const responsibles = new Set<string>();
+  documents.forEach((document) => {
+    const version = getWorkingVersion(document);
+    if (version?.uploadedBy) responsibles.add(version.uploadedBy);
+    if (version?.validator) responsibles.add(version.validator);
+  });
+  actions.forEach((action) => responsibles.add(action.owner));
+  assets.forEach((asset) => responsibles.add(asset.owner));
+  indicators.forEach((indicator) => responsibles.add(indicator.leader));
+
+  return {
+    areas: [...areas].sort((left, right) => left.localeCompare(right, "es")),
+    processes: processCatalog
+      .filter((process) => processIds.has(process.id))
+      .map((process) => ({ id: process.id, name: process.name })),
+    responsibles: [...responsibles].sort((left, right) => left.localeCompare(right, "es")),
+    statuses: [
+      ...Object.entries(documentStatusLabels).map(([value, label]) => `${value}|${label}`),
+      ...Object.entries(indicatorStatusLabels).map(([value, label]) => `${value}|${label}`),
+      "overdue|Vencido",
+      "due_soon|Pr√≥ximo a vencer",
+      "open|Abierta",
+      "closed|Cerrada",
+      "Programada|Programada",
+      "Realizada|Realizada",
+      "Pendiente|Pendiente",
+    ].filter((value, index, values) => values.indexOf(value) === index),
+  };
+}
+
+function matchesFilters(
+  filters: HomeDashboardFilters,
+  record: {
+    area?: string;
+    processId?: string;
+    responsible?: string;
+    status?: string;
+    module: WorkspaceModuleId;
+    date?: string;
+  },
+) {
+  if (filters.area !== "all" && record.area !== filters.area) return false;
+  if (filters.processId !== "all" && record.processId !== filters.processId) return false;
+  if (filters.responsible !== "all" && record.responsible !== filters.responsible) return false;
+  if (filters.status !== "all" && record.status !== filters.status) return false;
+  if (filters.module !== "all" && record.module !== filters.module) return false;
+  const date = record.date?.slice(0, 10);
+  if (filters.from && (!date || date < filters.from)) return false;
+  if (filters.to && (!date || date > filters.to)) return false;
+  return true;
+}
+
+function getIndicatorRecord(
+  results: IndicatorResults,
+  id: string,
+  year: number,
+  quarter: Quarter,
+) {
+  return results[id]?.[String(year)]?.[quarter];
+}
+
+function startOfWeek(now: Date) {
+  const value = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const day = value.getUTCDay();
+  const daysSinceMonday = day === 0 ? 6 : day - 1;
+  value.setUTCDate(value.getUTCDate() - daysSinceMonday);
+  return value;
+}
+
+function documentStatusAction(status: ControlledDocumentStatus) {
+  const actions: Record<ControlledDocumentStatus, string> = {
+    draft: "actualiz√≥ el borrador de",
+    pending: "envi√≥ a validaci√≥n",
+    current: "public√≥",
+    rejected: "registr√≥ una correcci√≥n para",
+    obsolete: "sustituy√≥ la versi√≥n de",
+  };
+  return actions[status];
+}
+
+function countByStatus(values: string[]) {
+  return values.reduce<Record<string, number>>((counts, value) => {
+    counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+export function searchHomeDashboard(
+  index: HomeSearchResult[],
+  query: string,
+  limit = 8,
+) {
+  const normalized = normalizeSearchText(query);
+  if (normalized.length < 2) return [];
+  return index
+    .filter((item) => normalizeSearchText(`${item.title} ${item.meta} ${item.searchText}`).includes(normalized))
+    .slice(0, limit);
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase("es")
+    .trim();
+}
+
