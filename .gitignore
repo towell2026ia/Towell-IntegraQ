@@ -1,0 +1,15 @@
+.next/
+node_modules/
+.pnpm-store/
+coverage/
+.env
+.env.local
+.env.*.local
+*.log
+*.tsbuildinfo
+
+# Material local de levantamiento y artefactos generados.
+/references/
+/outputs/
+/tmp/
+/PROJECT_MEMORY.md
