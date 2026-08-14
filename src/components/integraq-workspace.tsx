@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldCheck,
   Smartphone,
+  TrendingUp,
   Target,
   UserCog,
   Users,
@@ -31,6 +32,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AccessModule } from "@/components/modules/access-module";
 import { CalibrationsModule } from "@/components/modules/calibrations-module";
 import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
+import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { CustomersModule } from "@/components/modules/customers-module";
 import { DocumentsModule } from "@/components/modules/documents-module";
 import { HomeModule } from "@/components/modules/home-module";
@@ -58,7 +60,10 @@ import {
   type ConfiguredIndicator,
   type IndicatorResults,
 } from "@/lib/indicator-data";
-import type { ManagementReviewRecord } from "@/lib/management-review-data";
+import {
+  buildDemoManagementReviewHistory,
+  type ManagementReviewRecord,
+} from "@/lib/management-review-data";
 import {
   isWorkspaceModuleId,
   workspaceModuleMeta,
@@ -92,6 +97,7 @@ const navigationGroups = [
       { id: "customers" as const, icon: Users },
       { id: "suppliers" as const, icon: Network },
       { id: "management-review" as const, icon: Settings2 },
+      { id: "continuous-improvement" as const, icon: TrendingUp },
       { id: "calibrations" as const, icon: Wrench },
     ],
   },
@@ -138,7 +144,9 @@ export function IntegraQWorkspace() {
   const [indicatorResults, setIndicatorResults] = useState<IndicatorResults>(
     buildInitialIndicatorResults,
   );
-  const [managementReview, setManagementReview] = useState<ManagementReviewRecord | null>(null);
+  const [managementReviews, setManagementReviews] = useState<ManagementReviewRecord[]>(
+    buildDemoManagementReviewHistory,
+  );
   const [storageReady, setStorageReady] = useState(false);
 
   useEffect(() => {
@@ -165,6 +173,7 @@ export function IntegraQWorkspace() {
         const savedDocuments = window.localStorage.getItem("integraq.controlledDocuments.v1");
         const savedDefinitions = window.localStorage.getItem("integraq.indicatorDefinitions.v3") ?? window.localStorage.getItem("integraq.indicatorDefinitions.v2");
         const savedResults = window.localStorage.getItem("integraq.indicatorResults.v3") ?? window.localStorage.getItem("integraq.indicatorResults.v2");
+        const savedManagementReviews = window.localStorage.getItem("integraq.managementReviews.v2");
         const savedManagementReview = window.localStorage.getItem("integraq.managementReview.v1");
         if (savedActions) {
           setActions(
@@ -177,7 +186,15 @@ export function IntegraQWorkspace() {
         if (savedDocuments) setControlledDocuments(JSON.parse(savedDocuments) as ControlledDocument[]);
         if (savedDefinitions) setIndicatorDefinitions(normalizeConfiguredIndicators(JSON.parse(savedDefinitions) as ConfiguredIndicator[]));
         if (savedResults) setIndicatorResults(JSON.parse(savedResults) as IndicatorResults);
-        if (savedManagementReview) setManagementReview(JSON.parse(savedManagementReview) as ManagementReviewRecord);
+        if (savedManagementReviews) {
+          setManagementReviews(JSON.parse(savedManagementReviews) as ManagementReviewRecord[]);
+        } else if (savedManagementReview) {
+          const migrated = JSON.parse(savedManagementReview) as ManagementReviewRecord;
+          setManagementReviews([
+            migrated,
+            ...buildDemoManagementReviewHistory().filter((record) => record.id !== migrated.id),
+          ]);
+        }
       } catch {
         // Demo data remains available when browser storage is unavailable.
       } finally {
@@ -211,9 +228,17 @@ export function IntegraQWorkspace() {
   }, [indicatorDefinitions, indicatorResults, storageReady]);
 
   useEffect(() => {
-    if (!storageReady || !managementReview) return;
-    window.localStorage.setItem("integraq.managementReview.v1", JSON.stringify(managementReview));
-  }, [managementReview, storageReady]);
+    if (!storageReady) return;
+    window.localStorage.setItem("integraq.managementReviews.v2", JSON.stringify(managementReviews));
+  }, [managementReviews, storageReady]);
+
+  const currentManagementReview = useMemo(
+    () =>
+      managementReviews.find((record) => record.period.year === new Date().getFullYear()) ??
+      managementReviews[0] ??
+      null,
+    [managementReviews],
+  );
 
   const activeMeta = workspaceModuleMeta[activeModule];
   const homeSources = useMemo(
@@ -226,9 +251,9 @@ export function IntegraQWorkspace() {
       indicatorResults,
       supplierAudits: supplierAuditSemesters.flatMap((semester) => semester.events),
       externalAudits: externalAuditCalendar,
-      managementReview,
+      managementReview: currentManagementReview,
     }),
-    [actions, assets, controlledDocuments, indicatorDefinitions, indicatorResults, managementReview],
+    [actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults],
   );
   const managementReviewSources = useMemo(
     () => ({
@@ -362,10 +387,11 @@ export function IntegraQWorkspace() {
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule /> : null}
-          {activeModule === "management-review" ? <ManagementReviewModule onRecordChange={setManagementReview} record={managementReview} sources={managementReviewSources} /> : null}
+          {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
+          {activeModule === "continuous-improvement" ? <ContinuousImprovementModule /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} /> : null}
-          {!["home", "processes", "organization", "access", "documents", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "customer-portal", "supplier-portal"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          {!["home", "processes", "organization", "access", "documents", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
         </main>
       </div>
 

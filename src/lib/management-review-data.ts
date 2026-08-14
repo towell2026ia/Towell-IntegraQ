@@ -345,6 +345,10 @@ export function createManagementReviewRecord(
   };
 }
 
+export function buildDemoManagementReviewHistory(): ManagementReviewRecord[] {
+  return [2025, 2024].map((year) => buildClosedDemoReview(year));
+}
+
 export function approveManagementReviewAsSgc(
   record: ManagementReviewRecord,
   session: ActiveSession,
@@ -413,6 +417,115 @@ function pendingSource(
   summary: string,
 ): ManagementReviewSourceSnapshot {
   return { id, label, status: "pending", recordCount: 0, summary, metrics: [] };
+}
+
+function buildClosedDemoReview(year: number): ManagementReviewRecord {
+  const generatedAt = `${year}-12-08T16:00:00.000Z`;
+  const approvedAt = `${year}-12-15T18:00:00.000Z`;
+  const sourceIds: ManagementReviewSourceSnapshot["id"][] = [
+    "documents",
+    "risks",
+    "objectives",
+    "audits",
+    "root2cause",
+    "suppliers",
+    "customers",
+    "calibrations",
+    "continuous-improvement",
+  ];
+  const sourceLabels = [
+    "Información documentada",
+    "Riesgos y oportunidades",
+    "Objetivos e indicadores",
+    "Auditorías",
+    "Root2Cause, NC y CAPA",
+    "Calidad de proveedores",
+    "Calidad de clientes",
+    "Calibración y verificación",
+    "Mejora continua",
+  ];
+  const sourceSnapshot: ManagementReviewSourceSnapshot[] = sourceIds.map((id, index) => ({
+    id,
+    label: sourceLabels[index],
+    status: id === "continuous-improvement" ? "pending" : "connected",
+    recordCount: id === "continuous-improvement" ? 0 : 1,
+    summary:
+      id === "continuous-improvement"
+        ? "El módulo no estaba disponible durante este periodo."
+        : `Fuente incluida en el expediente histórico ${year}. Los datos definitivos se sustituirán al importar el acta autorizada.`,
+    metrics: [],
+  }));
+  const period = buildAnnualManagementReviewPeriod(year);
+
+  return {
+    id: `RPD-${year}-01`,
+    period,
+    revision: 0,
+    status: "operations_approved",
+    generatedAt,
+    generatedBy: "Responsable del Sistema de Gestión",
+    generatedByPosition: "Administrador",
+    generatedOnce: true,
+    contextFingerprint: `ctx-historico-${year}`,
+    sourceSnapshot,
+    draft: {
+      mode: "demo",
+      executiveSummary: `Acta histórica de demostración correspondiente a ${year}. El expediente presenta la estructura autorizada y deberá sustituirse por el archivo oficial cuando sea incorporado a IntegraQ.`,
+      sections: [
+        "Seguimiento a acuerdos de revisiones anteriores",
+        "Cambios internos y externos relevantes",
+        "Desempeño y eficacia del Sistema de Gestión",
+        "Clientes y proveedores",
+        "Resultados de auditorías",
+        "Seguimiento, medición y recursos de control",
+        "Riesgos, oportunidades y adecuación de recursos",
+        "Oportunidades de mejora y decisiones",
+      ].map((title, index) => ({
+        id: `historical-${year}-${index + 1}`,
+        title: `${index + 1}. ${title}`,
+        content: `Contenido del expediente autorizado ${year}. Pendiente de reemplazar con la información del acta oficial importada.`,
+        sourceIds: index === 0 ? [] : [sourceIds[Math.min(index - 1, sourceIds.length - 1)]],
+      })),
+      keyFindings: [
+        `El expediente ${year} fue validado por el responsable del SGC.`,
+        "Las decisiones quedaron autorizadas por Dirección de Operaciones.",
+        "El archivo se conserva bloqueado como antecedente anual.",
+      ],
+      decisions: [
+        {
+          id: `DEC-${year}-01`,
+          description: "Dar seguimiento a los compromisos autorizados en la siguiente revisión anual.",
+          owner: "Responsables de proceso",
+          dueDate: `${year + 1}-03-31`,
+          priority: "Media",
+        },
+      ],
+      warnings: [
+        "Registro histórico demostrativo; sustituir por el acta oficial y sus anexos cuando estén disponibles.",
+      ],
+    },
+    approvals: [
+      {
+        stage: "sgc",
+        status: "approved",
+        requiredPosition: "Responsable del Sistema de Gestión",
+        approverName: "Responsable del Sistema de Gestión",
+        approverPosition: "Administrador",
+        approvedAt: `${year}-12-11T17:00:00.000Z`,
+        comment: "Acta validada para autorización de la Dirección.",
+      },
+      {
+        stage: "operations",
+        status: "approved",
+        requiredPosition: "Dirección de Operaciones",
+        approverName: "Dirección de Operaciones",
+        approverPosition: "Usuario aprobador",
+        approvedAt,
+        comment: "Acta y decisiones autorizadas.",
+      },
+    ],
+    modifiedAt: approvedAt,
+  };
 }
 
 function summarizeIndicators(

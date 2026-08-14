@@ -2,13 +2,17 @@
 
 import {
   AlertCircle,
+  ArrowLeft,
   Bot,
+  CalendarDays,
   Check,
   CheckCircle2,
   Clock3,
   Database,
+  Eye,
   FilePenLine,
   FileText,
+  History,
   LockKeyhole,
   Printer,
   RefreshCcw,
@@ -36,20 +40,20 @@ import {
 
 interface ManagementReviewModuleProps {
   sources: ManagementReviewSources;
-  record: ManagementReviewRecord | null;
-  onRecordChange: (record: ManagementReviewRecord) => void;
+  records: ManagementReviewRecord[];
+  onRecordsChange: (records: ManagementReviewRecord[]) => void;
 }
 
 const reviewStatusLabels: Record<ManagementReviewRecord["status"], string> = {
   draft: "Borrador IA",
-  sgc_approved: "Autorizada por SGC",
-  operations_approved: "Autorización final",
+  sgc_approved: "Pendiente de aprobación",
+  operations_approved: "Cerrada",
 };
 
 export function ManagementReviewModule({
   sources,
-  record,
-  onRecordChange,
+  records,
+  onRecordsChange,
 }: ManagementReviewModuleProps) {
   const period = useMemo(
     () => buildAnnualManagementReviewPeriod(new Date().getFullYear()),
@@ -59,22 +63,25 @@ export function ManagementReviewModule({
     () => buildManagementReviewContext(sources, period),
     [period, sources],
   );
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState(false);
-  const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(
-    record?.draft ?? null,
-  );
+  const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(null);
   const [approvalComment, setApprovalComment] = useState("");
+  const record = records.find((item) => item.id === selectedId) ?? null;
+  const currentRecord = records.find((item) => item.period.year === period.year) ?? null;
 
   const displayedSources = record?.sourceSnapshot ?? context.sources;
-  const changedAfterGeneration = record ? hasSourceChanges(record, context) : false;
+  const changedAfterGeneration = record?.period.year === period.year
+    ? hasSourceChanges(record, context)
+    : false;
   const isAdministrator = sources.session.userType === "Administrador";
   const isOperationsDirector = normalize(sources.session.position) === normalize("Dirección de Operaciones");
   const connectedCount = displayedSources.filter((source) => source.status === "connected").length;
 
   const generateReview = async () => {
-    if (record || generating || !isAdministrator) return;
+    if (currentRecord || generating || !isAdministrator) return;
     setGenerating(true);
     setError("");
     try {
@@ -85,7 +92,9 @@ export function ManagementReviewModule({
       });
       const payload = (await response.json()) as ManagementReviewAiDraft & { error?: string };
       if (!response.ok) throw new Error(payload.error ?? "No fue posible generar la revisión.");
-      onRecordChange(createManagementReviewRecord(context, payload));
+      const created = createManagementReviewRecord(context, payload);
+      onRecordsChange([created, ...records]);
+      setSelectedId(created.id);
     } catch (requestError) {
       setError(
         requestError instanceof Error
@@ -97,6 +106,12 @@ export function ManagementReviewModule({
     }
   };
 
+  const updateRecord = (nextRecord: ManagementReviewRecord) => {
+    onRecordsChange(
+      records.map((item) => (item.id === nextRecord.id ? nextRecord : item)),
+    );
+  };
+
   const startEditing = () => {
     if (!record || record.status !== "draft" || !isAdministrator) return;
     setWorkingDraft(structuredClone(record.draft));
@@ -105,7 +120,7 @@ export function ManagementReviewModule({
 
   const saveDraft = () => {
     if (!record || !workingDraft) return;
-    onRecordChange({
+    updateRecord({
       ...record,
       draft: workingDraft,
       modifiedAt: new Date().toISOString(),
@@ -115,7 +130,7 @@ export function ManagementReviewModule({
 
   const approveAsSgc = () => {
     if (!record) return;
-    onRecordChange(
+    updateRecord(
       approveManagementReviewAsSgc(
         record,
         sources.session,
@@ -129,7 +144,7 @@ export function ManagementReviewModule({
 
   const approveAsOperations = () => {
     if (!record) return;
-    onRecordChange(
+    updateRecord(
       approveManagementReviewAsOperations(
         record,
         sources.session,
@@ -164,6 +179,21 @@ export function ManagementReviewModule({
     });
   };
 
+  if (!record) {
+    return (
+      <ManagementReviewIndex
+        currentRecord={currentRecord}
+        error={error}
+        generating={generating}
+        isAdministrator={isAdministrator}
+        onGenerate={generateReview}
+        onOpen={(id) => setSelectedId(id)}
+        periodLabel={period.label}
+        records={records}
+      />
+    );
+  }
+
   const draft = editing ? workingDraft : record?.draft;
 
   return (
@@ -177,6 +207,9 @@ export function ManagementReviewModule({
           </p>
         </div>
         <div className="module-heading-actions">
+          <button className="button button-secondary" type="button" onClick={() => { setSelectedId(null); setEditing(false); }}>
+            <ArrowLeft size={16} />Historial
+          </button>
           <span className={`management-review-status status-${record?.status ?? "not-generated"}`}>
             {record ? reviewStatusLabels[record.status] : "Sin generar"}
           </span>
@@ -362,21 +395,37 @@ export function ManagementReviewModule({
               </section>
             ) : null}
 
+            {record.status === "operations_approved" ? (
+              <section className="management-report-signatures">
+                {record.approvals.map((approval, index) => (
+                  <div key={approval.stage}>
+                    <small>{index === 0 ? "Validó el responsable del SGC" : "Aprobó Dirección de Operaciones"}</small>
+                    <strong>{approval.approverName}</strong>
+                    <span>{approval.approverPosition}</span>
+                    <time>{formatDateTime(approval.approvedAt ?? "")}</time>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
             <footer className="management-report-footer">
               <span>Contexto: {record.contextFingerprint}</span>
               <span>Generado por IntegraQ {record.draft.mode === "demo" ? "(modo demostración)" : "con IA conectada"}</span>
             </footer>
           </article>
 
+          {record.status === "operations_approved" ? (
+            <ClosedAuthorizationPanel record={record} />
+          ) : (
           <section className="management-approval-panel work-panel print-hidden">
             <header className="management-panel-heading">
-              <div><span className="module-kicker">Flujo de autorización</span><h3>Secuencia obligatoria</h3></div>
+              <div><span className="module-kicker">Validación y aprobación</span><h3>Secuencia obligatoria</h3></div>
               <span className="management-separation"><LockKeyhole size={14} />Funciones separadas</span>
             </header>
             <div className="management-approval-flow">
               <ApprovalStep
                 number="1"
-                title="Responsable del SGC"
+                title="Validación del SGC"
                 detail="Administrador"
                 approval={record.approvals[0]}
                 active={record.status === "draft"}
@@ -389,22 +438,21 @@ export function ManagementReviewModule({
                 approval={record.approvals[1]}
                 active={record.status === "sgc_approved"}
               />
-              <span className={`approval-connector ${record.status === "operations_approved" ? "complete" : ""}`} />
-              <div className={`management-approval-step final-step ${record.status === "operations_approved" ? "step-complete" : ""}`}>
-                <span>{record.status === "operations_approved" ? <CheckCircle2 size={17} /> : <LockKeyhole size={17} />}</span>
+              <span className="approval-connector" />
+              <div className="management-approval-step final-step step-locked">
+                <span><LockKeyhole size={17} /></span>
                 <div><strong>Acta autorizada</strong><small>Registro final bloqueado</small></div>
               </div>
             </div>
 
-            {record.status !== "operations_approved" ? (
-              <div className="management-approval-action">
+            <div className="management-approval-action">
                 <label>
                   <span>Comentario de autorización</span>
                   <textarea value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} placeholder="Observaciones para la siguiente etapa" rows={3} />
                 </label>
                 {record.status === "draft" ? (
                   <button className="button button-primary" type="button" disabled={!isAdministrator || editing} onClick={approveAsSgc}>
-                    <Send size={16} />Autorizar y enviar a Operaciones
+                    <Send size={16} />Validar y enviar a Operaciones
                   </button>
                 ) : (
                   <button className="button button-primary" type="button" disabled={!isOperationsDirector} onClick={approveAsOperations}>
@@ -413,19 +461,135 @@ export function ManagementReviewModule({
                 )}
                 <p>
                   {record.status === "draft"
-                    ? "La autorización del SGC bloquea la edición y habilita la segunda firma."
+                    ? "La validación del SGC bloquea la edición y habilita la aprobación final."
                     : isOperationsDirector
                       ? "Esta sesión corresponde a Dirección de Operaciones."
                       : "Pendiente de ingreso del usuario con puesto Dirección de Operaciones."}
                 </p>
-              </div>
-            ) : (
-              <div className="management-finalized"><CheckCircle2 size={19} /><div><strong>Revisión autorizada</strong><span>Las dos etapas fueron completadas y el expediente quedó bloqueado.</span></div></div>
-            )}
+            </div>
           </section>
+          )}
         </>
       )}
     </div>
+  );
+}
+
+function ManagementReviewIndex({
+  currentRecord,
+  error,
+  generating,
+  isAdministrator,
+  onGenerate,
+  onOpen,
+  periodLabel,
+  records,
+}: {
+  currentRecord: ManagementReviewRecord | null;
+  error: string;
+  generating: boolean;
+  isAdministrator: boolean;
+  onGenerate: () => void;
+  onOpen: (id: string) => void;
+  periodLabel: string;
+  records: ManagementReviewRecord[];
+}) {
+  const orderedRecords = [...records].sort((left, right) => right.period.year - left.period.year);
+  const closedCount = records.filter((record) => record.status === "operations_approved").length;
+  const pendingCount = records.length - closedCount;
+
+  return (
+    <div className="management-review-module management-review-index">
+      <div className="module-heading management-review-heading">
+        <div>
+          <span className="module-kicker">Gobierno del SGC</span>
+          <h2>Revisiones por la Dirección</h2>
+          <p>Historial anual de actas, responsables de validación y autorizaciones finales.</p>
+        </div>
+        <div className="module-heading-actions">
+          {!currentRecord ? (
+            <button className="button button-ai" type="button" disabled={!isAdministrator || generating} onClick={onGenerate}>
+              {generating ? <RefreshCcw className="spin" size={16} /> : <Sparkles size={16} />}
+              {generating ? "Consolidando fuentes" : `Generar ${periodLabel}`}
+            </button>
+          ) : (
+            <button className="button button-secondary" type="button" onClick={() => onOpen(currentRecord.id)}>
+              <Eye size={16} />Abrir revisión {currentRecord.period.year}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {error ? <div className="management-error"><AlertCircle size={16} />{error}</div> : null}
+
+      <section className="management-history-summary">
+        <div><History size={18} /><span><small>Expedientes</small><strong>{records.length}</strong></span></div>
+        <div><CheckCircle2 size={18} /><span><small>Cerrados</small><strong>{closedCount}</strong></span></div>
+        <div><Clock3 size={18} /><span><small>En autorización</small><strong>{pendingCount}</strong></span></div>
+        <div><CalendarDays size={18} /><span><small>Periodicidad</small><strong>Anual</strong></span></div>
+      </section>
+
+      <section className="management-history-panel work-panel">
+        <header className="management-panel-heading">
+          <div><span className="module-kicker">Archivo controlado</span><h3>Actas por año</h3></div>
+          <span className="management-context-id">{orderedRecords.length} registros</span>
+        </header>
+        <div className="management-history-table-wrap">
+          <table className="management-history-table">
+            <thead>
+              <tr><th>Año</th><th>Expediente</th><th>Estado</th><th>Validó</th><th>Aprobó</th><th>Fecha de cierre</th><th>Archivo</th></tr>
+            </thead>
+            <tbody>
+              {orderedRecords.map((record) => {
+                const validation = record.approvals[0];
+                const approval = record.approvals[1];
+                return (
+                  <tr key={record.id}>
+                    <td><strong className="history-year">{record.period.year}</strong></td>
+                    <td><code>{record.id}</code><small>Rev. {record.revision} · {formatDate(record.generatedAt)}</small></td>
+                    <td><span className={`management-review-status status-${record.status}`}>{reviewStatusLabels[record.status]}</span></td>
+                    <td><strong>{validation.approverName ?? "Pendiente"}</strong><small>{validation.approverPosition ?? validation.requiredPosition}</small></td>
+                    <td><strong>{approval.approverName ?? "Pendiente"}</strong><small>{approval.approverPosition ?? approval.requiredPosition}</small></td>
+                    <td>{approval.approvedAt ? formatDate(approval.approvedAt) : "Pendiente"}</td>
+                    <td><button className="button button-secondary history-open-button" type="button" onClick={() => onOpen(record.id)}><Eye size={15} />Ver acta</button></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <footer className="management-history-note">
+          <AlertCircle size={15} />
+          <span>Los expedientes 2024 y 2025 son referencias demostrativas hasta importar las actas oficiales.</span>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ClosedAuthorizationPanel({ record }: { record: ManagementReviewRecord }) {
+  return (
+    <section className="management-closed-approvals work-panel print-hidden">
+      <header className="management-panel-heading">
+        <div><span className="module-kicker">Expediente cerrado</span><h3>Autorizaciones registradas</h3></div>
+        <span className="management-separation"><LockKeyhole size={14} />Acta bloqueada</span>
+      </header>
+      <div className="management-signature-grid">
+        {record.approvals.map((approval, index) => (
+          <article key={approval.stage}>
+            <span className="management-signature-check"><CheckCircle2 size={18} /></span>
+            <div>
+              <small>{index === 0 ? "Validó" : "Aprobó"}</small>
+              <strong>{approval.approverName}</strong>
+              <span>{approval.approverPosition}</span>
+              <time>{formatDateTime(approval.approvedAt ?? "")}</time>
+              {approval.comment ? <p>{approval.comment}</p> : null}
+            </div>
+          </article>
+        ))}
+      </div>
+      <footer className="management-finalized"><CheckCircle2 size={19} /><div><strong>Revisión cerrada</strong><span>El archivo conserva las autorizaciones y ya no admite cambios.</span></div></footer>
+    </section>
   );
 }
 

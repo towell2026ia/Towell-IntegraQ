@@ -7,6 +7,7 @@ import {
   approveManagementReviewAsOperations,
   approveManagementReviewAsSgc,
   buildAnnualManagementReviewPeriod,
+  buildDemoManagementReviewHistory,
   buildManagementReviewContext,
   createManagementReviewRecord,
   type ManagementReviewAiDraft,
@@ -112,6 +113,14 @@ describe("management review aggregation and approvals", () => {
     expect(sgcApproved.status).toBe("sgc_approved");
     expect(completed.status).toBe("operations_approved");
     expect(completed.approvals[1].approverPosition).toBe("Dirección de Operaciones");
+  });
+
+  it("provides closed annual records with both historical authorizations", () => {
+    const history = buildDemoManagementReviewHistory();
+
+    expect(history.map((record) => record.period.year)).toEqual([2025, 2024]);
+    expect(history.every((record) => record.status === "operations_approved")).toBe(true);
+    expect(history.every((record) => record.approvals.every((approval) => approval.status === "approved"))).toBe(true);
   });
 });
 

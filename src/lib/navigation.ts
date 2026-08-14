@@ -14,6 +14,7 @@ export type WorkspaceModuleId =
   | "suppliers"
   | "supplier-portal"
   | "management-review"
+  | "continuous-improvement"
   | "forms"
   | "ai-assistant"
   | "integrations"
@@ -42,6 +43,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   suppliers: { label: "Gestión de calidad de proveedores", breadcrumb: "Operación", status: "Disponible" },
   "supplier-portal": { label: "Portal de proveedores", breadcrumb: "Portales", status: "Disponible" },
   "management-review": { label: "Revisión por la Dirección", breadcrumb: "Dirección", status: "Disponible" },
+  "continuous-improvement": { label: "Mejora continua", breadcrumb: "Operación", status: "Disponible" },
   forms: { label: "Formularios y dashboards", breadcrumb: "Configuración", status: "Estructura" },
   "ai-assistant": { label: "IA asistente", breadcrumb: "Plataforma", status: "Pendiente" },
   integrations: { label: "Notificaciones e integraciones", breadcrumb: "Plataforma", status: "Estructura" },
