@@ -6,6 +6,7 @@ export interface ActiveSession {
   position: string;
   department: string;
   company: string;
+  site?: string;
   userType: "Administrador" | "Usuario";
   assignedProcessIds: string[];
 }
@@ -18,6 +19,7 @@ export const activeSession: ActiveSession = {
   position: "Gerente de Calidad",
   department: "Calidad",
   company: "Towell",
+  site: "Planta principal",
   userType: "Administrador",
   assignedProcessIds: ["P-08"],
 };

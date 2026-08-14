@@ -22,11 +22,9 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, type ReactNode, useMemo, useState } from "react";
 
 import {
-  buildInitialIndicatorDefinitions,
-  buildInitialIndicatorResults,
   buildDefaultEvaluationRules,
   buildQuarterSchedule,
   canSubmitIndicator,
@@ -34,7 +32,6 @@ import {
   formatIndicatorValue,
   getIndicatorScheduleDate,
   getIndicatorScore,
-  normalizeConfiguredIndicators,
   parseIndicatorMetric,
   quarters,
   statusLabels,
@@ -67,40 +64,30 @@ const quarterLabels: Record<Quarter, string> = {
   Q4: "T4 Â· Octâ€“Dic",
 };
 
-export function IndicatorsModule() {
+interface IndicatorsModuleProps {
+  definitions: ConfiguredIndicator[];
+  focusId?: string;
+  results: IndicatorResults;
+  onDefinitionsChange: (definitions: ConfiguredIndicator[]) => void;
+  onResultsChange: (results: IndicatorResults) => void;
+}
+
+export function IndicatorsModule({
+  definitions,
+  focusId,
+  results,
+  onDefinitionsChange,
+  onResultsChange,
+}: IndicatorsModuleProps) {
   const canManageCatalog = canManageIndicatorCatalog(activeSession);
+  const focusedIndicator = definitions.find((indicator) => indicator.id === focusId);
   const [view, setView] = useState<IndicatorView>("dashboard");
   const [year, setYear] = useState(2026);
-  const [area, setArea] = useState(activeSession.department);
-  const [query, setQuery] = useState("");
+  const [area, setArea] = useState(focusedIndicator?.area ?? activeSession.department);
+  const [query, setQuery] = useState(focusedIndicator?.id ?? "");
   const [dashboardQuarter, setDashboardQuarter] = useState<Quarter>("Q2");
   const [pendingQuarter, setPendingQuarter] = useState<Quarter>("Q3");
   const [submission, setSubmission] = useState<SubmissionSelection | null>(null);
-  const [definitions, setDefinitions] = useState<ConfiguredIndicator[]>(() => buildInitialIndicatorDefinitions());
-  const [results, setResults] = useState<IndicatorResults>(() => buildInitialIndicatorResults());
-  const [storageReady, setStorageReady] = useState(false);
-
-  useEffect(() => {
-    const hydrationTask = window.setTimeout(() => {
-      try {
-        const savedDefinitions = window.localStorage.getItem("integraq.indicatorDefinitions.v3") ?? window.localStorage.getItem("integraq.indicatorDefinitions.v2");
-        const savedResults = window.localStorage.getItem("integraq.indicatorResults.v3") ?? window.localStorage.getItem("integraq.indicatorResults.v2");
-        if (savedDefinitions) setDefinitions(normalizeConfiguredIndicators(JSON.parse(savedDefinitions) as ConfiguredIndicator[]));
-        if (savedResults) setResults(JSON.parse(savedResults) as IndicatorResults);
-      } catch {
-        // The imported catalog remains available when browser storage is unavailable.
-      } finally {
-        setStorageReady(true);
-      }
-    }, 0);
-    return () => window.clearTimeout(hydrationTask);
-  }, []);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    window.localStorage.setItem("integraq.indicatorDefinitions.v3", JSON.stringify(definitions));
-    window.localStorage.setItem("integraq.indicatorResults.v3", JSON.stringify(results));
-  }, [definitions, results, storageReady]);
 
   const accessibleDefinitions = useMemo(
     () => getAccessibleIndicators(activeSession, definitions),
@@ -151,12 +138,12 @@ export function IndicatorsModule() {
       {view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={setYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
       {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={setYear} query={query} results={results} year={year} /> : null}
       {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={setYear} query={query} quarter={pendingQuarter} results={results} year={year} /> : null}
-      {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager definitions={definitions} onBack={() => setView("dashboard")} onDefinitionsChange={setDefinitions} onResultsChange={setResults} results={results} year={year} /> : null}
+      {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager definitions={definitions} onBack={() => setView("dashboard")} onDefinitionsChange={onDefinitionsChange} onResultsChange={onResultsChange} results={results} year={year} /> : null}
       {view === "submission" && submission && accessibleDefinitions.some((indicator) => indicator.id === submission.indicatorId) ? (
         <IndicatorSubmission
           indicator={accessibleDefinitions.find((item) => item.id === submission.indicatorId) ?? accessibleDefinitions[0]}
           onBack={() => setView("pending")}
-          onResult={(record) => setResults((current) => setIndicatorRecord(current, submission.indicatorId, submission.year, submission.quarter, record))}
+          onResult={(record) => onResultsChange(setIndicatorRecord(results, submission.indicatorId, submission.year, submission.quarter, record))}
           quarter={submission.quarter}
           record={getIndicatorRecord(results, submission.indicatorId, submission.year, submission.quarter)}
           year={submission.year}
@@ -276,183 +263,8 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
             {group.items.map((indicator) => {
               const record = getIndicatorRecord(results, indicator.id, year, quarter);
               const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
-              const available = canSubmitIndicator(indicator, year, quarter);
-              return (
-                <button className="indicator-pending-row" key={indicator.id} type="button" onClick={() => onOpenSubmission(indicator.id, year, quarter)}>
-                  <span><strong>{indicator.name}</strong><small>{indicator.id} Â· {indicator.leader}</small></span>
-                  <span><CalendarClock size={15} /><small>Fecha programada</small><strong>{formatScheduleDate(getIndicatorScheduleDate(indicator, year, quarter))}</strong></span>
-                  <span className={`indicator-status indicator-status-${status}`}>{record ? statusLabels[status] : available ? "Disponible hoy" : statusLabels[status]}</span>
-                  <Eye size={17} />
-                </button>
-              );
-            })}
-          </section>
-        ))}
-      </div>
-      {indicators.length === 0 ? <EmptyIndicators /> : null}
-    </section>
-  );
-}
-
-function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => void; quarter: Quarter; record?: IndicatorResultRecord; year: number }) {
-  const [evidence, setEvidence] = useState<File | null>(null);
-  const [saved, setSaved] = useState(false);
-  const rule = parseIndicatorMetric(indicator.metric);
-  const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
-  const editable = canUpdateIndicatorResult(activeSession, indicator) && canSubmitIndicator(indicator, year, quarter);
-  const scheduledDate = getIndicatorScheduleDate(indicator, year, quarter);
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!editable) return;
-    const form = new FormData(event.currentTarget);
-    onResult({
-      value: Number(form.get("value")),
-      comments: String(form.get("comments") ?? "").trim(),
-      evidenceName: evidence?.name ?? record?.evidenceName,
-      evidenceSize: evidence?.size ?? record?.evidenceSize,
-      submittedAt: new Date().toISOString(),
-      submittedBy: activeSession.name,
-    });
-    setSaved(true);
-  }
-
-  return (
-    <section className="indicator-workspace-panel indicator-submission-panel">
-      <header className="indicator-submission-header">
-        <button className="icon-button" type="button" title="Volver a pendientes" onClick={onBack}><ArrowLeft size={18} /></button>
-        <div><p className="module-kicker">Expediente individual</p><h3>{indicator.name}</h3><p>{indicator.id} Â· {indicator.area} Â· {quarterLabels[quarter]} de {year}</p></div>
-        <span className={`indicator-status indicator-status-${status}`}>{statusLabels[status]}</span>
-      </header>
-      <div className="indicator-submission-facts">
-        <div><small>MÃ©trica</small><strong>{indicator.metric}</strong></div><div><small>Responsable</small><strong>{indicator.leader}</strong></div><div><small>Fecha programada</small><strong>{formatScheduleDate(scheduledDate)}</strong></div><div><small>Periodicidad</small><strong>{indicator.period}</strong></div>
-      </div>
-      <section className={`indicator-capture-window ${editable ? "available" : "locked"}`}>
-        {editable ? <CheckCircle2 size={19} /> : <LockKeyhole size={19} />}
-        <div><strong>{editable ? "Captura habilitada hoy" : "Captura bloqueada por fecha"}</strong><p>{editable ? "El resultado se registrarÃ¡ manualmente en este expediente." : `Solo se habilitarÃ¡ el ${formatScheduleDate(scheduledDate)}. El administrador puede reprogramarlo desde el catÃ¡logo.`}</p></div>
-      </section>
-      <form className="indicator-single-form" onSubmit={submit}>
-        <label><span>Resultado trimestral</span><div className="indicator-value-input"><input defaultValue={record?.value ?? ""} disabled={!editable} min="0" name="value" required step="any" type="number" /><span>{rule.unit === "percent" ? "%" : rule.unit === "weeks" ? "sem" : "valor"}</span></div><small>Se evaluarÃ¡ contra {indicator.metric}.</small></label>
-        <label><span>Comentarios</span><textarea defaultValue={record?.comments ?? ""} disabled={!editable} name="comments" placeholder="Contexto del resultado, desviaciones o acciones relacionadas" rows={5} /></label>
-        <label><span>Evidencia</span><div className={`indicator-evidence-field ${!editable ? "disabled" : ""}`}><Paperclip size={18} /><div><strong>{evidence?.name ?? record?.evidenceName ?? "Sin archivo adjunto"}</strong><small>PDF, imagen o archivo de Excel</small></div><input accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls" aria-label="Adjuntar evidencia" disabled={!editable} onChange={(event) => setEvidence(event.target.files?.[0] ?? null)} type="file" /></div></label>
-        {record ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Ãšltimo registro manual</strong><small>{record.submittedBy} Â· {formatTimestamp(record.submittedAt)}</small></span></div> : null}
-        <footer><p>{saved ? <><CheckCircle2 size={15} /> Resultado guardado</> : <><CircleAlert size={15} /> No se cargarÃ¡ informaciÃ³n automÃ¡ticamente.</>}</p><button className="button button-primary" disabled={!editable} type="submit"><Save size={17} /> Guardar resultado</button></footer>
-      </form>
-    </section>
-  );
-}
-
-function IndicatorCatalogManager({ definitions, onBack, onDefinitionsChange, onResultsChange, results, year }: { definitions: ConfiguredIndicator[]; onBack: () => void; onDefinitionsChange: (definitions: ConfiguredIndicator[]) => void; onResultsChange: (results: IndicatorResults) => void; results: IndicatorResults; year: number }) {
-  const [query, setQuery] = useState("");
-  const [editing, setEditing] = useState<ConfiguredIndicator | "new" | null>(null);
-  const [deleting, setDeleting] = useState<ConfiguredIndicator | null>(null);
-  const filtered = definitions.filter((indicator) => !query.trim() || [indicator.id, indicator.area, indicator.name, indicator.leader].some((value) => value.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))));
-
-  function saveIndicator(indicator: ConfiguredIndicator) {
-    const exists = definitions.some((item) => item.id === indicator.id);
-    onDefinitionsChange(exists ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]);
-    if (!exists) onResultsChange({ ...results, [indicator.id]: { "2025": {}, "2026": {} } });
-    setEditing(null);
-  }
-
-  function deleteIndicator() {
-    if (!deleting) return;
-    onDefinitionsChange(definitions.filter((item) => item.id !== deleting.id));
-    const next = { ...results };
-    delete next[deleting.id];
-    onResultsChange(next);
-    setDeleting(null);
-  }
-
-  return (
-    <section className="indicator-workspace-panel indicator-catalog-panel">
-      <header className="indicator-catalog-header"><button className="icon-button" type="button" title="Volver al dashboard" onClick={onBack}><ArrowLeft size={18} /></button><div><p className="module-kicker">ConfiguraciÃ³n administrativa</p><h3>CatÃ¡logo de indicadores</h3><p>Altas, responsables, mÃ©tricas y fechas trimestrales de captura.</p></div><button className="button button-primary" type="button" onClick={() => setEditing("new")}><Plus size={17} /> Nuevo indicador</button></header>
-      <div className="indicator-catalog-search"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar en catÃ¡logo" onChange={(event) => setQuery(event.target.value)} placeholder="Buscar indicador, proceso o responsable" value={query} /></label><span>{filtered.length} indicadores</span></div>
-      <div className="indicator-catalog-groups">
-        {groupIndicators(filtered).map((group) => <section className="indicator-catalog-group" key={group.area}><header><div><strong>{group.area}</strong><small>{group.items[0]?.processId}</small></div><span>{group.items.length}</span></header>{group.items.map((indicator) => <div className="indicator-catalog-row" key={indicator.id}><code>{indicator.id}</code><span><strong>{indicator.name}</strong><small>{indicator.leader} Â· {indicator.metric}</small><span className="indicator-rule-summary"><i className="rule-compliant">Cumple {indicator.evaluationRules.compliant}</i><i className="rule-marginal">Marginal {indicator.evaluationRules.marginal}</i><i className="rule-noncompliant">No cumple {indicator.evaluationRules.noncompliant}</i></span></span><span><small>{quarterLabels.Q3} {year}</small><strong>{formatScheduleDate(getIndicatorScheduleDate(indicator, year, "Q3"))}</strong></span><button className="icon-button" type="button" title={`Editar ${indicator.name}`} onClick={() => setEditing(indicator)}><Pencil size={16} /></button><button className="icon-button danger" type="button" title={`Eliminar ${indicator.name}`} onClick={() => setDeleting(indicator)}><Trash2 size={16} /></button></div>)}</section>)}
-      </div>
-      {editing ? <IndicatorEditor definitions={definitions} indicator={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSave={saveIndicator} year={year} /> : null}
-      {deleting ? <div className="quality-modal-backdrop" role="presentation" onMouseDown={() => setDeleting(null)}><section className="quality-modal indicator-delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-indicator-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span>{deleting.id}</span><h3 id="delete-indicator-title">Eliminar indicador</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={() => setDeleting(null)}><X size={17} /></button></header><div className="indicator-delete-copy"><CircleAlert size={23} /><p>Se eliminarÃ¡ <strong>{deleting.name}</strong> y sus resultados locales. Esta acciÃ³n no se puede deshacer.</p></div><footer><button className="button button-secondary" type="button" onClick={() => setDeleting(null)}>Cancelar</button><button className="button indicator-delete-button" type="button" onClick={deleteIndicator}><Trash2 size={16} /> Eliminar</button></footer></section></div> : null}
-    </section>
-  );
-}
-
-function IndicatorEditor({ definitions, indicator, onClose, onSave, year }: { definitions: ConfiguredIndicator[]; indicator: ConfiguredIndicator | null; onClose: () => void; onSave: (indicator: ConfiguredIndicator) => void; year: number }) {
-  const nextId = `IND-${String(Math.max(0, ...definitions.map((item) => Number(item.id.replace(/\D/g, "")) || 0)) + 1).padStart(3, "0")}`;
-  const defaults = indicator?.schedule[String(year)] ?? buildQuarterSchedule(year);
-  const defaultRules = indicator?.evaluationRules ?? buildDefaultEvaluationRules(">=90%");
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const schedule = structuredClone(indicator?.schedule ?? { "2025": buildQuarterSchedule(2025), "2026": buildQuarterSchedule(2026) });
-    schedule[String(year)] = Object.fromEntries(quarters.map((quarter) => [quarter, String(form.get(`schedule-${quarter}`))])) as Record<Quarter, string>;
-    onSave({
-      id: indicator?.id ?? nextId,
-      sourceRow: indicator?.sourceRow ?? 0,
-      processId: String(form.get("processId")).trim(),
-      area: String(form.get("area")).trim(),
-      directionObjective: indicator?.directionObjective ?? "",
-      directionMetric: indicator?.directionMetric ?? "",
-      qualityObjective: String(form.get("qualityObjective")).trim(),
-      name: String(form.get("name")).trim(),
-      leader: String(form.get("leader")).trim(),
-      metric: String(form.get("metric")).trim(),
-      period: "Trimestral",
-      description: String(form.get("description")).trim(),
-      evaluationRules: {
-        compliant: String(form.get("rule-compliant")).trim(),
-        marginal: String(form.get("rule-marginal")).trim(),
-        noncompliant: String(form.get("rule-noncompliant")).trim(),
-      },
-      schedule: { ...schedule },
-    });
-  }
-
-  return (
-    <div className="quality-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="quality-modal indicator-editor-modal" role="dialog" aria-modal="true" aria-labelledby="indicator-editor-title" onMouseDown={(event) => event.stopPropagation()}>
-        <header><div><span>{indicator?.id ?? nextId}</span><h3 id="indicator-editor-title">{indicator ? "Editar indicador" : "Nuevo indicador"}</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={17} /></button></header>
-        <form onSubmit={submit}>
-          <div className="indicator-editor-grid"><label><span>Proceso o Ã¡rea</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>CÃ³digo de proceso</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>MÃ©trica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. â‰¥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><textarea defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective" rows={2} /></label><label className="span-2"><span>DescripciÃ³n</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
-          <fieldset className="indicator-rules-fieldset"><legend>Reglas de evaluaciÃ³n</legend><div><label className="rule-compliant"><span>Cumple</span><input defaultValue={defaultRules.compliant} name="rule-compliant" placeholder=">=90" required /></label><label className="rule-marginal"><span>Marginal</span><input defaultValue={defaultRules.marginal} name="rule-marginal" placeholder=">=85.5,<90" required /></label><label className="rule-noncompliant"><span>No cumple</span><input defaultValue={defaultRules.noncompliant} name="rule-noncompliant" placeholder="<85.5" required /></label></div><p>Usa operadores &gt;, &gt;=, &lt;, &lt;= o =. Separa condiciones simultÃ¡neas con coma y alternativas con punto y coma.</p></fieldset>
-          <fieldset className="indicator-schedule-fieldset"><legend>Fechas programadas de captura Â· {year}</legend><div>{quarters.map((quarter) => <label key={quarter}><span>{quarterLabels[quarter]}</span><input defaultValue={defaults[quarter]} name={`schedule-${quarter}`} required type="date" /></label>)}</div><p>La captura solo estarÃ¡ habilitada en la fecha indicada para cada trimestre.</p></fieldset>
-          <footer><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit"><Save size={16} /> Guardar indicador</button></footer>
-        </form>
-      </section>
-    </div>
-  );
-}
-
-function IndicatorToolbar({ area, areas, children, onAreaChange, onQueryChange, onYearChange, query, year }: Omit<SharedViewProps, "indicators" | "results"> & { children: ReactNode }) {
-  return <div className="indicator-toolbar"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar indicador" onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar KPI o responsable" value={query} /></label><label><span>Ãrea o proceso</span><select aria-label="Ãrea o proceso" value={area} onChange={(event) => onAreaChange(event.target.value)}>{areas.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>AÃ±o</span><select aria-label="AÃ±o" value={year} onChange={(event) => onYearChange(Number(event.target.value))}>{yearOptions.map((item) => <option key={item}>{item}</option>)}</select></label><div className="indicator-toolbar-extra">{children}</div></div>;
-}
-
-function IndicatorGauge({ indicator, rule, status, value }: { indicator: ConfiguredIndicator; rule: ReturnType<typeof parseIndicatorMetric>; status: IndicatorStatus; value: number | undefined }) {
-  const score = getIndicatorScore(value, rule, status);
-  const angle = score === null ? null : 180 - score * 1.8;
-  const needleX = angle === null ? 100 : 100 + 56 * Math.cos((angle * Math.PI) / 180);
-  const needleY = angle === null ? 100 : 100 - 56 * Math.sin((angle * Math.PI) / 180);
-  return <article className="indicator-gauge-card"><header><span>{indicator.id} Â· {indicator.area}</span><span className={`indicator-status indicator-status-${status}`}>{statusLabels[status]}</span></header><div className="indicator-gauge" aria-label={`${indicator.name}: ${statusLabels[status]}`}><svg viewBox="0 0 200 118" role="img"><path className="gauge-red" d="M20 100 A80 80 0 0 1 124.7 23.9" /><path className="gauge-orange" d="M124.7 23.9 A80 80 0 0 1 164.7 53" /><path className="gauge-green" d="M164.7 53 A80 80 0 0 1 180 100" />{angle === null ? null : <line className="gauge-needle" x1="100" y1="100" x2={needleX} y2={needleY} />}<circle cx="100" cy="100" r="6" /></svg><strong>{formatIndicatorValue(value, rule)}</strong></div><div className="indicator-gauge-copy"><h4>{indicator.name}</h4><p>Meta: <strong>{indicator.metric}</strong></p><small>{indicator.leader}</small></div></article>;
-}
-
-function StatusSummary({ status, value }: { status: IndicatorStatus; value: number }) { return <div className={`indicator-summary-status indicator-summary-${status}`}><span>{value}</span><small>{statusLabels[status]}</small></div>; }
-function IndicatorLegend({ compact = false }: { compact?: boolean }) { return <div className={`indicator-legend ${compact ? "compact" : ""}`}>{(["compliant", "marginal", "noncompliant", "not_uploaded", "pending"] as IndicatorStatus[]).map((status) => <span key={status}><i className={`legend-${status}`} />{statusLabels[status]}</span>)}</div>; }
-function EmptyIndicators() { return <div className="indicator-empty"><CalendarRange size={24} /><strong>Sin indicadores en esta vista</strong><p>Cambia el Ã¡rea o limpia la bÃºsqueda.</p></div>; }
-
-function groupIndicators(indicators: ConfiguredIndicator[]) {
-  const groups = new Map<string, ConfiguredIndicator[]>();
-  indicators.forEach((indicator) => groups.set(indicator.area, [...(groups.get(indicator.area) ?? []), indicator]));
-  return Array.from(groups, ([area, items]) => ({ area, items }));
-}
-
-function getIndicatorRecord(results: IndicatorResults, id: string, year: number, quarter: Quarter) { return results[id]?.[String(year)]?.[quarter]; }
-function setIndicatorRecord(results: IndicatorResults, id: string, year: number, quarter: Quarter, record: IndicatorResultRecord): IndicatorResults { return { ...results, [id]: { ...(results[id] ?? {}), [String(year)]: { ...(results[id]?.[String(year)] ?? {}), [quarter]: record } } }; }
-
-function countStatuses(indicators: ConfiguredIndicator[], results: IndicatorResults, year: number, quarter: Quarter) {
-  return indicators.reduce<Record<IndicatorStatus, number>>((counts, indicator) => { const status = evaluateConfiguredIndicator(indicator, getIndicatorRecord(results, indicator.id, year, quarter)?.value, year, quarter); counts[status] += 1; return counts; }, { compliant: 0, marginal: 0, noncompliant: 0, not_uploaded: 0, pending: 0 });
-}
-
-function formatScheduleDate(value: string) { if (!value) return "Sin programar"; return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
-function formatTimestamp(value: string) { return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
-function csvCell(value: string) { return `"${value.replaceAll('"', '""')}"`; }
+            ×žù¶‰žËkºwµç@€€íÉ•½É€ü€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ•á¥ÍÑ¥¹œµÉ•½Éˆøñ¥±•¡•¬ÈÍ¥é”õìÄÝô€¼øñÍÁ…¸øñÍÑÉ½¹œûi±Ñ¥µ¼É•¥ÍÑÉ¼µ…¹Õ…°ð½ÍÑÉ½¹œøñÍµ…±°ùíÉ•½É¹ÍÕ‰µ¥ÑÑ•‘	åôƒ
+Üí™½Éµ…ÑQ¥µ•ÍÑ…µÀ¡É•½É¹ÍÕ‰µ¥ÑÑ•‘Ð¥ôð½Íµ…±°øð½ÍÁ…¸øð½‘¥Øø€è¹Õ±±ô(€€€€€€€€ñ™½½Ñ•ÈøñÀùíÍ…Ù•€ü€ðøñ¡•­¥É±”ÈÍ¥é”õìÄÕô€¼øI•ÍÕ±Ñ…‘¼Õ…É‘…‘¼ð¼ø€è€ðøñ¥É±•±•ÉÐÍ¥é”õìÄÕô€¼ø9¼Í”…É…Ë„¥¹™½Éµ…§Í¸…ÕÑ½·…Ñ¥…µ•¹Ñ”¸ð¼ùôð½Àøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸‰ÕÑÑ½¸µÁÉ¥µ…Éäˆ‘¥Í…‰±•õì…•‘¥Ñ…‰±•ôÑåÁ”ô‰ÍÕ‰µ¥ÐˆøñM…Ù”Í¥é”õìÄÝô€¼øÕ…É‘…ÈÉ•ÍÕ±Ñ…‘¼ð½‰ÕÑÑ½¸øð½™½½Ñ•Èø(€€€€€€ð½™½É´ø(€€€€ð½Í•Ñ¥½¸ø(€€¤ì)ô()™Õ¹Ñ¥½¸%¹‘¥…Ñ½É…Ñ…±½5…¹…•È¡ì‘•™¥¹¥Ñ¥½¹Ì°½¹	…¬°½¹•™¥¹¥Ñ¥½¹Í¡…¹”°½¹I•ÍÕ±ÑÍ¡…¹”°É•ÍÕ±ÑÌ°å•…Èôèì‘•™¥¹¥Ñ¥½¹Ìè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émtì½¹	…¬è€ ¤€ôøÙ½¥ì½¹•™¥¹¥Ñ¥½¹Í¡…¹”è€¡‘•™¥¹¥Ñ¥½¹Ìè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émt¤€ôøÙ½¥ì½¹I•ÍÕ±ÑÍ¡…¹”è€¡É•ÍÕ±ÑÌè%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌ¤€ôøÙ½¥ìÉ•ÍÕ±ÑÌè%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌìå•…Èè¹Õµ‰•Èô¤ì(€½¹ÍÐmÅÕ•Éä°Í•ÑEÕ•Éåt€ôÕÍ•MÑ…Ñ” ˆˆ¤ì(€½¹ÍÐm•‘¥Ñ¥¹œ°Í•Ñ‘¥Ñ¥¹t€ôÕÍ•MÑ…Ñ”ñ½¹™¥ÕÉ•‘%¹‘¥…Ñ½Èð€‰¹•Üˆð¹Õ±°ø¡¹Õ±°¤ì(€½¹ÍÐm‘•±•Ñ¥¹œ°Í•Ñ•±•Ñ¥¹t€ôÕÍ•MÑ…Ñ”ñ½¹™¥ÕÉ•‘%¹‘¥…Ñ½Èð¹Õ±°ø¡¹Õ±°¤ì(€½¹ÍÐ™¥±Ñ•É•€ô‘•™¥¹¥Ñ¥½¹Ì¹™¥±Ñ•È ¡¥¹‘¥…Ñ½È¤€ôø€…ÅÕ•Éä¹ÑÉ¥´ ¤ñðm¥¹‘¥…Ñ½È¹¥°¥¹‘¥…Ñ½È¹…É•„°¥¹‘¥…Ñ½È¹¹…µ”°¥¹‘¥…Ñ½È¹±•…‘•Ét¹Í½µ” ¡Ù…±Õ”¤€ôøÙ…±Õ”¹Ñ½1½…±•1½Ý•É…Í” ‰•Ìˆ¤¹¥¹±Õ‘•Ì¡ÅÕ•Éä¹ÑÉ¥´ ¤¹Ñ½1½…±•1½Ý•É…Í” ‰•Ìˆ¤¤¤¤ì((€™Õ¹Ñ¥½¸Í…Ù•%¹‘¥…Ñ½È¡¥¹‘¥…Ñ½Èè½¹™¥ÕÉ•‘%¹‘¥…Ñ½È¤ì(€€€½¹ÍÐ•á¥ÍÑÌ€ô‘•™¥¹¥Ñ¥½¹Ì¹Í½µ” ¡¥Ñ•´¤€ôø¥Ñ•´¹¥€ôôô¥¹‘¥…Ñ½È¹¥¤ì(€€€½¹•™¥¹¥Ñ¥½¹Í¡…¹”¡•á¥ÍÑÌ€ü‘•™¥¹¥Ñ¥½¹Ì¹µ…À ¡¥Ñ•´¤€ôø¥Ñ•´¹¥€ôôô¥¹‘¥…Ñ½È¹¥€ü¥¹‘¥…Ñ½È€è¥Ñ•´¤€èl¸¸¹‘•™¥¹¥Ñ¥½¹Ì°¥¹‘¥…Ñ½Ét¤ì(€€€¥˜€ …•á¥ÍÑÌ¤½¹I•ÍÕ±ÑÍ¡…¹”¡ì€¸¸¹É•ÍÕ±ÑÌ°m¥¹‘¥…Ñ½È¹¥‘tèì€ˆÈÀÈÔˆèíô°€ˆÈÀÈØˆèíôôô¤ì(€€€Í•Ñ‘¥Ñ¥¹œ¡¹Õ±°¤ì(€ô((€™Õ¹Ñ¥½¸‘•±•Ñ•%¹‘¥…Ñ½È ¤ì(€€€¥˜€ …‘•±•Ñ¥¹œ¤É•ÑÕÉ¸ì(€€€½¹•™¥¹¥Ñ¥½¹Í¡…¹”¡‘•™¥¹¥Ñ¥½¹Ì¹™¥±Ñ•È ¡¥Ñ•´¤€ôø¥Ñ•´¹¥€„ôô‘•±•Ñ¥¹œ¹¥¤¤ì(€€€½¹ÍÐ¹•áÐ€ôì€¸¸¹É•ÍÕ±ÑÌôì(€€€‘•±•Ñ”¹•áÑm‘•±•Ñ¥¹œ¹¥‘tì(€€€½¹I•ÍÕ±ÑÍ¡…¹”¡¹•áÐ¤ì(€€€Í•Ñ•±•Ñ¥¹œ¡¹Õ±°¤ì(€ô((€É•ÑÕÉ¸€ (€€€€ñÍ•Ñ¥½¸±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÝ½É­ÍÁ…”µÁ…¹•°¥¹‘¥…Ñ½Èµ…Ñ…±½œµÁ…¹•°ˆø(€€€€€€ñ¡•…‘•È±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Ñ…±½œµ¡•…‘•Èˆøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰¥½¸µ‰ÕÑÑ½¸ˆÑåÁ”ô‰‰ÕÑÑ½¸ˆÑ¥Ñ±”ô‰Y½±Ù•È…°‘…Í¡‰½…Éˆ½¹±¥¬õí½¹	…­ôøñÉÉ½Ý1•™ÐÍ¥é”õìÄáô€¼øð½‰ÕÑÑ½¸øñ‘¥ØøñÀ±…ÍÍ9…µ”ô‰µ½‘Õ±”µ­¥­•Èˆù½¹™¥ÕÉ…§Í¸…‘µ¥¹¥ÍÑÉ…Ñ¥Ù„ð½Àøñ Ìù…Ó…±½¼‘”¥¹‘¥…‘½É•Ìð½ ÌøñÀù±Ñ…Ì°É•ÍÁ½¹Í…‰±•Ì°·¥ÑÉ¥…Ìä™•¡…ÌÑÉ¥µ•ÍÑÉ…±•Ì‘”…ÁÑÕÉ„¸ð½Àøð½‘¥Øøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸‰ÕÑÑ½¸µÁÉ¥µ…ÉäˆÑåÁ”ô‰‰ÕÑÑ½¸ˆ½¹±¥¬õì ¤€ôøÍ•Ñ‘¥Ñ¥¹œ ‰¹•Üˆ¥ôøñA±ÕÌÍ¥é”õìÄÝô€¼ø9Õ•Ù¼¥¹‘¥…‘½Èð½‰ÕÑÑ½¸øð½¡•…‘•Èø(€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Ñ…±½œµÍ•…É ˆøñ±…‰•°±…ÍÍ9…µ”ô‰Á…¹•°µÍ•…É ¥¹‘¥…Ñ½ÈµÍ•…É ˆøñM•…É Í¥é”õìÄÙô€¼øñ¥¹ÁÕÐ…É¥„µ±…‰•°ô‰	ÕÍ…È•¸…Ó…±½¼ˆ½¹¡…¹”õì¡•Ù•¹Ð¤€ôøÍ•ÑEÕ•Éä¡•Ù•¹Ð¹Ñ…É•Ð¹Ù…±Õ”¥ôÁ±…•¡½±‘•Èô‰	ÕÍ…È¥¹‘¥…‘½È°ÁÉ½•Í¼¼É•ÍÁ½¹Í…‰±”ˆÙ…±Õ”õíÅÕ•Éåô€¼øð½±…‰•°øñÍÁ…¸ùí™¥±Ñ•É•¹±•¹Ñ¡ô¥¹‘¥…‘½É•Ìð½ÍÁ…¸øð½‘¥Øø(€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Ñ…±½œµÉ½ÕÁÌˆø(€€€€€€€íÉ½ÕÁ%¹‘¥…Ñ½ÉÌ¡™¥±Ñ•É•¤¹µ…À ¡É½ÕÀ¤€ôø€ñÍ•Ñ¥½¸±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Ñ…±½œµÉ½ÕÀˆ­•äõíÉ½ÕÀ¹…É•…ôøñ¡•…‘•Èøñ‘¥ØøñÍÑÉ½¹œùíÉ½ÕÀ¹…É•…ôð½ÍÑÉ½¹œøñÍµ…±°ùíÉ½ÕÀ¹¥Ñ•µÍlÁtü¹ÁÉ½•ÍÍ%‘ôð½Íµ…±°øð½‘¥ØøñÍÁ…¸ùíÉ½ÕÀ¹¥Ñ•µÌ¹±•¹Ñ¡ôð½ÍÁ…¸øð½¡•…‘•ÈùíÉ½ÕÀ¹¥Ñ•µÌ¹µ…À ¡¥¹‘¥…Ñ½È¤€ôø€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Ñ…±½œµÉ½Üˆ­•äõí¥¹‘¥…Ñ½È¹¥‘ôøñ½‘”ùí¥¹‘¥…Ñ½È¹¥‘ôð½½‘”øñÍÁ…¸øñÍÑÉ½¹œùí¥¹‘¥…Ñ½È¹¹…µ•ôð½ÍÑÉ½¹œøñÍµ…±°ùí¥¹‘¥…Ñ½È¹±•…‘•Éôƒ
+Üí¥¹‘¥…Ñ½È¹µ•ÑÉ¥ôð½Íµ…±°øñÍÁ…¸±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÉÕ±”µÍÕµµ…Éäˆøñ¤±…ÍÍ9…µ”ô‰ÉÕ±”µ½µÁ±¥…¹ÐˆùÕµÁ±”í¥¹‘¥…Ñ½È¹•Ù…±Õ…Ñ¥½¹IÕ±•Ì¹½µÁ±¥…¹Ñôð½¤øñ¤±…ÍÍ9…µ”ô‰ÉÕ±”µµ…É¥¹…°ˆù5…É¥¹…°í¥¹‘¥…Ñ½È¹•Ù…±Õ…Ñ¥½¹IÕ±•Ì¹µ…É¥¹…±ôð½¤øñ¤±…ÍÍ9…µ”ô‰ÉÕ±”µ¹½¹½µÁ±¥…¹Ðˆù9¼ÕµÁ±”í¥¹‘¥…Ñ½È¹•Ù…±Õ…Ñ¥½¹IÕ±•Ì¹¹½¹½µÁ±¥…¹Ñôð½¤øð½ÍÁ…¸øð½ÍÁ…¸øñÍÁ…¸øñÍµ…±°ùíÅÕ…ÉÑ•É1…‰•±Ì¹DÍôíå•…Éôð½Íµ…±°øñÍÑÉ½¹œùí™½Éµ…ÑM¡•‘Õ±•…Ñ”¡•Ñ%¹‘¥…Ñ½ÉM¡•‘Õ±•…Ñ”¡¥¹‘¥…Ñ½È°å•…È°€‰DÌˆ¤¥ôð½ÍÑÉ½¹œøð½ÍÁ…¸øñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰¥½¸µ‰ÕÑÑ½¸ˆÑåÁ”ô‰‰ÕÑÑ½¸ˆÑ¥Ñ±”õí‘¥Ñ…È€‘í¥¹‘¥…Ñ½È¹¹…µ•õô½¹±¥¬õì ¤€ôøÍ•Ñ‘¥Ñ¥¹œ¡¥¹‘¥…Ñ½È¥ôøñA•¹¥°Í¥é”õìÄÙô€¼øð½‰ÕÑÑ½¸øñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰¥½¸µ‰ÕÑÑ½¸‘…¹•ÈˆÑåÁ”ô‰‰ÕÑÑ½¸ˆÑ¥Ñ±”õí±¥µ¥¹…È€‘í¥¹‘¥…Ñ½È¹¹…µ•õô½¹±¥¬õì ¤€ôøÍ•Ñ•±•Ñ¥¹œ¡¥¹‘¥…Ñ½È¥ôøñQÉ…Í ÈÍ¥é”õìÄÙô€¼øð½‰ÕÑÑ½¸øð½‘¥Øø¥ôð½Í•Ñ¥½¸ø¥ô(€€€€€€ð½‘¥Øø(€€€€€í•‘¥Ñ¥¹œ€ü€ñ%¹‘¥…Ñ½É‘¥Ñ½È‘•™¥¹¥Ñ¥½¹Ìõí‘•™¥¹¥Ñ¥½¹Íô¥¹‘¥…Ñ½Èõí•‘¥Ñ¥¹œ€ôôô€‰¹•Üˆ€ü¹Õ±°€è•‘¥Ñ¥¹ô½¹±½Í”õì ¤€ôøÍ•Ñ‘¥Ñ¥¹œ¡¹Õ±°¥ô½¹M…Ù”õíÍ…Ù•%¹‘¥…Ñ½Éôå•…Èõíå•…Éô€¼ø€è¹Õ±±ô(€€€€€í‘•±•Ñ¥¹œ€ü€ñ‘¥Ø±…ÍÍ9…µ”ô‰ÅÕ…±¥Ñäµµ½‘…°µ‰…­‘É½ÀˆÉ½±”ô‰ÁÉ•Í•¹Ñ…Ñ¥½¸ˆ½¹5½ÕÍ•½Ý¸õì ¤€ôøÍ•Ñ•±•Ñ¥¹œ¡¹Õ±°¥ôøñÍ•Ñ¥½¸±…ÍÍ9…µ”ô‰ÅÕ…±¥Ñäµµ½‘…°¥¹‘¥…Ñ½Èµ‘•±•Ñ”µµ½‘…°ˆÉ½±”ô‰‘¥…±½œˆ…É¥„µµ½‘…°ô‰ÑÉÕ”ˆ…É¥„µ±…‰•±±•‘‰äô‰‘•±•Ñ”µ¥¹‘¥…Ñ½ÈµÑ¥Ñ±”ˆ½¹5½ÕÍ•½Ý¸õì¡•Ù•¹Ð¤€ôø•Ù•¹Ð¹ÍÑ½ÁAÉ½Á……Ñ¥½¸ ¥ôøñ¡•…‘•Èøñ‘¥ØøñÍÁ…¸ùí‘•±•Ñ¥¹œ¹¥‘ôð½ÍÁ…¸øñ Ì¥ô‰‘•±•Ñ”µ¥¹‘¥…Ñ½ÈµÑ¥Ñ±”ˆù±¥µ¥¹…È¥¹‘¥…‘½Èð½ Ìøð½‘¥Øøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰¥½¸µ‰ÕÑÑ½¸ˆÑåÁ”ô‰‰ÕÑÑ½¸ˆÑ¥Ñ±”ô‰•ÉÉ…Èˆ½¹±¥¬õì ¤€ôøÍ•Ñ•±•Ñ¥¹œ¡¹Õ±°¥ôøñ`Í¥é”õìÄÝô€¼øð½‰ÕÑÑ½¸øð½¡•…‘•Èøñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ‘•±•Ñ”µ½Áäˆøñ¥É±•±•ÉÐÍ¥é”õìÈÍô€¼øñÀùM”•±¥µ¥¹…Ë„€ñÍÑÉ½¹œùí‘•±•Ñ¥¹œ¹¹…µ•ôð½ÍÑÉ½¹œøäÍÕÌÉ•ÍÕ±Ñ…‘½Ì±½…±•Ì¸ÍÑ„…§Í¸¹¼Í”ÁÕ•‘”‘•Í¡…•È¸ð½Àøð½‘¥Øøñ™½½Ñ•Èøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸‰ÕÑÑ½¸µÍ•½¹‘…ÉäˆÑåÁ”ô‰‰ÕÑÑ½¸ˆ½¹±¥¬õì ¤€ôøÍ•Ñ•±•Ñ¥¹œ¡¹Õ±°¥ôù…¹•±…Èð½‰ÕÑÑ½¸øñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸¥¹‘¥…Ñ½Èµ‘•±•Ñ”µ‰ÕÑÑ½¸ˆÑåÁ”ô‰‰ÕÑÑ½¸ˆ½¹±¥¬õí‘•±•Ñ•%¹‘¥…Ñ½ÉôøñQÉ…Í ÈÍ¥é”õìÄÙô€¼ø±¥µ¥¹…Èð½‰ÕÑÑ½¸øð½™½½Ñ•Èøð½Í•Ñ¥½¸øð½‘¥Øø€è¹Õ±±ô(€€€€ð½Í•Ñ¥½¸ø(€€¤ì)ô()™Õ¹Ñ¥½¸%¹‘¥…Ñ½É‘¥Ñ½È¡ì‘•™¥¹¥Ñ¥½¹Ì°¥¹‘¥…Ñ½È°½¹±½Í”°½¹M…Ù”°å•…Èôèì‘•™¥¹¥Ñ¥½¹Ìè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émtì¥¹‘¥…Ñ½Èè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Èð¹Õ±°ì½¹±½Í”è€ ¤€ôøÙ½¥ì½¹M…Ù”è€¡¥¹‘¥…Ñ½Èè½¹™¥ÕÉ•‘%¹‘¥…Ñ½È¤€ôøÙ½¥ìå•…Èè¹Õµ‰•Èô¤ì(€½¹ÍÐ¹•áÑ%€ô%9´‘íMÑÉ¥¹œ¡5…Ñ ¹µ…à À°€¸¸¹‘•™¥¹¥Ñ¥½¹Ì¹µ…À ¡¥Ñ•´¤€ôø9Õµ‰•È¡¥Ñ•´¹¥¹É•Á±…” ½q½œ°€ˆˆ¤¤ñð€À¤¤€¬€Ä¤¹Á…‘MÑ…ÉÐ Ì°€ˆÀˆ¥õ€ì(€½¹ÍÐ‘•™…Õ±ÑÌ€ô¥¹‘¥…Ñ½Èü¹Í¡•‘Õ±•mMÑÉ¥¹œ¡å•…È¥t€üü‰Õ¥±‘EÕ…ÉÑ•ÉM¡•‘Õ±”¡å•…È¤ì(€½¹ÍÐ‘•™…Õ±ÑIÕ±•Ì€ô¥¹‘¥…Ñ½Èü¹•Ù…±Õ…Ñ¥½¹IÕ±•Ì€üü‰Õ¥±‘•™…Õ±ÑÙ…±Õ…Ñ¥½¹IÕ±•Ì ˆøôäÀ”ˆ¤ì((€™Õ¹Ñ¥½¸ÍÕ‰µ¥Ð¡•Ù•¹Ðè½ÉµÙ•¹Ðñ!Q51½Éµ±•µ•¹Ðø¤ì(€€€•Ù•¹Ð¹ÁÉ•Ù•¹Ñ•™…Õ±Ð ¤ì(€€€½¹ÍÐ™½É´€ô¹•Ü½Éµ…Ñ„¡•Ù•¹Ð¹ÕÉÉ•¹ÑQ…É•Ð¤ì(€€€½¹ÍÐÍ¡•‘Õ±”€ôÍÑÉÕÑÕÉ•‘±½¹”¡¥¹‘¥…Ñ½Èü¹Í¡•‘Õ±”€üüì€ˆÈÀÈÔˆè‰Õ¥±‘EÕ…ÉÑ•ÉM¡•‘Õ±” ÈÀÈÔ¤°€ˆÈÀÈØˆè‰Õ¥±‘EÕ…ÉÑ•ÉM¡•‘Õ±” ÈÀÈØ¤ô¤ì(€€€Í¡•‘Õ±•mMÑÉ¥¹œ¡å•…È¥t€ô=‰©•Ð¹™É½µ¹ÑÉ¥•Ì¡ÅÕ…ÉÑ•ÉÌ¹µ…À ¡ÅÕ…ÉÑ•È¤€ôømÅÕ…ÉÑ•È°MÑÉ¥¹œ¡™½É´¹•Ð¡Í¡•‘Õ±”´‘íÅÕ…ÉÑ•Éõ€¤¥t¤¤…ÌI•½ÉñEÕ…ÉÑ•È°ÍÑÉ¥¹œøì(€€€½¹M…Ù”¡ì(€€€€€¥è¥¹‘¥…Ñ½Èü¹¥€üü¹•áÑ%°(€€€€€Í½ÕÉ•I½Üè¥¹‘¥…Ñ½Èü¹Í½ÕÉ•I½Ü€üü€À°(€€€€€ÁÉ½•ÍÍ%èMÑÉ¥¹œ¡™½É´¹•Ð ‰ÁÉ½•ÍÍ%ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€…É•„èMÑÉ¥¹œ¡™½É´¹•Ð ‰…É•„ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€‘¥É•Ñ¥½¹=‰©•Ñ¥Ù”è¥¹‘¥…Ñ½Èü¹‘¥É•Ñ¥½¹=‰©•Ñ¥Ù”€üü€ˆˆ°(€€€€€‘¥É•Ñ¥½¹5•ÑÉ¥Œè¥¹‘¥…Ñ½Èü¹‘¥É•Ñ¥½¹5•ÑÉ¥Œ€üü€ˆˆ°(€€€€€ÅÕ…±¥Ñå=‰©•Ñ¥Ù”èMÑÉ¥¹œ¡™½É´¹•Ð ‰ÅÕ…±¥Ñå=‰©•Ñ¥Ù”ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€¹…µ”èMÑÉ¥¹œ¡™½É´¹•Ð ‰¹…µ”ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€±•…‘•ÈèMÑÉ¥¹œ¡™½É´¹•Ð ‰±•…‘•Èˆ¤¤¹ÑÉ¥´ ¤°(€€€€€µ•ÑÉ¥ŒèMÑÉ¥¹œ¡™½É´¹•Ð ‰µ•ÑÉ¥Œˆ¤¤¹ÑÉ¥´ ¤°(€€€€€Á•É¥½è€‰QÉ¥µ•ÍÑÉ…°ˆ°(€€€€€‘•ÍÉ¥ÁÑ¥½¸èMÑÉ¥¹œ¡™½É´¹•Ð ‰‘•ÍÉ¥ÁÑ¥½¸ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€•Ù…±Õ…Ñ¥½¹IÕ±•Ìèì(€€€€€€€½µÁ±¥…¹ÐèMÑÉ¥¹œ¡™½É´¹•Ð ‰ÉÕ±”µ½µÁ±¥…¹Ðˆ¤¤¹ÑÉ¥´ ¤°(€€€€€€€µ…É¥¹…°èMÑÉ¥¹œ¡™½É´¹•Ð ‰ÉÕ±”µµ…É¥¹…°ˆ¤¤¹ÑÉ¥´ ¤°(€€€€€€€¹½¹½µÁ±¥…¹ÐèMÑÉ¥¹œ¡™½É´¹•Ð ‰ÉÕ±”µ¹½¹½µÁ±¥…¹Ðˆ¤¤¹ÑÉ¥´ ¤°(€€€€€ô°(€€€€€Í¡•‘Õ±”èì€¸¸¹Í¡•‘Õ±”ô°(€€€ô¤ì(€ô((€É•ÑÕÉ¸€ (€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰ÅÕ…±¥Ñäµµ½‘…°µ‰…­‘É½ÀˆÉ½±”ô‰ÁÉ•Í•¹Ñ…Ñ¥½¸ˆ½¹5½ÕÍ•½Ý¸õí½¹±½Í•ôø(€€€€€€ñÍ•Ñ¥½¸±…ÍÍ9…µ”ô‰ÅÕ…±¥Ñäµµ½‘…°¥¹‘¥…Ñ½Èµ•‘¥Ñ½Èµµ½‘…°ˆÉ½±”ô‰‘¥…±½œˆ…É¥„µµ½‘…°ô‰ÑÉÕ”ˆ…É¥„µ±…‰•±±•‘‰äô‰¥¹‘¥…Ñ½Èµ•‘¥Ñ½ÈµÑ¥Ñ±”ˆ½¹5½ÕÍ•½Ý¸õì¡•Ù•¹Ð¤€ôø•Ù•¹Ð¹ÍÑ½ÁAÉ½Á……Ñ¥½¸ ¥ôø(€€€€€€€€ñ¡•…‘•Èøñ‘¥ØøñÍÁ…¸ùí¥¹‘¥…Ñ½Èü¹¥€üü¹•áÑ%‘ôð½ÍÁ…¸øñ Ì¥ô‰¥¹‘¥…Ñ½Èµ•‘¥Ñ½ÈµÑ¥Ñ±”ˆùí¥¹‘¥…Ñ½È€ü€‰‘¥Ñ…È¥¹‘¥…‘½Èˆ€è€‰9Õ•Ù¼¥¹‘¥…‘½È‰ôð½ Ìøð½‘¥Øøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰¥½¸µ‰ÕÑÑ½¸ˆÑåÁ”ô‰‰ÕÑÑ½¸ˆÑ¥Ñ±”ô‰•ÉÉ…Èˆ½¹±¥¬õí½¹±½Í•ôøñ`Í¥é”õìÄÝô€¼øð½‰ÕÑÑ½¸øð½¡•…‘•Èø(€€€€€€€€ñ™½É´½¹MÕ‰µ¥ÐõíÍÕ‰µ¥Ñôø(€€€€€€€€€€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ•‘¥Ñ½ÈµÉ¥ˆøñ±…‰•°øñÍÁ…¸ùAÉ½•Í¼¼ƒ…É•„ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹…É•„€üü€ˆ‰ô¹…µ”ô‰…É•„ˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°øñÍÁ…¸ùÍ‘¥¼‘”ÁÉ½•Í¼ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹ÁÉ½•ÍÍ%€üü€ˆ‰ô¹…µ”ô‰ÁÉ½•ÍÍ%ˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°±…ÍÍ9…µ”ô‰ÍÁ…¸´ÈˆøñÍÁ…¸ù9½µ‰É”‘•°¥¹‘¥…‘½Èð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹¹…µ”€üü€ˆ‰ô¹…µ”ô‰¹…µ”ˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°øñÍÁ…¸ùI•ÍÁ½¹Í…‰±”ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹±•…‘•È€üü€ˆ‰ô¹…µ”ô‰±•…‘•ÈˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°øñÍÁ…¸ù7¥ÑÉ¥„ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹µ•ÑÉ¥Œ€üü€ˆ‰ô¹…µ”ô‰µ•ÑÉ¥ŒˆÁ±…•¡½±‘•Èô‰¨¸ƒŠ&”äÀ”ˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°±…ÍÍ9…µ”ô‰ÍÁ…¸´ÈˆøñÍÁ…¸ù=‰©•Ñ¥Ù¼‘”…±¥‘…ð½ÍÁ…¸øñÑ•áÑ…É•„‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹ÅÕ…±¥Ñå=‰©•Ñ¥Ù”€üü€ˆ‰ô¹…µ”ô‰ÅÕ…±¥Ñå=‰©•Ñ¥Ù”ˆÉ½ÝÌõìÉô€¼øð½±…‰•°øñ±…‰•°±…ÍÍ9…µ”ô‰ÍÁ…¸´ÈˆøñÍÁ…¸ù•ÍÉ¥Á§Í¸ð½ÍÁ…¸øñÑ•áÑ…É•„‘•™…Õ±ÑY…±Õ”õí¥¹‘¥…Ñ½Èü¹‘•ÍÉ¥ÁÑ¥½¸€üü€ˆ‰ô¹…µ”ô‰‘•ÍÉ¥ÁÑ¥½¸ˆÉ•ÅÕ¥É•É½ÝÌõìÍô€¼øð½±…‰•°øð½‘¥Øø(€€€€€€€€€€ñ™¥•±‘Í•Ð±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÉÕ±•Ìµ™¥•±‘Í•Ðˆøñ±••¹ùI•±…Ì‘”•Ù…±Õ…§Í¸ð½±••¹øñ‘¥Øøñ±…‰•°±…ÍÍ9…µ”ô‰ÉÕ±”µ½µÁ±¥…¹ÐˆøñÍÁ…¸ùÕµÁ±”ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí‘•™…Õ±ÑIÕ±•Ì¹½µÁ±¥…¹Ñô¹…µ”ô‰ÉÕ±”µ½µÁ±¥…¹ÐˆÁ±…•¡½±‘•ÈôˆøôäÀˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°±…ÍÍ9…µ”ô‰ÉÕ±”µµ…É¥¹…°ˆøñÍÁ…¸ù5…É¥¹…°ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí‘•™…Õ±ÑIÕ±•Ì¹µ…É¥¹…±ô¹…µ”ô‰ÉÕ±”µµ…É¥¹…°ˆÁ±…•¡½±‘•ÈôˆøôàÔ¸Ô°ðäÀˆÉ•ÅÕ¥É•€¼øð½±…‰•°øñ±…‰•°±…ÍÍ9…µ”ô‰ÉÕ±”µ¹½¹½µÁ±¥…¹ÐˆøñÍÁ…¸ù9¼ÕµÁ±”ð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí‘•™…Õ±ÑIÕ±•Ì¹¹½¹½µÁ±¥…¹Ñô¹…µ”ô‰ÉÕ±”µ¹½¹½µÁ±¥…¹ÐˆÁ±…•¡½±‘•ÈôˆðàÔ¸ÔˆÉ•ÅÕ¥É•€¼øð½±…‰•°øð½‘¥ØøñÀùUÍ„½Á•É…‘½É•Ì€™Ðì°€™Ðìô°€™±Ðì°€™±Ðìô¼€ô¸M•Á…É„½¹‘¥¥½¹•ÌÍ¥µÕ±Ó…¹•…Ì½¸½µ„ä…±Ñ•É¹…Ñ¥Ù…Ì½¸ÁÕ¹Ñ¼ä½µ„¸ð½Àøð½™¥•±‘Í•Ðø(€€€€€€€€€€ñ™¥•±‘Í•Ð±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÍ¡•‘Õ±”µ™¥•±‘Í•Ðˆøñ±••¹ù•¡…ÌÁÉ½É…µ…‘…Ì‘”…ÁÑÕÉ„ƒ
+Üíå•…Éôð½±••¹øñ‘¥ØùíÅÕ…ÉÑ•ÉÌ¹µ…À ¡ÅÕ…ÉÑ•È¤€ôø€ñ±…‰•°­•äõíÅÕ…ÉÑ•ÉôøñÍÁ…¸ùíÅÕ…ÉÑ•É1…‰•±ÍmÅÕ…ÉÑ•Éuôð½ÍÁ…¸øñ¥¹ÁÕÐ‘•™…Õ±ÑY…±Õ”õí‘•™…Õ±ÑÍmÅÕ…ÉÑ•Éuô¹…µ”õíÍ¡•‘Õ±”´‘íÅÕ…ÉÑ•ÉõôÉ•ÅÕ¥É•ÑåÁ”ô‰‘…Ñ”ˆ€¼øð½±…‰•°ø¥ôð½‘¥ØøñÀù1„…ÁÑÕÉ„Í½±¼•ÍÑ…Ë„¡…‰¥±¥Ñ…‘„•¸±„™•¡„¥¹‘¥…‘„Á…É„…‘„ÑÉ¥µ•ÍÑÉ”¸ð½Àøð½™¥•±‘Í•Ðø(€€€€€€€€€€ñ™½½Ñ•Èøñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸‰ÕÑÑ½¸µÍ•½¹‘…ÉäˆÑåÁ”ô‰‰ÕÑÑ½¸ˆ½¹±¥¬õí½¹±½Í•ôù…¹•±…Èð½‰ÕÑÑ½¸øñ‰ÕÑÑ½¸±…ÍÍ9…µ”ô‰‰ÕÑÑ½¸‰ÕÑÑ½¸µÁÉ¥µ…ÉäˆÑåÁ”ô‰ÍÕ‰µ¥ÐˆøñM…Ù”Í¥é”õìÄÙô€¼øÕ…É‘…È¥¹‘¥…‘½Èð½‰ÕÑÑ½¸øð½™½½Ñ•Èø(€€€€€€€€ð½™½É´ø(€€€€€€ð½Í•Ñ¥½¸ø(€€€€ð½‘¥Øø(€€¤ì)ô()™Õ¹Ñ¥½¸%¹‘¥…Ñ½ÉQ½½±‰…È¡ì…É•„°…É•…Ì°¡¥±‘É•¸°½¹É•…¡…¹”°½¹EÕ•Éå¡…¹”°½¹e•…É¡…¹”°ÅÕ•Éä°å•…Èôè=µ¥ÐñM¡…É•‘Y¥•ÝAÉ½ÁÌ°€‰¥¹‘¥…Ñ½ÉÌˆð€‰É•ÍÕ±ÑÌˆø€˜ì¡¥±‘É•¸èI•…Ñ9½‘”ô¤ì(€É•ÑÕÉ¸€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÑ½½±‰…Èˆøñ±…‰•°±…ÍÍ9…µ”ô‰Á…¹•°µÍ•…É ¥¹‘¥…Ñ½ÈµÍ•…É ˆøñM•…É Í¥é”õìÄÙô€¼øñ¥¹ÁÕÐ…É¥„µ±…‰•°ô‰	ÕÍ…È¥¹‘¥…‘½Èˆ½¹¡…¹”õì¡•Ù•¹Ð¤€ôø½¹EÕ•Éå¡…¹”¡•Ù•¹Ð¹Ñ…É•Ð¹Ù…±Õ”¥ôÁ±…•¡½±‘•Èô‰	ÕÍ…È-A$¼É•ÍÁ½¹Í…‰±”ˆÙ…±Õ”õíÅÕ•Éåô€¼øð½±…‰•°øñ±…‰•°øñÍÁ…¸ûÉ•„¼ÁÉ½•Í¼ð½ÍÁ…¸øñÍ•±•Ð…É¥„µ±…‰•°ô‹É•„¼ÁÉ½•Í¼ˆÙ…±Õ”õí…É•…ô½¹¡…¹”õì¡•Ù•¹Ð¤€ôø½¹É•…¡…¹”¡•Ù•¹Ð¹Ñ…É•Ð¹Ù…±Õ”¥ôùí…É•…Ì¹µ…À ¡¥Ñ•´¤€ôø€ñ½ÁÑ¥½¸­•äõí¥Ñ•µôùí¥Ñ•µôð½½ÁÑ¥½¸ø¥ôð½Í•±•Ðøð½±…‰•°øñ±…‰•°øñÍÁ…¸ùÅ¼ð½ÍÁ…¸øñÍ•±•Ð…É¥„µ±…‰•°ô‰Å¼ˆÙ…±Õ”õíå•…Éô½¹¡…¹”õì¡•Ù•¹Ð¤€ôø½¹e•…É¡…¹”¡9Õµ‰•È¡•Ù•¹Ð¹Ñ…É•Ð¹Ù…±Õ”¤¥ôùíå•…É=ÁÑ¥½¹Ì¹µ…À ¡¥Ñ•´¤€ôø€ñ½ÁÑ¥½¸­•äõí¥Ñ•µôùí¥Ñ•µôð½½ÁÑ¥½¸ø¥ôð½Í•±•Ðøð½±…‰•°øñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½ÈµÑ½½±‰…Èµ•áÑÉ„ˆùí¡¥±‘É•¹ôð½‘¥Øøð½‘¥Øøì)ô()™Õ¹Ñ¥½¸%¹‘¥…Ñ½É…Õ”¡ì¥¹‘¥…Ñ½È°ÉÕ±”°ÍÑ…ÑÕÌ°Ù…±Õ”ôèì¥¹‘¥…Ñ½Èè½¹™¥ÕÉ•‘%¹‘¥…Ñ½ÈìÉÕ±”èI•ÑÕÉ¹QåÁ”ñÑåÁ•½˜Á…ÉÍ•%¹‘¥…Ñ½É5•ÑÉ¥ŒøìÍÑ…ÑÕÌè%¹‘¥…Ñ½ÉMÑ…ÑÕÌìÙ…±Õ”è¹Õµ‰•ÈðÕ¹‘•™¥¹•ô¤ì(€½¹ÍÐÍ½É”€ô•Ñ%¹‘¥…Ñ½ÉM½É”¡Ù…±Õ”°ÉÕ±”°ÍÑ…ÑÕÌ¤ì(€½¹ÍÐ…¹±”€ôÍ½É”€ôôô¹Õ±°€ü¹Õ±°€è€ÄàÀ€´Í½É”€¨€Ä¸àì(€½¹ÍÐ¹••‘±•`€ô…¹±”€ôôô¹Õ±°€ü€ÄÀÀ€è€ÄÀÀ€¬€ÔØ€¨5…Ñ ¹½Ì ¡…¹±”€¨5…Ñ ¹A$¤€¼€ÄàÀ¤ì(€½¹ÍÐ¹••‘±•d€ô…¹±”€ôôô¹Õ±°€ü€ÄÀÀ€è€ÄÀÀ€´€ÔØ€¨5…Ñ ¹Í¥¸ ¡…¹±”€¨5…Ñ ¹A$¤€¼€ÄàÀ¤ì(€É•ÑÕÉ¸€ñ…ÉÑ¥±”±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Õ”µ…Éˆøñ¡•…‘•ÈøñÍÁ…¸ùí¥¹‘¥…Ñ½È¹¥‘ôƒ
+Üí¥¹‘¥…Ñ½È¹…É•…ôð½ÍÁ…¸øñÍÁ…¸±…ÍÍ9…µ”õí¥¹‘¥…Ñ½ÈµÍÑ…ÑÕÌ¥¹‘¥…Ñ½ÈµÍÑ…ÑÕÌ´‘íÍÑ…ÑÕÍõôùíÍÑ…ÑÕÍ1…‰•±ÍmÍÑ…ÑÕÍuôð½ÍÁ…¸øð½¡•…‘•Èøñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Õ”ˆ…É¥„µ±…‰•°õí€‘í¥¹‘¥…Ñ½È¹¹…µ•ôè€‘íÍÑ…ÑÕÍ1…‰•±ÍmÍÑ…ÑÕÍuõôøñÍÙœÙ¥•Ý	½àôˆÀ€À€ÈÀÀ€ÄÄàˆÉ½±”ô‰¥µœˆøñÁ…Ñ ±…ÍÍ9…µ”ô‰…Õ”µÉ•ˆô‰4ÈÀ€ÄÀÀàÀ€àÀ€À€À€Ä€ÄÈÐ¸Ü€ÈÌ¸äˆ€¼øñÁ…Ñ ±…ÍÍ9…µ”ô‰…Õ”µ½É…¹”ˆô‰4ÄÈÐ¸Ü€ÈÌ¸äàÀ€àÀ€À€À€Ä€ÄØÐ¸Ü€ÔÌˆ€¼øñÁ…Ñ ±…ÍÍ9…µ”ô‰…Õ”µÉ••¸ˆô‰4ÄØÐ¸Ü€ÔÌàÀ€àÀ€À€À€Ä€ÄàÀ€ÄÀÀˆ€¼ùí…¹±”€ôôô¹Õ±°€ü¹Õ±°€è€ñ±¥¹”±…ÍÍ9…µ”ô‰…Õ”µ¹••‘±”ˆàÄôˆÄÀÀˆäÄôˆÄÀÀˆàÈõí¹••‘±•aôäÈõí¹••‘±•eô€¼ùôñ¥É±”àôˆÄÀÀˆäôˆÄÀÀˆÈôˆØˆ€¼øð½ÍÙœøñÍÑÉ½¹œùí™½Éµ…Ñ%¹‘¥…Ñ½ÉY…±Õ”¡Ù…±Õ”°ÉÕ±”¥ôð½ÍÑÉ½¹œøð½‘¥Øøñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ…Õ”µ½Áäˆøñ Ðùí¥¹‘¥…Ñ½È¹¹…µ•ôð½ ÐøñÀù5•Ñ„è€ñÍÑÉ½¹œùí¥¹‘¥…Ñ½È¹µ•ÑÉ¥ôð½ÍÑÉ½¹œøð½ÀøñÍµ…±°ùí¥¹‘¥…Ñ½È¹±•…‘•Éôð½Íµ…±°øð½‘¥Øøð½…ÉÑ¥±”øì)ô()™Õ¹Ñ¥½¸MÑ…ÑÕÍMÕµµ…Éä¡ìÍÑ…ÑÕÌ°Ù…±Õ”ôèìÍÑ…ÑÕÌè%¹‘¥…Ñ½ÉMÑ…ÑÕÌìÙ…±Õ”è¹Õµ‰•Èô¤ìÉ•ÑÕÉ¸€ñ‘¥Ø±…ÍÍ9…µ”õí¥¹‘¥…Ñ½ÈµÍÕµµ…ÉäµÍÑ…ÑÕÌ¥¹‘¥…Ñ½ÈµÍÕµµ…Éä´‘íÍÑ…ÑÕÍõôøñÍÁ…¸ùíÙ…±Õ•ôð½ÍÁ…¸øñÍµ…±°ùíÍÑ…ÑÕÍ1…‰•±ÍmÍÑ…ÑÕÍuôð½Íµ…±°øð½‘¥Øøìô)™Õ¹Ñ¥½¸%¹‘¥…Ñ½É1••¹¡ì½µÁ…Ð€ô™…±Í”ôèì½µÁ…Ðüè‰½½±•…¸ô¤ìÉ•ÑÕÉ¸€ñ‘¥Ø±…ÍÍ9…µ”õí¥¹‘¥…Ñ½Èµ±••¹€‘í½µÁ…Ð€ü€‰½µÁ…Ðˆ€è€ˆ‰õôùì¡l‰½µÁ±¥…¹Ðˆ°€‰µ…É¥¹…°ˆ°€‰¹½¹½µÁ±¥…¹Ðˆ°€‰¹½Ñ}ÕÁ±½…‘•ˆ°€‰Á•¹‘¥¹œ‰t…Ì%¹‘¥…Ñ½ÉMÑ…ÑÕÍmt¤¹µ…À ¡ÍÑ…ÑÕÌ¤€ôø€ñÍÁ…¸­•äõíÍÑ…ÑÕÍôøñ¤±…ÍÍ9…µ”õí±••¹´‘íÍÑ…ÑÕÍõô€¼ùíÍÑ…ÑÕÍ1…‰•±ÍmÍÑ…ÑÕÍuôð½ÍÁ…¸ø¥ôð½‘¥Øøìô)™Õ¹Ñ¥½¸µÁÑå%¹‘¥…Ñ½ÉÌ ¤ìÉ•ÑÕÉ¸€ñ‘¥Ø±…ÍÍ9…µ”ô‰¥¹‘¥…Ñ½Èµ•µÁÑäˆøñ…±•¹‘…ÉI…¹”Í¥é”õìÈÑô€¼øñÍÑÉ½¹œùM¥¸¥¹‘¥…‘½É•Ì•¸•ÍÑ„Ù¥ÍÑ„ð½ÍÑÉ½¹œøñÀù…µ‰¥„•°ƒ…É•„¼±¥µÁ¥„±„‹éÍÅÕ•‘„¸ð½Àøð½‘¥Øøìô()™Õ¹Ñ¥½¸É½ÕÁ%¹‘¥…Ñ½ÉÌ¡¥¹‘¥…Ñ½ÉÌè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émt¤ì(€½¹ÍÐÉ½ÕÁÌ€ô¹•Ü5…ÀñÍÑÉ¥¹œ°½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émtø ¤ì(€¥¹‘¥…Ñ½ÉÌ¹™½É…  ¡¥¹‘¥…Ñ½È¤€ôøÉ½ÕÁÌ¹Í•Ð¡¥¹‘¥…Ñ½È¹…É•„°l¸¸¸¡É½ÕÁÌ¹•Ð¡¥¹‘¥…Ñ½È¹…É•„¤€üümt¤°¥¹‘¥…Ñ½Ét¤¤ì(€É•ÑÕÉ¸ÉÉ…ä¹™É½´¡É½ÕÁÌ°€¡m…É•„°¥Ñ•µÍt¤€ôø€¡ì…É•„°¥Ñ•µÌô¤¤ì)ô()™Õ¹Ñ¥½¸•Ñ%¹‘¥…Ñ½ÉI•½É¡É•ÍÕ±ÑÌè%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌ°¥èÍÑÉ¥¹œ°å•…Èè¹Õµ‰•È°ÅÕ…ÉÑ•ÈèEÕ…ÉÑ•È¤ìÉ•ÑÕÉ¸É•ÍÕ±ÑÍm¥‘tü¹mMÑÉ¥¹œ¡å•…È¥tü¹mÅÕ…ÉÑ•Étìô)™Õ¹Ñ¥½¸Í•Ñ%¹‘¥…Ñ½ÉI•½É¡É•ÍÕ±ÑÌè%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌ°¥èÍÑÉ¥¹œ°å•…Èè¹Õµ‰•È°ÅÕ…ÉÑ•ÈèEÕ…ÉÑ•È°É•½Éè%¹‘¥…Ñ½ÉI•ÍÕ±ÑI•½É¤è%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌìÉ•ÑÕÉ¸ì€¸¸¹É•ÍÕ±ÑÌ°m¥‘tèì€¸¸¸¡É•ÍÕ±ÑÍm¥‘t€üüíô¤°mMÑÉ¥¹œ¡å•…È¥tèì€¸¸¸¡É•ÍÕ±ÑÍm¥‘tü¹mMÑÉ¥¹œ¡å•…È¥t€üüíô¤°mÅÕ…ÉÑ•ÉtèÉ•½Éôôôìô()™Õ¹Ñ¥½¸½Õ¹ÑMÑ…ÑÕÍ•Ì¡¥¹‘¥…Ñ½ÉÌè½¹™¥ÕÉ•‘%¹‘¥…Ñ½Émt°É•ÍÕ±ÑÌè%¹‘¥…Ñ½ÉI•ÍÕ±ÑÌ°å•…Èè¹Õµ‰•È°ÅÕ…ÉÑ•ÈèEÕ…ÉÑ•È¤ì(€É•ÑÕÉ¸¥¹‘¥…Ñ½ÉÌ¹É•‘Õ”ñI•½Éñ%¹‘¥…Ñ½ÉMÑ…ÑÕÌ°¹Õµ‰•Èøø ¡½Õ¹ÑÌ°¥¹‘¥…Ñ½È¤€ôøì½¹ÍÐÍÑ…ÑÕÌ€ô•Ù…±Õ…Ñ•½¹™¥ÕÉ•‘%¹‘¥…Ñ½È¡¥¹‘¥…Ñ½È°•Ñ%¹‘¥…Ñ½ÉI•½É¡É•ÍÕ±ÑÌ°¥¹‘¥…Ñ½È¹¥°å•…È°ÅÕ…ÉÑ•È¤ü¹Ù…±Õ”°å•…È°ÅÕ…ÉÑ•È¤ì½Õ¹ÑÍmÍÑ…ÑÕÍt€¬ô€ÄìÉ•ÑÕÉ¸½Õ¹ÑÌìô°ì½µÁ±¥…¹Ðè€À°µ…É¥¹…°è€À°¹½¹½µÁ±¥…¹Ðè€À°¹½Ñ}ÕÁ±½…‘•è€À°Á•¹‘¥¹œè€Àô¤ì)ô()™Õ¹Ñ¥½¸™½Éµ…ÑM¡•‘Õ±•…Ñ”¡Ù…±Õ”èÍÑÉ¥¹œ¤ì¥˜€ …Ù…±Õ”¤É•ÑÕÉ¸€‰M¥¸ÁÉ½É…µ…ÈˆìÉ•ÑÕÉ¸¹•Ü%¹Ñ°¹…Ñ•Q¥µ•½Éµ…Ð ‰•Ìµ5`ˆ°ì‘…äè€ˆÈµ‘¥¥Ðˆ°µ½¹Ñ è€‰Í¡½ÉÐˆ°å•…Èè€‰¹Õµ•É¥Œˆ°Ñ¥µ•i½¹”è€‰UQˆô¤¹™½Éµ…Ð¡¹•Ü…Ñ”¡€‘íÙ…±Õ•õPÀÀèÀÀèÀÁi€¤¤ìô)™Õ¹Ñ¥½¸™½Éµ…ÑQ¥µ•ÍÑ…µÀ¡Ù…±Õ”èÍÑÉ¥¹œ¤ìÉ•ÑÕÉ¸¹•Ü%¹Ñ°¹…Ñ•Q¥µ•½Éµ…Ð ‰•Ìµ5`ˆ°ì‘…Ñ•MÑå±”è€‰µ•‘¥Õ´ˆ°Ñ¥µ•MÑå±”è€‰Í¡½ÉÐˆô¤¹™½Éµ…Ð¡¹•Ü…Ñ”¡Ù…±Õ”¤¤ìô)™Õ¹Ñ¥½¸ÍÙ•±°¡Ù…±Õ”èÍÑÉ¥¹œ¤ìÉ•ÑÕÉ¸€ˆ‘íÙ…±Õ”¹É•Á±…•±° œˆœ°€œˆˆœ¥ô‰€ìô(

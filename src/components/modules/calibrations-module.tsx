@@ -32,6 +32,7 @@ import type {
 
 interface CalibrationsModuleProps {
   assets: MeasurementAsset[];
+  focusId?: string;
   onAssetsChange: (assets: MeasurementAsset[]) => void;
 }
 
@@ -49,13 +50,15 @@ const dueLabels: Record<DueStatus, string> = {
 
 export function CalibrationsModule({
   assets,
+  focusId,
   onAssetsChange,
 }: CalibrationsModuleProps) {
   const today = toIsoDate(new Date());
-  const [query, setQuery] = useState("");
+  const focusedAsset = assets.find((asset) => asset.id === focusId) ?? null;
+  const [query, setQuery] = useState(focusedAsset?.code ?? "");
   const [statusFilter, setStatusFilter] = useState("all");
   const [selectedAsset, setSelectedAsset] = useState<MeasurementAsset | null>(
-    null,
+    focusedAsset,
   );
   const [isCreateOpen, setCreateOpen] = useState(false);
 

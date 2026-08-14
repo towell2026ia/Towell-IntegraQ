@@ -31,7 +31,6 @@ import {
   type ProcessCatalogItem,
 } from "@/lib/configuration-data";
 import {
-  buildInitialControlledDocuments,
   getDocumentPermissions,
   type ControlledDocument,
 } from "@/lib/document-control-data";
@@ -67,17 +66,26 @@ const dateFormatter = new Intl.DateTimeFormat("es-MX", {
 type DocumentsView = "process" | "type" | "form";
 type FormView = "dashboard" | "data";
 
-export function DocumentsModule() {
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState("P-01");
-  const [documentsView, setDocumentsView] = useState<DocumentsView>("process");
-  const [selectedTypeId, setSelectedTypeId] = useState("processes");
-  const [selectedFormId, setSelectedFormId] = useState<string | null>(null);
-  const [formView, setFormView] = useState<FormView>("dashboard");
-  const [controlledDocuments, setControlledDocuments] = useState(
-    buildInitialControlledDocuments,
-  );
+interface DocumentsModuleProps {
+  controlledDocuments: ControlledDocument[];
+  focusId?: string;
+  onControlledDocumentsChange: (documents: ControlledDocument[]) => void;
+}
 
+export function DocumentsModule({
+  controlledDocuments,
+  focusId,
+  onControlledDocumentsChange,
+}: DocumentsModuleProps) {
+  const focusedDocument = controlledDocuments.find((document) => document.id === focusId);
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(focusedDocument?.processId ?? "P-01");
+  const [documentsView, setDocumentsView] = useState<DocumentsView>(
+    focusedDocument?.appFormId ? "form" : focusedDocument ? "type" : "process",
+  );
+  const [selectedTypeId, setSelectedTypeId] = useState(focusedDocument?.documentTypeId ?? "processes");
+  const [selectedFormId, setSelectedFormId] = useState<string | null>(focusedDocument?.appFormId ?? null);
+  const [formView, setFormView] = useState<FormView>("dashboard");
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
     return processCatalog.filter(
@@ -127,8 +135,8 @@ export function DocumentsModule() {
   }
 
   function changeDocument(nextDocument: ControlledDocument) {
-    setControlledDocuments((current) =>
-      current.map((document) =>
+    onControlledDocumentsChange(
+      controlledDocuments.map((document) =>
         document.id === nextDocument.id ? nextDocument : document,
       ),
     );
@@ -213,7 +221,7 @@ export function DocumentsModule() {
               onOpenForm={openForm}
               onChangeDocument={changeDocument}
               onAddDocument={(document) =>
-                setControlledDocuments((current) => [...current, document])
+                onControlledDocumentsChange([...controlledDocuments, document])
               }
             />
           ) : null}

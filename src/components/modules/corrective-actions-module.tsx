@@ -45,6 +45,7 @@ import type {
 
 interface CorrectiveActionsModuleProps {
   actions: CorrectiveAction[];
+  focusId?: string;
   onActionsChange: (actions: CorrectiveAction[]) => void;
 }
 
@@ -63,14 +64,24 @@ const statusOrder: CorrectiveActionStatus[] = [
 
 export function CorrectiveActionsModule({
   actions,
+  focusId,
   onActionsChange,
 }: CorrectiveActionsModuleProps) {
   const today = toIsoDate(new Date());
-  const [selectedId, setSelectedId] = useState(actions[0]?.id ?? "");
+  const focusedAction = actions.find((action) => action.id === focusId && action.source !== "supplier");
+  const [selectedId, setSelectedId] = useState(focusedAction?.id ?? actions[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [workspaceView, setWorkspaceView] = useState<CorrectiveWorkspaceView>("lists");
-  const [listScope, setListScope] = useState<CorrectiveListScope>("open");
+  const [listScope, setListScope] = useState<CorrectiveListScope>(
+    focusedAction?.source === "customer"
+      ? "customer"
+      : focusedAction?.source === "audit"
+        ? "system"
+        : focusedAction
+          ? "internal"
+          : "open",
+  );
   const [registryView, setRegistryView] = useState<CorrectiveRegistryView>("index");
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
