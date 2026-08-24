@@ -5484,6 +5484,8 @@ button:disabled {
 }
 
 .login-help-link {
+  display: inline-flex;
+  align-items: center;
   padding: 4px 0;
   color: #1768ad;
   background: transparent;
@@ -5495,6 +5497,71 @@ button:disabled {
 .login-help-link:hover {
   color: #12558d;
   text-decoration: underline;
+}
+
+.login-success,
+.login-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin-top: 30px;
+  padding: 14px;
+  color: #176353;
+  background: #edf8f4;
+  border: 1px solid #bcded3;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.login-success svg,
+.login-status svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.login-success strong {
+  display: block;
+  margin-bottom: 3px;
+  color: #144f43;
+  font-size: 12px;
+}
+
+.login-success p {
+  margin: 0;
+}
+
+.login-status {
+  align-items: center;
+  color: #355e7e;
+  background: #eef5fa;
+  border-color: #c9ddea;
+}
+
+.login-link-error {
+  display: flex;
+  margin-top: 30px;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.login-link-error a {
+  color: #1768ad;
+  font-weight: 800;
+}
+
+.login-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 24px;
+  color: #56615b;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.login-back-link:hover {
+  color: #1768ad;
 }
 
 .login-error {

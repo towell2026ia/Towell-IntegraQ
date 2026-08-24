@@ -8,6 +8,7 @@ import {
   Mail,
 } from "lucide-react";
 import Image from "next/image";
+import Link from "next/link";
 import { FormEvent, useState } from "react";
 
 interface LoginScreenProps {
@@ -116,6 +117,13 @@ export function LoginScreen({ error, onSignIn }: LoginScreenProps) {
                 </button>
               </span>
             </label>
+
+            <div className="login-form-options">
+              <span />
+              <Link className="login-help-link" href="/recover-password">
+                Olvidé mi contraseña
+              </Link>
+            </div>
 
             {error ? <p className="login-error" role="alert">{error}</p> : null}
 
