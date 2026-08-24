@@ -4,6 +4,7 @@ import {
   Building2,
   CheckCircle2,
   ChevronRight,
+  Eye,
   KeyRound,
   LockKeyhole,
   Mail,
@@ -12,12 +13,13 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  SlidersHorizontal,
   TrendingUp,
   UserPlus,
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import {
   accessRuleCatalog,
@@ -31,54 +33,71 @@ import {
 } from "@/lib/organization-data";
 import { workspaceModuleMeta } from "@/lib/navigation";
 import {
+  editableModulePermissionGroups,
+  hasModuleAction,
+  normalizeModulePermissions,
+} from "@/lib/module-permissions";
+import {
   customerQualityCatalog,
   supplierQualityCatalog,
 } from "@/lib/quality-parties-data";
-import type { ContinuousImprovementRole, UserType } from "@/lib/session-data";
+import type {
+  ContinuousImprovementRole,
+  DocumentAccessRole,
+  ModuleActionPermission,
+  ProcessDocumentAccess,
+  UserType,
+} from "@/lib/session-data";
 import {
   createUserAccessAccount,
   derivePositionAccess,
   documentAccessRoleLabels,
   getAccountScopeLabel,
-  initialUserAccessAccounts,
   refreshAccountFromOrganization,
   type UserAccessAccount,
 } from "@/lib/user-access-data";
 
 type AccessTab = "types" | "permissions" | "rules" | "users";
 
-const userStorageKey = "integraq.userAccessAccounts.v1";
-
 export function AccessModule() {
   const [activeTab, setActiveTab] = useState<AccessTab>("types");
   const [query, setQuery] = useState("");
-  const [accounts, setAccounts] = useState<UserAccessAccount[]>(initialUserAccessAccounts);
-  const [selectedUserId, setSelectedUserId] = useState(initialUserAccessAccounts[0]?.id ?? "");
+  const [accounts, setAccounts] = useState<UserAccessAccount[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState("");
   const [editingAccount, setEditingAccount] = useState<UserAccessAccount | null | undefined>(undefined);
-  const [storageReady, setStorageReady] = useState(false);
+  const [loadingAccounts, setLoadingAccounts] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    const task = window.setTimeout(() => {
-      try {
-        const saved = window.localStorage.getItem(userStorageKey);
-        if (saved) {
-          const parsed = JSON.parse(saved) as UserAccessAccount[];
-          setAccounts(parsed);
-          setSelectedUserId(parsed[0]?.id ?? "");
-        }
-      } catch {
-        // The local configuration remains usable with seed data.
-      } finally {
-        setStorageReady(true);
-      }
-    }, 0);
-    return () => window.clearTimeout(task);
+    void loadAccounts();
   }, []);
 
-  useEffect(() => {
-    if (!storageReady) return;
-    window.localStorage.setItem(userStorageKey, JSON.stringify(accounts));
-  }, [accounts, storageReady]);
+  async function loadAccounts(preferredUserId?: string) {
+    setLoadingAccounts(true);
+    setLoadError("");
+    try {
+      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const payload = (await response.json()) as {
+        accounts?: UserAccessAccount[];
+        error?: string;
+      };
+      if (!response.ok || !payload.accounts) {
+        throw new Error(payload.error ?? "No fue posible cargar los usuarios.");
+      }
+      setAccounts(payload.accounts);
+      setSelectedUserId((current) =>
+        preferredUserId && payload.accounts?.some((item) => item.id === preferredUserId)
+          ? preferredUserId
+          : payload.accounts?.some((item) => item.id === current)
+            ? current
+            : payload.accounts?.[0]?.id ?? "",
+      );
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "No fue posible cargar los usuarios.");
+    } finally {
+      setLoadingAccounts(false);
+    }
+  }
 
   const normalized = query.trim().toLocaleLowerCase("es");
   const visibleTypes = userTypeCatalog.filter((item) =>
@@ -103,14 +122,17 @@ export function AccessModule() {
   );
   const activeAccounts = accounts.filter((account) => account.status === "active").length;
 
-  function saveAccount(account: UserAccessAccount) {
-    setAccounts((current) => {
-      const exists = current.some((item) => item.id === account.id);
-      return exists
-        ? current.map((item) => item.id === account.id ? account : item)
-        : [account, ...current];
+  async function saveAccount(account: UserAccessAccount) {
+    const response = await fetch("/api/admin/users", {
+      method: account.authUserId ? "PATCH" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(account),
     });
-    setSelectedUserId(account.id);
+    const payload = (await response.json()) as { error?: string };
+    if (!response.ok) {
+      throw new Error(payload.error ?? "No fue posible guardar el usuario.");
+    }
+    await loadAccounts(account.id);
     setActiveTab("users");
     setEditingAccount(undefined);
   }
@@ -153,14 +175,16 @@ export function AccessModule() {
         {activeTab === "permissions" ? <PermissionMatrix items={visiblePermissionAreas} /> : null}
         {activeTab === "rules" ? <AccessRules items={visibleRules} /> : null}
         {activeTab === "users" ? (
-          <UserAccountsWorkspace
-            accounts={visibleAccounts}
-            allAccounts={accounts}
-            selectedUserId={selectedUserId}
-            onSelect={setSelectedUserId}
-            onEdit={(account) => setEditingAccount(account)}
-            onChange={(account) => setAccounts((current) => current.map((item) => item.id === account.id ? account : item))}
-          />
+          loadingAccounts ? <div className="access-empty"><RefreshCw className="spin" size={24} /><p>Cargando usuarios y permisos...</p></div>
+            : loadError ? <div className="access-empty"><LockKeyhole size={24} /><h3>No fue posible consultar Supabase</h3><p>{loadError}</p><button className="button button-secondary" type="button" onClick={() => void loadAccounts()}><RefreshCw size={15} /> Reintentar</button></div>
+              : <UserAccountsWorkspace
+                  accounts={visibleAccounts}
+                  allAccounts={accounts}
+                  selectedUserId={selectedUserId}
+                  onSelect={setSelectedUserId}
+                  onEdit={(account) => setEditingAccount(account)}
+                  onChange={saveAccount}
+                />
         ) : null}
       </section>
 
@@ -188,7 +212,7 @@ function UserAccountsWorkspace({
   selectedUserId: string;
   onSelect: (id: string) => void;
   onEdit: (account: UserAccessAccount) => void;
-  onChange: (account: UserAccessAccount) => void;
+  onChange: (account: UserAccessAccount) => Promise<void>;
 }) {
   const selected = allAccounts.find((account) => account.id === selectedUserId) ?? accounts[0] ?? null;
   return (
@@ -214,7 +238,7 @@ function UserAccountsWorkspace({
   );
 }
 
-function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAccount; onEdit: () => void; onChange: (account: UserAccessAccount) => void }) {
+function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAccount; onEdit: () => void; onChange: (account: UserAccessAccount) => Promise<void> }) {
   const position = organizationPositions.find((item) => item.id === account.positionId);
   const parent = position ? getPositionParent(position) : undefined;
   return (
@@ -225,7 +249,7 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
         <p><Mail size={13} /> {account.email || "Correo pendiente"}</p>
         <div className="user-detail-actions">
           <button className="icon-button" type="button" title="Editar usuario" aria-label="Editar usuario" onClick={onEdit}><Pencil size={16} /></button>
-          <button className="icon-button" type="button" title={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} aria-label={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} onClick={() => onChange({ ...account, status: account.status === "active" ? "inactive" : "active" })}><Power size={16} /></button>
+          <button className="icon-button" type="button" title={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} aria-label={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} onClick={() => void onChange({ ...account, status: account.status === "active" ? "inactive" : "active" })}><Power size={16} /></button>
         </div>
       </header>
       <div className="user-access-facts">
@@ -236,8 +260,8 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
       </div>
 
       {account.userType === "Usuario interno" ? (
-        <button className="organization-refresh" type="button" onClick={() => onChange(refreshAccountFromOrganization(account))}>
-          <RefreshCw size={15} /><span><strong>Actualizar desde organigrama</strong><small>Recalcula procesos, menús y permisos del puesto {account.positionId}.</small></span>
+        <button className="organization-refresh" type="button" onClick={() => void onChange(refreshAccountFromOrganization(account))}>
+          <RefreshCw size={15} /><span><strong>Restablecer desde organigrama</strong><small>Vuelve a aplicar la propuesta de procesos y permisos del puesto {account.positionId}.</small></span>
         </button>
       ) : null}
 
@@ -252,6 +276,21 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
         </div>
         {!account.documentAccess.length && account.userType !== "Administrador" ? <div className="user-access-empty"><LockKeyhole size={16} /> Sin acceso a documentación interna.</div> : null}
       </section>
+
+      {(account.userType === "Administrador" || account.userType === "Usuario interno") ? (
+        <section className="user-access-section">
+          <div className="section-title-row"><h4>Acciones por módulo</h4><span className="count-badge">{account.userType === "Administrador" ? "Todas" : account.moduleActionPermissions.length}</span></div>
+          {account.userType === "Administrador" ? <div className="user-full-access"><SlidersHorizontal size={17} /> Puede consultar, crear, modificar, autorizar y administrar todos los módulos.</div> : (
+            <div className="user-capability-summary">
+              {editableModulePermissionGroups.map((group) => {
+                const enabled = group.capabilities.filter((capability) => hasModuleAction(account.moduleActionPermissions, group.moduleId, capability.action));
+                if (!enabled.length) return null;
+                return <div key={group.moduleId}><strong>{group.label}</strong><span>{enabled.map((capability) => capability.label).join(" · ")}</span></div>;
+              })}
+            </div>
+          )}
+        </section>
+      ) : null}
 
       <section className="user-access-section">
         <div className="section-title-row"><h4>Menús visibles</h4><span className="count-badge">{account.assignedModuleIds.length}</span></div>
@@ -268,19 +307,82 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
   );
 }
 
-function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAccount | null; onClose: () => void; onSave: (account: UserAccessAccount) => void }) {
+function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAccount | null; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
   const [fullName, setFullName] = useState(account?.fullName ?? "");
   const [email, setEmail] = useState(account?.email ?? "");
   const [userType, setUserType] = useState<UserType>(account?.userType ?? "Usuario interno");
   const [positionId, setPositionId] = useState(account?.positionId ?? "");
   const [companyId, setCompanyId] = useState(account?.companyId ?? "");
-  const [continuousImprovementRole, setContinuousImprovementRole] = useState<ContinuousImprovementRole>(account?.continuousImprovementRole ?? "submitter");
+  const [documentAccess, setDocumentAccess] = useState<ProcessDocumentAccess[]>(account?.documentAccess ?? []);
+  const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(account?.moduleActionPermissions ?? []);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const internal = userType === "Administrador" || userType === "Usuario interno";
   const companyCatalog = userType === "Cliente" ? customerQualityCatalog : supplierQualityCatalog;
-  const inherited = useMemo(() => positionId ? derivePositionAccess(positionId) : null, [positionId]);
+  const continuousImprovementRole: ContinuousImprovementRole = hasModuleAction(
+    moduleActionPermissions,
+    "continuous-improvement",
+    "manage",
+  ) ? "manager" : "submitter";
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  function selectPosition(nextPositionId: string) {
+    setPositionId(nextPositionId);
+    const suggested = derivePositionAccess(nextPositionId);
+    setDocumentAccess(suggested?.documentAccess ?? []);
+    setModuleActionPermissions(suggested?.moduleActionPermissions ?? []);
+  }
+
+  function changeUserType(nextType: UserType) {
+    setUserType(nextType);
+    setPositionId("");
+    setCompanyId("");
+    setDocumentAccess([]);
+    setModuleActionPermissions([]);
+  }
+
+  function toggleProcess(processId: string) {
+    setDocumentAccess((current) => {
+      const exists = current.some((permission) => permission.processId === processId);
+      return exists
+        ? current.filter((permission) => permission.processId !== processId)
+        : [...current, {
+            processId,
+            role: "viewer",
+            inheritedFromPositionId: "ASIGNACION-DIRECTA",
+          }];
+    });
+  }
+
+  function setProcessRole(processId: string, role: DocumentAccessRole) {
+    setDocumentAccess((current) => current.map((permission) =>
+      permission.processId === processId
+        ? { ...permission, role, inheritedFromPositionId: "ASIGNACION-DIRECTA" }
+        : permission,
+    ));
+  }
+
+  function toggleModuleAction(permission: ModuleActionPermission) {
+    setModuleActionPermissions((current) => {
+      const enabled = hasModuleAction(
+        current,
+        permission.moduleId,
+        permission.action,
+      );
+      if (enabled) {
+        return permission.action === "view"
+          ? current.filter((item) => item.moduleId !== permission.moduleId)
+          : current.filter((item) =>
+              item.moduleId !== permission.moduleId ||
+              item.action !== permission.action,
+            );
+      }
+      return normalizeModulePermissions([...current, permission]);
+    });
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setSaveError("");
     const company = companyCatalog.find((item) => item.id === companyId);
     const built = createUserAccessAccount({
       id: account?.id ?? `USR-${Date.now()}`,
@@ -291,9 +393,26 @@ function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAcc
       companyId: internal ? undefined : company?.id,
       companyName: internal ? undefined : company?.name,
       continuousImprovementRole: userType === "Usuario interno" ? continuousImprovementRole : undefined,
+      documentAccess: userType === "Usuario interno" ? documentAccess : undefined,
+      moduleActionPermissions: userType === "Usuario interno" ? moduleActionPermissions : undefined,
       createdAt: account?.createdAt ?? new Date().toISOString(),
     });
-    if (built) onSave(account ? { ...built, status: account.status } : built);
+    if (!built) {
+      setSaveError("Completa el puesto o la empresa vinculada.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await onSave(account ? {
+        ...built,
+        id: account.id,
+        authUserId: account.authUserId,
+        status: account.status,
+      } : built);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : "No fue posible guardar el usuario.");
+      setSaving(false);
+    }
   }
 
   return (
@@ -304,17 +423,52 @@ function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAcc
           <div className="user-account-form-grid">
             <label className="wide">Nombre completo<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
             <label className="wide">Correo de acceso<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-            <label>Tipo de usuario<select value={userType} onChange={(event) => { setUserType(event.target.value as UserType); setPositionId(""); setCompanyId(""); }}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
-            {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => setPositionId(event.target.value)}><option value="">Seleccionar puesto</option>{organizationPositions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
-            {userType === "Usuario interno" ? <label>Rol en Mejora continua<select value={continuousImprovementRole} onChange={(event) => setContinuousImprovementRole(event.target.value as ContinuousImprovementRole)}><option value="submitter">Solicitante</option><option value="manager">Encargado de Mejora continua</option></select></label> : null}
+            <label>Tipo de usuario<select value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
+            {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{organizationPositions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
             {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label> : null}
           </div>
 
-          <div className="user-inheritance-preview">
-            <div><ShieldCheck size={18} /><span><strong>Acceso calculado</strong><small>{userType === "Administrador" ? "Todos los procesos, menús y permisos." : internal && inherited ? `${inherited.assignedProcessIds.length} procesos · ${inherited.assignedModuleIds.length} menús derivados de ${inherited.position.id}.` : !internal && companyId ? "Un solo portal, aislado por ID de empresa." : "Selecciona el puesto o empresa para calcular el acceso."}</small></span></div>
-            {internal && inherited ? <div className="user-inheritance-roles">{inherited.documentAccess.slice(0, 8).map((access) => <span key={access.processId}>{access.processId} · {documentAccessRoleLabels[access.role]}</span>)}</div> : null}
-          </div>
-          <footer><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit"><UserPlus size={16} /> {account ? "Guardar cambios" : "Crear usuario"}</button></footer>
+          {userType === "Administrador" ? <div className="user-inheritance-preview"><div><ShieldCheck size={18} /><span><strong>Acceso total</strong><small>Todos los procesos, menús, acciones y configuraciones.</small></span></div></div> : null}
+
+          {userType === "Usuario interno" ? (
+            <div className="user-permission-editor">
+              <section className="process-permission-editor">
+                <header><div><span>Alcance operativo</span><h4>Procesos asignados</h4></div><strong>{documentAccess.length}</strong></header>
+                <div className="process-permission-list">
+                  {processCatalog.map((process) => {
+                    const access = documentAccess.find((permission) => permission.processId === process.id);
+                    const modifier = access?.role === "modifier" || access?.role === "authorizer";
+                    return <div className={`${access ? "assigned" : ""} ${process.level === "subprocess" ? "subprocess" : ""}`} key={process.id}>
+                      <label className="process-assignment-toggle"><input type="checkbox" checked={Boolean(access)} onChange={() => toggleProcess(process.id)} /><span><strong>{process.id} · {process.name}</strong><small>{process.level === "subprocess" ? "Subproceso" : "Proceso"}</small></span></label>
+                      {access ? <div className="process-role-controls">
+                        <div className="mini-segmented" aria-label={`Nivel para ${process.name}`}>
+                          <button className={!modifier ? "active" : ""} type="button" onClick={() => setProcessRole(process.id, "viewer")}><Eye size={13} /> Visor</button>
+                          <button className={modifier ? "active" : ""} type="button" onClick={() => setProcessRole(process.id, "modifier")}><Pencil size={13} /> Modificador</button>
+                        </div>
+                        <label className={`authorizer-toggle ${modifier ? "" : "disabled"}`}><input type="checkbox" disabled={!modifier} checked={access.role === "authorizer"} onChange={(event) => setProcessRole(process.id, event.target.checked ? "authorizer" : "modifier")} /> Autoriza documentos</label>
+                      </div> : null}
+                    </div>;
+                  })}
+                </div>
+              </section>
+
+              <section className="module-permission-editor">
+                <header><div><span>Capacidades</span><h4>Acciones por módulo</h4></div><strong>{moduleActionPermissions.length}</strong></header>
+                <div className="module-permission-groups">
+                  {editableModulePermissionGroups.map((group) => <fieldset key={group.moduleId}>
+                    <legend>{group.label}</legend>
+                    {group.capabilities.map((capability) => {
+                      const checked = hasModuleAction(moduleActionPermissions, group.moduleId, capability.action);
+                      return <label className={checked ? "enabled" : ""} key={capability.action}><input type="checkbox" checked={checked} onChange={() => toggleModuleAction({ moduleId: group.moduleId, action: capability.action })} /><span><strong>{capability.label}</strong><small>{capability.description}</small></span></label>;
+                    })}
+                  </fieldset>)}
+                </div>
+              </section>
+            </div>
+          ) : null}
+
+          {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
+          <footer><button className="button button-secondary" disabled={saving} type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? <RefreshCw className="spin" size={16} /> : <UserPlus size={16} />} {saving ? "Guardando..." : account ? "Guardar cambios" : "Crear usuario"}</button></footer>
         </form>
       </section>
     </div>

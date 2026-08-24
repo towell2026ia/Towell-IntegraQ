@@ -16,6 +16,22 @@ export interface ExternalPartyScope {
 
 export type DocumentAccessRole = "viewer" | "modifier" | "authorizer";
 export type ContinuousImprovementRole = "submitter" | "manager";
+export type ModulePermissionAction =
+  | "view"
+  | "create"
+  | "update"
+  | "submit"
+  | "review"
+  | "approve"
+  | "close"
+  | "reopen"
+  | "export"
+  | "manage";
+
+export interface ModuleActionPermission {
+  moduleId: WorkspaceModuleId;
+  action: ModulePermissionAction;
+}
 
 export interface ProcessDocumentAccess {
   processId: string;
@@ -25,6 +41,7 @@ export interface ProcessDocumentAccess {
 
 export interface ActiveSession {
   userId: string;
+  authUserId?: string;
   name: string;
   shortName: string;
   initials: string;
@@ -35,6 +52,7 @@ export interface ActiveSession {
   userType: UserType;
   assignedProcessIds: string[];
   assignedModuleIds?: WorkspaceModuleId[];
+  moduleActionPermissions?: ModuleActionPermission[];
   positionId?: string;
   documentAccess?: ProcessDocumentAccess[];
   continuousImprovementRole?: ContinuousImprovementRole;
@@ -53,6 +71,20 @@ export function canAccessProcess(session: ActiveSession, processId: string) {
   );
 }
 
+export function getProcessDocumentRole(
+  session: ActiveSession,
+  processId: string,
+) {
+  if (isAdministrator(session)) return "authorizer" as const;
+  return session.documentAccess?.find((access) => access.processId === processId)
+    ?.role;
+}
+
+export function canModifyProcess(session: ActiveSession, processId: string) {
+  const role = getProcessDocumentRole(session, processId);
+  return role === "modifier" || role === "authorizer";
+}
+
 export function isExternalUser(session: ActiveSession) {
   return session.userType === "Cliente" || session.userType === "Proveedor";
 }
@@ -69,6 +101,7 @@ export const activeSession: ActiveSession = {
   userType: "Administrador",
   assignedProcessIds: ["P-08"],
   assignedModuleIds: [],
+  moduleActionPermissions: [],
   continuousImprovementRole: "manager",
   positionId: "PU-07",
 };

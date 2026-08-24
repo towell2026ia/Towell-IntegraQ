@@ -1,9 +1,11 @@
 import type { ConfiguredIndicator } from "@/lib/indicator-data";
 import {
   canAccessProcess,
+  canModifyProcess,
   isAdministrator,
   type ActiveSession,
 } from "@/lib/session-data";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 
 export const ALL_INDICATOR_AREAS = "__all__";
 
@@ -22,7 +24,11 @@ export function canUpdateIndicatorResult(
   session: ActiveSession,
   indicator: Pick<ConfiguredIndicator, "processId">,
 ) {
-  return canViewIndicator(session, indicator);
+  return (
+    canViewIndicator(session, indicator) &&
+    canModifyProcess(session, indicator.processId) &&
+    canPerformModuleAction(session, "indicators", "update")
+  );
 }
 
 export function getAccessibleIndicators(

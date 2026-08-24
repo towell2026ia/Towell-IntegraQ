@@ -178,8 +178,11 @@ function PasswordUpdate() {
     const recoveryError = hash.get("error_description");
 
     if (recoveryError) {
-      setError("El enlace expiró o ya fue utilizado. Solicita uno nuevo.");
-      setChecking(false);
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setError("El enlace expiró o ya fue utilizado. Solicita uno nuevo.");
+        setChecking(false);
+      });
     }
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {

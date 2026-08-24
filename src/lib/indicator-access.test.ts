@@ -32,6 +32,13 @@ const user: ActiveSession = {
   initials: "US",
   userType: "Usuario interno",
   assignedProcessIds: ["P-08"],
+  assignedModuleIds: ["indicators"],
+  documentAccess: [{
+    processId: "P-08",
+    role: "modifier",
+    inheritedFromPositionId: "PU-07",
+  }],
+  moduleActionPermissions: [{ moduleId: "indicators", action: "update" }],
 };
 
 describe("indicator access policy", () => {
@@ -45,6 +52,20 @@ describe("indicator access policy", () => {
     expect(canUpdateIndicatorResult(user, qualityIndicator)).toBe(true);
     expect(canViewIndicator(user, { processId: "P-13" })).toBe(false);
     expect(canUpdateIndicatorResult(user, { processId: "P-13" })).toBe(false);
+  });
+
+  it("keeps a process viewer from capturing indicator results", () => {
+    const viewer: ActiveSession = {
+      ...user,
+      documentAccess: [{
+        processId: "P-08",
+        role: "viewer",
+        inheritedFromPositionId: "PU-16",
+      }],
+      moduleActionPermissions: [],
+    };
+    expect(canViewIndicator(viewer, qualityIndicator)).toBe(true);
+    expect(canUpdateIndicatorResult(viewer, qualityIndicator)).toBe(false);
   });
 
   it("gives administrators the complete indicator scope by default", () => {

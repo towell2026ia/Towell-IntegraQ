@@ -8,10 +8,12 @@ import {
   workspaceModuleMeta,
   type WorkspaceModuleId,
 } from "@/lib/navigation";
+import { normalizeModulePermissions } from "@/lib/module-permissions";
 import type {
   ActiveSession,
   ContinuousImprovementRole,
   DocumentAccessRole,
+  ModuleActionPermission,
   ProcessDocumentAccess,
   UserType,
 } from "@/lib/session-data";
@@ -20,6 +22,7 @@ export type UserAccountStatus = "active" | "inactive";
 
 export interface UserAccessAccount {
   id: string;
+  authUserId?: string;
   fullName: string;
   email: string;
   userType: UserType;
@@ -31,6 +34,7 @@ export interface UserAccessAccount {
   status: UserAccountStatus;
   assignedProcessIds: string[];
   assignedModuleIds: WorkspaceModuleId[];
+  moduleActionPermissions: ModuleActionPermission[];
   documentAccess: ProcessDocumentAccess[];
   continuousImprovementRole?: ContinuousImprovementRole;
   createdAt: string;
@@ -45,13 +49,15 @@ export interface CreateUserAccessInput {
   companyId?: string;
   companyName?: string;
   continuousImprovementRole?: ContinuousImprovementRole;
+  documentAccess?: ProcessDocumentAccess[];
+  moduleActionPermissions?: ModuleActionPermission[];
   createdAt: string;
 }
 
 export const documentAccessRoleLabels: Record<DocumentAccessRole, string> = {
   viewer: "Visor",
   modifier: "Modificador",
-  authorizer: "Autorizador",
+  authorizer: "Modificador + autorizador",
 };
 
 export const relationshipDocumentRole: Record<
@@ -94,8 +100,18 @@ export function derivePositionAccess(positionId: string) {
   }));
   const assignedProcessIds = [...new Set(documentAccess.map((item) => item.processId))];
   const assignedModuleIds = derivePositionModules(position, documentAccess);
+  const moduleActionPermissions = derivePositionModuleActions(
+    assignedModuleIds,
+    documentAccess,
+  );
 
-  return { position, documentAccess, assignedProcessIds, assignedModuleIds };
+  return {
+    position,
+    documentAccess,
+    assignedProcessIds,
+    assignedModuleIds,
+    moduleActionPermissions,
+  };
 }
 
 export function createUserAccessAccount(
@@ -122,6 +138,7 @@ export function createUserAccessAccount(
       branch: position.branch,
       assignedProcessIds: processCatalog.map((process) => process.id),
       assignedModuleIds: Object.keys(workspaceModuleMeta) as WorkspaceModuleId[],
+      moduleActionPermissions: [],
       documentAccess: [],
       continuousImprovementRole: "manager",
     };
@@ -132,14 +149,36 @@ export function createUserAccessAccount(
       ? derivePositionAccess(input.positionId)
       : null;
     if (!inherited) return null;
+    const documentAccess = input.documentAccess ?? inherited.documentAccess;
+    const moduleActionPermissions = normalizeModulePermissions(
+      input.moduleActionPermissions ?? inherited.moduleActionPermissions,
+    );
+    if ((input.continuousImprovementRole ?? "submitter") === "manager") {
+      moduleActionPermissions.push(
+        { moduleId: "continuous-improvement", action: "update" },
+        { moduleId: "continuous-improvement", action: "manage" },
+      );
+    }
+    const normalizedModulePermissions = normalizeModulePermissions(
+      moduleActionPermissions,
+    );
+    const assignedModuleIds = internalAssignableModuleIds.filter(
+      (moduleId) =>
+        moduleId === "home" ||
+        normalizedModulePermissions.some(
+          (permission) =>
+            permission.moduleId === moduleId && permission.action === "view",
+        ),
+    );
     return {
       ...shared,
       positionId: inherited.position.id,
       positionName: inherited.position.name,
       branch: inherited.position.branch,
-      assignedProcessIds: inherited.assignedProcessIds,
-      assignedModuleIds: inherited.assignedModuleIds,
-      documentAccess: inherited.documentAccess,
+      assignedProcessIds: [...new Set(documentAccess.map((item) => item.processId))],
+      assignedModuleIds,
+      moduleActionPermissions: normalizedModulePermissions,
+      documentAccess,
       continuousImprovementRole: input.continuousImprovementRole ?? "submitter",
     };
   }
@@ -153,6 +192,7 @@ export function createUserAccessAccount(
     companyName: input.companyName.trim(),
     assignedProcessIds: [],
     assignedModuleIds: [portalId],
+    moduleActionPermissions: [{ moduleId: portalId, action: "view" }],
     documentAccess: [],
   };
 }
@@ -171,6 +211,7 @@ export function refreshAccountFromOrganization(
     branch: inherited.position.branch,
     assignedProcessIds: inherited.assignedProcessIds,
     assignedModuleIds: inherited.assignedModuleIds,
+    moduleActionPermissions: inherited.moduleActionPermissions,
     documentAccess: inherited.documentAccess,
   };
 }
@@ -199,6 +240,7 @@ export function buildSessionFromAccount(
     userType: account.userType,
     assignedProcessIds: account.assignedProcessIds,
     assignedModuleIds: account.assignedModuleIds,
+    moduleActionPermissions: account.moduleActionPermissions,
     documentAccess: account.documentAccess,
     continuousImprovementRole: account.continuousImprovementRole,
     externalParty:
@@ -242,6 +284,7 @@ export const initialUserAccessAccounts: UserAccessAccount[] = [
     status: "active",
     assignedProcessIds: processCatalog.map((process) => process.id),
     assignedModuleIds: Object.keys(workspaceModuleMeta) as WorkspaceModuleId[],
+    moduleActionPermissions: [],
     documentAccess: [],
     continuousImprovementRole: "manager",
     createdAt: "2026-08-17T12:00:00.000Z",
@@ -280,4 +323,36 @@ function derivePositionModules(
     modules.add("management-review");
   }
   return internalAssignableModuleIds.filter((module) => modules.has(module));
+}
+
+function derivePositionModuleActions(
+  assignedModuleIds: WorkspaceModuleId[],
+  documentAccess: ProcessDocumentAccess[],
+) {
+  const permissions: ModuleActionPermission[] = assignedModuleIds.map(
+    (moduleId) => ({ moduleId, action: "view" }),
+  );
+  const canModify = documentAccess.some((access) => access.role !== "viewer");
+  const canAuthorize = documentAccess.some(
+    (access) => access.role === "authorizer",
+  );
+
+  permissions.push({ moduleId: "continuous-improvement", action: "create" });
+  if (canModify) {
+    permissions.push(
+      { moduleId: "documents", action: "update" },
+      { moduleId: "indicators", action: "update" },
+      { moduleId: "risks", action: "update" },
+      { moduleId: "forms", action: "create" },
+      { moduleId: "forms", action: "update" },
+      { moduleId: "corrective-actions", action: "update" },
+    );
+  }
+  if (canAuthorize) {
+    permissions.push(
+      { moduleId: "documents", action: "approve" },
+      { moduleId: "audits", action: "update" },
+    );
+  }
+  return normalizeModulePermissions(permissions);
 }

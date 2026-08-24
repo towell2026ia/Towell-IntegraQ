@@ -28,12 +28,15 @@ import {
   getVerificationReadiness,
   metrologyAgent,
 } from "@/lib/metrology-data";
+import { canPerformModuleAction } from "@/lib/module-permissions";
+import type { ActiveSession } from "@/lib/session-data";
 import type { DueStatus, MeasurementActivity, MeasurementAsset } from "@/lib/types";
 
 interface CalibrationsModuleProps {
   assets: MeasurementAsset[];
   focusId?: string;
   onAssetsChange: (assets: MeasurementAsset[]) => void;
+  session: ActiveSession;
 }
 
 type ScopeFilter = "all" | MeasurementActivity | "standards";
@@ -49,7 +52,7 @@ const dueLabels: Record<DueStatus, string> = {
   overdue: "Vencido",
 };
 
-export function CalibrationsModule({ assets, focusId, onAssetsChange }: CalibrationsModuleProps) {
+export function CalibrationsModule({ assets, focusId, onAssetsChange, session }: CalibrationsModuleProps) {
   const today = toIsoDate(new Date());
   const focusedAsset = assets.find((asset) => asset.id === focusId) ?? null;
   const [query, setQuery] = useState(focusedAsset?.code ?? "");
@@ -60,6 +63,8 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange }: Calibrat
   const [agentAssetId, setAgentAssetId] = useState(focusedAsset?.id ?? assets.find((asset) => !asset.isReferenceStandard)?.id ?? assets[0]?.id ?? "");
   const [agentRequest, setAgentRequest] = useState("Revisa la aptitud metrológica del equipo y señala riesgos, evidencia faltante y siguiente acción recomendada.");
   const [contextCopied, setContextCopied] = useState(false);
+  const canExecute = canPerformModuleAction(session, "calibrations", "update");
+  const canManageAssets = canPerformModuleAction(session, "calibrations", "manage");
 
   const referenceStandards = useMemo(() => assets.filter((asset) => asset.isReferenceStandard), [assets]);
   const currentStandards = useMemo(() => getCurrentReferenceStandards(assets, today), [assets, today]);
@@ -140,7 +145,7 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange }: Calibrat
     <>
       <section className="module-heading metrology-heading">
         <div><p className="module-kicker">Control metrológico</p><h2>Calibración y verificación</h2><p>Programa F-CA-37 · verificación interna con patrón vigente y calibración externa.</p></div>
-        <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Nuevo equipo</button>
+        {canManageAssets ? <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Nuevo equipo</button> : null}
       </section>
 
       <section className="metric-grid" aria-label="Resumen metrológico">
@@ -180,19 +185,19 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange }: Calibrat
             const readiness = getVerificationReadiness(asset, assets, today);
             return <tr key={asset.id}><td><div className="equipment-cell"><div className={`equipment-icon ${asset.isReferenceStandard ? "standard" : ""}`}>{asset.isReferenceStandard ? <FlaskConical size={17} /> : <Wrench size={17} />}</div><span><strong>{asset.name}</strong><small>{asset.code}{asset.model ? ` · ${asset.model}` : ""}{asset.isReferenceStandard ? " · Patrón" : ""}</small></span></div></td>
               <td><span className={`metrology-scope scope-${asset.activity}`}>{activityLabels[asset.activity]}</span></td>
-              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td><button className="icon-button compact-button" title={asset.activity === "verification" ? "Registrar verificación" : "Registrar calibración"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={18} /></button></td></tr>;
+              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td>{canExecute ? <button className="icon-button compact-button" title={asset.activity === "verification" ? "Registrar verificación" : "Registrar calibración"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={18} /></button> : null}</td></tr>;
           })}
         </tbody></table></div>
 
         <div className="mobile-asset-list">{filteredAssets.map((asset) => {
           const status = getAssetDueStatus(asset, today);
           const readiness = getVerificationReadiness(asset, assets, today);
-          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl><button className="button button-secondary button-full" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> Registrar {asset.activity === "verification" ? "verificación" : "calibración"}</button></article>;
+          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl>{canExecute ? <button className="button button-secondary button-full" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> Registrar {asset.activity === "verification" ? "verificación" : "calibración"}</button> : null}</article>;
         })}</div>
       </section>
 
-      {selectedAsset ? <CompleteActivityModal asset={selectedAsset} assets={assets} onClose={() => setSelectedAsset(null)} onSubmit={(execution) => completeActivity(selectedAsset, execution)} /> : null}
-      {isCreateOpen ? <CreateAssetModal assets={assets} today={today} onClose={() => setCreateOpen(false)} onSubmit={addAsset} /> : null}
+      {selectedAsset && canExecute ? <CompleteActivityModal asset={selectedAsset} assets={assets} onClose={() => setSelectedAsset(null)} onSubmit={(execution) => completeActivity(selectedAsset, execution)} /> : null}
+      {isCreateOpen && canManageAssets ? <CreateAssetModal assets={assets} today={today} onClose={() => setCreateOpen(false)} onSubmit={addAsset} /> : null}
     </>
   );
 }

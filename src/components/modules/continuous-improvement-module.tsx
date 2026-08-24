@@ -41,6 +41,7 @@ import {
   type RapidImprovementKind,
 } from "@/lib/continuous-improvement-data";
 import { processCatalog } from "@/lib/configuration-data";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 import type { ActiveSession } from "@/lib/session-data";
 
 type MainView = "register" | "portfolio";
@@ -70,7 +71,9 @@ const projectStatuses: ImprovementProjectStatus[] = [
 export function ContinuousImprovementModule({ projects, onProjectsChange, session }: ContinuousImprovementModuleProps) {
   const [activeView, setActiveView] = useState<MainView>("portfolio");
   const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? "");
-  const manager = session.userType === "Administrador" || session.continuousImprovementRole === "manager";
+  const canCreate = canPerformModuleAction(session, "continuous-improvement", "create");
+  const canFollowUp = canPerformModuleAction(session, "continuous-improvement", "update");
+  const manager = canPerformModuleAction(session, "continuous-improvement", "manage");
   const scopedProjects = getImprovementProjectsForSession(projects, session);
   const activeProjects = scopedProjects.filter((project) => ["Kick off", "En proceso", "Tarde"].includes(project.status)).length;
   const closedProjects = scopedProjects.filter((project) => project.status === "Terminado").length;
@@ -87,7 +90,7 @@ export function ContinuousImprovementModule({ projects, onProjectsChange, sessio
     <div className="continuous-improvement-module">
       <section className="module-heading continuous-heading">
         <div><span className="module-kicker">Sistema de mejora</span><h2>Mejora continua</h2><p>Captura de ideas, priorización y seguimiento de proyectos Kaizen y DMAIC.</p></div>
-        <span className={`continuous-access-role ${manager ? "manager" : "submitter"}`}>{manager ? "Gestión del portafolio" : "Registro y seguimiento"}</span>
+        <span className={`continuous-access-role ${manager ? "manager" : "submitter"}`}>{manager ? "Gestión del portafolio" : canFollowUp ? "Seguimiento asignado" : canCreate ? "Carga de iniciativas" : "Solo consulta"}</span>
       </section>
 
       <section className="continuous-summary" aria-label="Resumen del portafolio">
@@ -98,13 +101,13 @@ export function ContinuousImprovementModule({ projects, onProjectsChange, sessio
       </section>
 
       <div className="continuous-main-tabs" role="tablist" aria-label="Vistas de Mejora continua">
-        <button className={activeView === "register" ? "active" : ""} type="button" onClick={() => setActiveView("register")}><Plus size={16} /> Cargar iniciativa</button>
+        {canCreate ? <button className={activeView === "register" ? "active" : ""} type="button" onClick={() => setActiveView("register")}><Plus size={16} /> Cargar iniciativa</button> : null}
         <button className={activeView === "portfolio" ? "active" : ""} type="button" onClick={() => setActiveView("portfolio")}><FolderKanban size={16} /> {manager ? "Plan general" : "Mis proyectos"}</button>
       </div>
 
-      {activeView === "register"
+      {activeView === "register" && canCreate
         ? <ProjectRegistration session={session} sequence={projects.length + 1} onCreate={addProject} />
-        : <ProjectPortfolio manager={manager} projects={projects} scopedProjects={scopedProjects} selectedProjectId={selectedProjectId} onSelect={setSelectedProjectId} onProjectsChange={onProjectsChange} />}
+        : <ProjectPortfolio canFollowUp={canFollowUp} manager={manager} projects={projects} scopedProjects={scopedProjects} selectedProjectId={selectedProjectId} onSelect={setSelectedProjectId} onProjectsChange={onProjectsChange} />}
     </div>
   );
 }
@@ -225,7 +228,7 @@ function ProjectRegistration({ session, sequence, onCreate }: { session: ActiveS
   );
 }
 
-function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, manager, onSelect, onProjectsChange }: { projects: ImprovementProject[]; scopedProjects: ImprovementProject[]; selectedProjectId: string; manager: boolean; onSelect: (id: string) => void; onProjectsChange: (projects: ImprovementProject[]) => void }) {
+function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, canFollowUp, manager, onSelect, onProjectsChange }: { projects: ImprovementProject[]; scopedProjects: ImprovementProject[]; selectedProjectId: string; canFollowUp: boolean; manager: boolean; onSelect: (id: string) => void; onProjectsChange: (projects: ImprovementProject[]) => void }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | ImprovementProjectType>("all");
   const [categoryFilter, setCategoryFilter] = useState<"all" | ImprovementProjectCategory>("all");
@@ -267,12 +270,12 @@ function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, manager
           })}
         </tbody></table>{visibleProjects.length === 0 ? <div className="continuous-no-results"><Search size={22} /><strong>Sin proyectos</strong><span>Ajusta los filtros para ampliar la búsqueda.</span></div> : null}</div>
       </section>
-      {selectedProject ? <ProjectDetail key={selectedProject.id} manager={manager} project={selectedProject} onChange={updateProject} /> : null}
+      {selectedProject ? <ProjectDetail key={selectedProject.id} canFollowUp={canFollowUp} manager={manager} project={selectedProject} onChange={updateProject} /> : null}
     </div>
   );
 }
 
-function ProjectDetail({ project, manager, onChange }: { project: ImprovementProject; manager: boolean; onChange: (project: ImprovementProject) => void }) {
+function ProjectDetail({ project, canFollowUp, manager, onChange }: { project: ImprovementProject; canFollowUp: boolean; manager: boolean; onChange: (project: ImprovementProject) => void }) {
   const [detailView, setDetailView] = useState<DetailView>("charter");
   const [newAction, setNewAction] = useState("");
   const [newOwner, setNewOwner] = useState("");
@@ -321,9 +324,9 @@ function ProjectDetail({ project, manager, onChange }: { project: ImprovementPro
         <button className={detailView === "plan" ? "active" : ""} type="button" onClick={() => setDetailView("plan")}><ListChecks size={15} /> Plan y evidencias</button>
         <button className={detailView === "scorecard" ? "active" : ""} type="button" onClick={() => setDetailView("scorecard")}><Gauge size={15} /> Ponderación</button>
       </nav>
-      {detailView === "charter" ? (project.type === "kaizen" ? <KaizenReportView manager={manager} project={project} onChange={onChange} /> : <ProjectCharter project={project} />) : null}
-      {detailView === "route" ? <ProjectRoute project={project} manager={manager} onToggleTool={toggleTool} onAdvance={advancePhase} /> : null}
-      {detailView === "plan" ? <ProjectPlan project={project} manager={manager} newAction={newAction} newOwner={newOwner} newDueDate={newDueDate} onNewAction={setNewAction} onNewOwner={setNewOwner} onNewDueDate={setNewDueDate} onAddAction={addAction} onUpdateAction={(actionId, status) => onChange({ ...project, actions: project.actions.map((action) => action.id === actionId ? { ...action, status } : action) })} onUploadEvidence={uploadEvidence} /> : null}
+      {detailView === "charter" ? (project.type === "kaizen" ? <KaizenReportView manager={canFollowUp} project={project} onChange={onChange} /> : <ProjectCharter project={project} />) : null}
+      {detailView === "route" ? <ProjectRoute project={project} canFollowUp={canFollowUp} manager={manager} onToggleTool={toggleTool} onAdvance={advancePhase} /> : null}
+      {detailView === "plan" ? <ProjectPlan project={project} manager={canFollowUp} newAction={newAction} newOwner={newOwner} newDueDate={newDueDate} onNewAction={setNewAction} onNewOwner={setNewOwner} onNewDueDate={setNewDueDate} onAddAction={addAction} onUpdateAction={(actionId, status) => onChange({ ...project, actions: project.actions.map((action) => action.id === actionId ? { ...action, status } : action) })} onUploadEvidence={uploadEvidence} /> : null}
       {detailView === "scorecard" ? <ProjectScorecard manager={manager} project={project} onChange={onChange} /> : null}
     </section>
   );
@@ -373,10 +376,10 @@ function ProjectCharter({ project }: { project: ImprovementProject }) {
   </aside></div>;
 }
 
-function ProjectRoute({ project, manager, onToggleTool, onAdvance }: { project: ImprovementProject; manager: boolean; onToggleTool: (phaseId: string, toolId: string) => void; onAdvance: () => void }) {
+function ProjectRoute({ project, canFollowUp, manager, onToggleTool, onAdvance }: { project: ImprovementProject; canFollowUp: boolean; manager: boolean; onToggleTool: (phaseId: string, toolId: string) => void; onAdvance: () => void }) {
   const activePhase = project.phases.find((phase) => phase.status === "active");
   return <div className="continuous-route-view"><div className={`continuous-phase-strip phases-${project.phases.length}`}>{project.phases.map((phase, index) => <div className={phase.status} key={phase.id}><span>{phase.status === "completed" ? <Check size={14} /> : index + 1}</span><strong>{phase.name}</strong><small>{formatDate(phase.targetDate)}</small></div>)}</div>
-    <div className="continuous-phase-tools">{project.phases.map((phase) => <section className={phase.status} key={phase.id}><header><span>{phase.name}</span><small>{phase.status === "completed" ? "Fase concluida" : phase.status === "active" ? "Fase actual" : `Programada ${formatDate(phase.targetDate)}`}</small></header><div>{phase.tools.map((tool) => <button disabled={!manager || project.status === "Terminado"} key={tool.id} type="button" onClick={() => onToggleTool(phase.id, tool.id)}><span className={`continuous-tool-check ${tool.status}`}>{tool.status === "completed" ? <Check size={13} /> : null}</span><span><strong>{tool.name}</strong><small>{tool.description}</small></span></button>)}</div></section>)}</div>
+    <div className="continuous-phase-tools">{project.phases.map((phase) => <section className={phase.status} key={phase.id}><header><span>{phase.name}</span><small>{phase.status === "completed" ? "Fase concluida" : phase.status === "active" ? "Fase actual" : `Programada ${formatDate(phase.targetDate)}`}</small></header><div>{phase.tools.map((tool) => <button disabled={!canFollowUp || project.status === "Terminado"} key={tool.id} type="button" onClick={() => onToggleTool(phase.id, tool.id)}><span className={`continuous-tool-check ${tool.status}`}>{tool.status === "completed" ? <Check size={13} /> : null}</span><span><strong>{tool.name}</strong><small>{tool.description}</small></span></button>)}</div></section>)}</div>
     {manager && activePhase ? <footer className="continuous-route-footer"><span><Route size={16} /> Gate actual: <strong>{activePhase.name}</strong>. Confirma los entregables antes de avanzar.</span><button className="button button-primary" type="button" onClick={onAdvance}>Concluir fase <ArrowRight size={16} /></button></footer> : null}
   </div>;
 }

@@ -87,6 +87,9 @@ export interface CorrectiveAction {
   severity: CorrectiveActionSeverity;
   area: string;
   owner: string;
+  ownerId?: string;
+  processId?: string;
+  participantUserIds?: string[];
   createdAt: string;
   dueDate: string;
   status: CorrectiveActionStatus;

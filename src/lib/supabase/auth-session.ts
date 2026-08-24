@@ -1,7 +1,11 @@
 import "server-only";
 
 import { isWorkspaceModuleId } from "@/lib/navigation";
-import type { ActiveSession, UserType } from "@/lib/session-data";
+import type {
+  ActiveSession,
+  ModulePermissionAction,
+  UserType,
+} from "@/lib/session-data";
 import { createClient } from "@/lib/supabase/server";
 
 type ProfileRow = {
@@ -55,7 +59,12 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
 
   if (claimsError || !claims?.sub) return null;
 
-  const [{ data: profileData }, { data: processData }, { data: moduleData }] =
+  const [
+    { data: profileData },
+    { data: processData },
+    { data: moduleData },
+    { data: moduleActionData },
+  ] =
     await Promise.all([
       supabase
         .from("profiles")
@@ -71,6 +80,10 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
         .select("module_id, can_view")
         .eq("user_id", claims.sub)
         .eq("can_view", true),
+      supabase
+        .from("user_module_action_permissions")
+        .select("module_id, action")
+        .eq("user_id", claims.sub),
     ]);
 
   const profile = profileData as ProfileRow | null;
@@ -101,9 +114,19 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
   const assignedModuleIds = (moduleData ?? [])
     .map((row) => row.module_id as string)
     .filter(isWorkspaceModuleId);
+  const moduleActionPermissions = (moduleActionData ?? []).flatMap((row) => {
+    const moduleId = row.module_id as string;
+    return isWorkspaceModuleId(moduleId)
+      ? [{
+          moduleId,
+          action: row.action as ModulePermissionAction,
+        }]
+      : [];
+  });
 
   return {
     userId: profile?.external_id || claims.sub,
+    authUserId: claims.sub,
     name: fullName,
     shortName: profile?.short_name || shortNameFor(fullName),
     initials: profile?.initials || initialsFor(fullName),
@@ -114,6 +137,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     userType: userTypeLabels[rawUserType],
     assignedProcessIds,
     assignedModuleIds,
+    moduleActionPermissions,
     positionId: profile?.position_id || undefined,
     documentAccess,
     continuousImprovementRole:

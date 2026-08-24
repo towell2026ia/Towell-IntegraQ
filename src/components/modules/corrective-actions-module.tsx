@@ -33,10 +33,16 @@ import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
 
 import { buildRootCauseAiRequest } from "@/lib/ai-context";
 import {
+  canEditCorrectiveAction,
+  canViewCorrectiveAction,
+} from "@/lib/corrective-action-access";
+import {
   getCorrectiveActionLabel,
   isCorrectiveActionOverdue,
   toIsoDate,
 } from "@/lib/domain";
+import { canPerformModuleAction } from "@/lib/module-permissions";
+import type { ActiveSession } from "@/lib/session-data";
 import type {
   AiRootCauseDraft,
   CorrectiveAction,
@@ -47,6 +53,7 @@ interface CorrectiveActionsModuleProps {
   actions: CorrectiveAction[];
   focusId?: string;
   onActionsChange: (actions: CorrectiveAction[]) => void;
+  session: ActiveSession;
 }
 
 type CorrectiveWorkspaceView = "lists" | "a3";
@@ -66,6 +73,7 @@ export function CorrectiveActionsModule({
   actions,
   focusId,
   onActionsChange,
+  session,
 }: CorrectiveActionsModuleProps) {
   const today = toIsoDate(new Date());
   const focusedAction = actions.find((action) => action.id === focusId && action.source !== "supplier");
@@ -85,10 +93,18 @@ export function CorrectiveActionsModule({
   const [registryView, setRegistryView] = useState<CorrectiveRegistryView>("index");
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const canCreate = canPerformModuleAction(
+    session,
+    "corrective-actions",
+    "create",
+  );
 
   const rootCauseActions = useMemo(
-    () => actions.filter((action) => action.source !== "supplier"),
-    [actions],
+    () => actions.filter(
+      (action) =>
+        action.source !== "supplier" && canViewCorrectiveAction(session, action),
+    ),
+    [actions, session],
   );
   const filteredActions = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("es");
@@ -116,6 +132,9 @@ export function CorrectiveActionsModule({
     filteredActions.find((action) => action.id === selectedId) ??
     filteredActions[0] ??
     rootCauseActions[0];
+  const canEditSelected = selected
+    ? canEditCorrectiveAction(session, selected)
+    : false;
 
   const metrics = useMemo(
     () => ({
@@ -132,6 +151,7 @@ export function CorrectiveActionsModule({
   );
 
   const updateSelected = (changes: Partial<CorrectiveAction>) => {
+    if (!selected || !canEditSelected) return;
     onActionsChange(
       actions.map((action) =>
         action.id === selected.id ? { ...action, ...changes } : action,
@@ -204,6 +224,8 @@ export function CorrectiveActionsModule({
       progress: 55,
       evidenceCount: 0,
       rootCause: values.a3.rootCause,
+      ownerId: session.authUserId,
+      participantUserIds: [session.authUserId ?? session.userId],
     };
 
     onActionsChange([action, ...actions]);
@@ -225,7 +247,15 @@ export function CorrectiveActionsModule({
   };
 
   if (!selected) {
-    return null;
+    return (
+      <>
+        <section className="module-heading">
+          <div><p className="module-kicker">CAPA / Root2Cause</p><h2>Root2Cause y acciones correctivas</h2><p>Acciones y análisis donde participas.</p></div>
+          {canCreate ? <button className="button button-primary" type="button" onClick={() => setWorkspaceView("a3")}><Plus size={17} /> Iniciar análisis A3</button> : null}
+        </section>
+        {workspaceView === "a3" && canCreate ? <A3AnalysisWorkbench onCancel={() => setWorkspaceView("lists")} onComplete={completeA3Analysis} /> : <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones asignadas</h3><p>No participas en acciones o análisis abiertos en este momento.</p></div>}
+      </>
+    );
   }
 
   return (
@@ -238,10 +268,10 @@ export function CorrectiveActionsModule({
             Listados por origen y análisis A3 desde la detección hasta la eficacia.
           </p>
         </div>
-        <button className="button button-primary" onClick={() => setWorkspaceView("a3")}>
+        {canCreate ? <button className="button button-primary" type="button" onClick={() => setWorkspaceView("a3")}>
           <Plus size={17} />
           Iniciar análisis A3
-        </button>
+        </button> : null}
       </section>
 
       <section className="metric-grid" aria-label="Resumen de acciones">
@@ -273,7 +303,7 @@ export function CorrectiveActionsModule({
 
       <div className="quality-view-tabs corrective-main-tabs" aria-label="Vistas de Root2Cause">
         <button className={workspaceView === "lists" ? "active" : ""} type="button" onClick={() => setWorkspaceView("lists")}><BookOpen size={15} /> Listados de acciones</button>
-        <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button>
+        {canCreate ? <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button> : null}
       </div>
 
       {workspaceView === "lists" ? (
@@ -370,9 +400,9 @@ export function CorrectiveActionsModule({
 
         {registryView === "report" ? <article className="corrective-report-view">
           <A3ActionReport action={selected} onBack={() => setRegistryView("index")}>
-            <button className="button button-secondary" type="button">
+            {canEditSelected ? <button className="button button-secondary" type="button">
               <Paperclip size={16} /> Adjuntar evidencia
-            </button>
+            </button> : null}
             <button
               className="button button-secondary"
               type="button"
@@ -381,7 +411,7 @@ export function CorrectiveActionsModule({
                 const nextStatus = statusOrder[Math.min(currentIndex + 1, statusOrder.length - 1)];
                 updateSelected({ status: nextStatus, progress: Math.min(100, selected.progress + 18) });
               }}
-              disabled={selected.status === "closed"}
+              disabled={!canEditSelected || selected.status === "closed"}
             >
               <CheckCircle2 size={16} /> Avanzar etapa
             </button>
@@ -410,7 +440,7 @@ export function CorrectiveActionsModule({
                 className="button button-ai"
                 type="button"
                 onClick={requestAiAnalysis}
-                disabled={isAiLoading}
+                disabled={!canEditSelected || isAiLoading}
               >
                 {isAiLoading ? (
                   <LoaderCircle className="spin" size={16} />
@@ -433,7 +463,7 @@ export function CorrectiveActionsModule({
             {selected.aiDraft ? (
               <AiSuggestionResult
                 draft={selected.aiDraft}
-                onUseRootCause={(rootCause) => updateSelected({ rootCause })}
+                onUseRootCause={canEditSelected ? (rootCause) => updateSelected({ rootCause }) : undefined}
               />
             ) : (
               <div className="ai-empty">
@@ -446,12 +476,12 @@ export function CorrectiveActionsModule({
         </article> : null}
           </section>
         </>
-      ) : (
+      ) : canCreate ? (
         <A3AnalysisWorkbench
           onCancel={() => setWorkspaceView("lists")}
           onComplete={completeA3Analysis}
         />
-      )}
+      ) : null}
     </>
   );
 }
