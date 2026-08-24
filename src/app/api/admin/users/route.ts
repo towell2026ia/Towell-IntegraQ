@@ -15,6 +15,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import type { UserAccessAccount } from "@/lib/user-access-data";
 
+export const maxDuration = 30;
+
 const userTypeFromDatabase: Record<
   "administrator" | "internal" | "customer" | "supplier",
   UserType
@@ -66,6 +68,18 @@ async function requireAdministrator() {
 }
 
 export async function GET() {
+  try {
+    return await listAccounts();
+  } catch (error) {
+    console.error("No fue posible consultar las cuentas de acceso.", error);
+    return NextResponse.json(
+      { error: "No fue posible consultar los usuarios en Supabase." },
+      { status: 500 },
+    );
+  }
+}
+
+async function listAccounts() {
   const actor = await requireAdministrator();
   if (!actor) {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
@@ -169,11 +183,28 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  return saveAccount(request, true);
+  return handleAccountRequest(request, true);
 }
 
 export async function PATCH(request: Request) {
-  return saveAccount(request, false);
+  return handleAccountRequest(request, false);
+}
+
+async function handleAccountRequest(request: Request, create: boolean) {
+  try {
+    return await saveAccount(request, create);
+  } catch (error) {
+    console.error("No fue posible guardar la cuenta de acceso.", error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "No fue posible completar el alta del usuario.",
+      },
+      { status: 500 },
+    );
+  }
 }
 
 async function saveAccount(request: Request, create: boolean) {
@@ -200,12 +231,12 @@ async function saveAccount(request: Request, create: boolean) {
   const admin = createAdminClient();
   let userId = account.authUserId;
   if (create) {
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "");
+    const siteUrl = getPublicSiteUrl(request);
     const { data, error } = await admin.auth.admin.inviteUserByEmail(
       account.email.trim().toLocaleLowerCase("es-MX"),
       {
         data: { full_name: account.fullName.trim() },
-        redirectTo: siteUrl ? `${siteUrl}/update-password` : undefined,
+        redirectTo: `${siteUrl}/update-password`,
       },
     );
     if (error || !data.user) {
@@ -342,7 +373,27 @@ async function saveAccount(request: Request, create: boolean) {
     },
   });
 
-  return NextResponse.json({ ok: true, userId });
+  return NextResponse.json({
+    ok: true,
+    userId,
+    message: create
+      ? `Invitación enviada a ${account.email.trim().toLocaleLowerCase("es-MX")}.`
+      : "Usuario actualizado.",
+  });
+}
+
+function getPublicSiteUrl(request: Request) {
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProtocol = request.headers.get("x-forwarded-proto");
+  if (forwardedHost) return `${forwardedProtocol ?? "https"}://${forwardedHost}`;
+
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim().replace(/\/$/, "");
+  if (configured && /^https?:\/\//i.test(configured)) return configured;
+
+  const host = request.headers.get("host");
+  if (host) return `${forwardedProtocol ?? (host.includes("localhost") ? "http" : "https")}://${host}`;
+
+  return new URL(request.url).origin;
 }
 
 function isUuid(value: string | undefined) {

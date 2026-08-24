@@ -67,6 +67,7 @@ export function AccessModule() {
   const [editingAccount, setEditingAccount] = useState<UserAccessAccount | null | undefined>(undefined);
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
 
   useEffect(() => {
     void loadAccounts();
@@ -77,10 +78,10 @@ export function AccessModule() {
     setLoadError("");
     try {
       const response = await fetch("/api/admin/users", { cache: "no-store" });
-      const payload = (await response.json()) as {
+      const payload = await readApiPayload<{
         accounts?: UserAccessAccount[];
         error?: string;
-      };
+      }>(response);
       if (!response.ok || !payload.accounts) {
         throw new Error(payload.error ?? "No fue posible cargar los usuarios.");
       }
@@ -123,16 +124,24 @@ export function AccessModule() {
   const activeAccounts = accounts.filter((account) => account.status === "active").length;
 
   async function saveAccount(account: UserAccessAccount) {
+    const creating = !account.authUserId;
+    setActionNotice("");
     const response = await fetch("/api/admin/users", {
       method: account.authUserId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(account),
     });
-    const payload = (await response.json()) as { error?: string };
+    const payload = await readApiPayload<{ error?: string; message?: string }>(response);
     if (!response.ok) {
       throw new Error(payload.error ?? "No fue posible guardar el usuario.");
     }
     await loadAccounts(account.id);
+    setActionNotice(
+      payload.message ??
+        (creating
+          ? `Usuario creado. Supabase envió la invitación a ${account.email}.`
+          : "Usuario actualizado correctamente."),
+    );
     setActiveTab("users");
     setEditingAccount(undefined);
   }
@@ -156,6 +165,8 @@ export function AccessModule() {
         <AccessMetric icon={<Building2 size={18} />} label="Puestos disponibles" value={String(organizationPositions.length)} tone="warning" />
         <AccessMetric icon={<KeyRound size={18} />} label="Permisos definidos" value={String(permissionAreaCatalog.length)} tone="danger" />
       </section>
+
+      {actionNotice ? <div className="form-success" role="status"><Mail size={16} /> {actionNotice}</div> : null}
 
       <section className="access-panel">
         <div className="access-panel-header">
@@ -197,6 +208,26 @@ export function AccessModule() {
       ) : null}
     </>
   );
+}
+
+async function readApiPayload<T extends { error?: string }>(response: Response): Promise<T> {
+  const body = await response.text();
+  if (!body.trim()) {
+    throw new Error(
+      response.ok
+        ? "El servidor no confirmó la operación. Intenta nuevamente."
+        : `El servidor no pudo completar la operación (${response.status}).`,
+    );
+  }
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(
+      response.ok
+        ? "El servidor devolvió una respuesta inválida."
+        : `No fue posible completar la operación (${response.status}).`,
+    );
+  }
 }
 
 function UserAccountsWorkspace({
