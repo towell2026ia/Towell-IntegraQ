@@ -1,5 +1,11 @@
-import { appFormCatalog } from "@/lib/form-data";
-import type { ActiveSession } from "@/lib/session-data";
+import { appFormCatalog, type AppFormDefinition } from "@/lib/form-data";
+import {
+  canAccessProcess,
+  isAdministrator,
+  type DocumentAccessRole,
+  type ActiveSession,
+} from "@/lib/session-data";
+import { getPositionDocumentAccess } from "@/lib/user-access-data";
 
 export type ControlledDocumentStatus =
   | "draft"
@@ -101,13 +107,56 @@ export function getDocumentPermissions(
   processId: string,
   assignments = documentPermissionAssignments,
 ): DocumentPermissions {
-  if (session.userType === "Administrador") return administratorPermissions;
-  if (!session.assignedProcessIds.includes(processId)) return noPermissions;
+  if (isAdministrator(session)) return administratorPermissions;
+  if (!canAccessProcess(session, processId)) return noPermissions;
 
   const assignment = assignments.find(
     (item) => item.userId === session.userId && item.processId === processId,
   );
-  return assignment ? { ...assignment.permissions, history: false } : noPermissions;
+  if (assignment) return { ...assignment.permissions, history: false };
+
+  const inheritedAccess =
+    session.documentAccess?.find((item) => item.processId === processId) ??
+    getPositionDocumentAccess(session.positionId, processId);
+  return inheritedAccess
+    ? getDocumentPermissionsForRole(inheritedAccess.role)
+    : noPermissions;
+}
+
+export function getDocumentPermissionsForRole(
+  role: DocumentAccessRole,
+): DocumentPermissions {
+  if (role === "modifier") {
+    return {
+      view: true,
+      upload: true,
+      edit: true,
+      submit: true,
+      validate: false,
+      download: true,
+      history: false,
+    };
+  }
+  if (role === "authorizer") {
+    return {
+      view: true,
+      upload: false,
+      edit: false,
+      submit: false,
+      validate: true,
+      download: true,
+      history: false,
+    };
+  }
+  return {
+    view: true,
+    upload: false,
+    edit: false,
+    submit: false,
+    validate: false,
+    download: true,
+    history: false,
+  };
 }
 
 export function getWorkingVersion(document: ControlledDocument) {
@@ -230,27 +279,102 @@ const seedDocuments: ControlledDocument[] = [
 ];
 
 export function buildInitialControlledDocuments(): ControlledDocument[] {
-  const applicationForms = appFormCatalog.map((form) =>
-    makeDocument(
-      `DOC-${form.id}`,
-      form.processId,
-      "application-forms",
-      form.registrationNumber,
-      form.name,
-      "Responsable del proceso",
-      "Francisco Javier Hernández Retana",
-      "Gerencia de Calidad",
-      form.dashboard.generatedAt,
-      form.version,
-      form.status === "Activo" ? "current" : "draft",
-      false,
-      form.id,
-    ),
-  );
+  const applicationForms = appFormCatalog.map(makeApplicationFormDocument);
   return [...seedDocuments, ...applicationForms].map((document) => ({
     ...document,
     versions: document.versions.map((version) => ({ ...version })),
   }));
+}
+
+export function synchronizeAppFormDocuments(
+  documents: ControlledDocument[],
+  forms: AppFormDefinition[],
+) {
+  const formIds = new Set(forms.map((form) => form.id));
+  const nonApplicationDocuments = documents.filter(
+    (document) =>
+      document.documentTypeId !== "application-forms" ||
+      !document.appFormId ||
+      formIds.has(document.appFormId),
+  );
+  const documentsByForm = new Map(
+    nonApplicationDocuments
+      .filter((document) => document.appFormId)
+      .map((document) => [document.appFormId as string, document]),
+  );
+  const synchronizedForms = forms.map((form) => {
+    const current = documentsByForm.get(form.id);
+    if (!current) return makeApplicationFormDocument(form);
+
+    const latestRevision = Math.max(
+      ...current.versions.map((version) => version.revision),
+    );
+    if (form.version <= latestRevision) {
+      return {
+        ...current,
+        processId: form.processId,
+        code: form.registrationNumber,
+        name: form.name,
+      };
+    }
+
+    const nextStatus: ControlledDocumentStatus =
+      form.status === "Activo" ? "current" : "draft";
+    const modifiedAt = form.dashboard.generatedAt;
+    const nextVersion: ControlledDocumentVersion = {
+      id: `${current.id}-R${form.version}`,
+      revision: form.version,
+      status: nextStatus,
+      fileName: `${form.registrationNumber.replaceAll("/", "-")}_Rev${form.version}.pdf`,
+      uploadedBy: "Francisco Javier Hernández Retana",
+      validator: "Gerencia de Calidad",
+      modifiedAt,
+      changeReason: "Actualización desde Formularios y dashboards",
+      ...(nextStatus === "current"
+        ? {
+            authorizedBy: "Gerencia de Calidad",
+            authorizedAt: modifiedAt,
+          }
+        : {}),
+    };
+    return {
+      ...current,
+      processId: form.processId,
+      code: form.registrationNumber,
+      name: form.name,
+      versions: [
+        nextVersion,
+        ...current.versions.map((version) =>
+          version.status === "current"
+            ? { ...version, status: "obsolete" as const }
+            : version,
+        ),
+      ],
+    };
+  });
+
+  return [
+    ...nonApplicationDocuments.filter((document) => !document.appFormId),
+    ...synchronizedForms,
+  ];
+}
+
+function makeApplicationFormDocument(form: AppFormDefinition) {
+  return makeDocument(
+    `DOC-${form.id}`,
+    form.processId,
+    "application-forms",
+    form.registrationNumber,
+    form.name,
+    "Responsable del proceso",
+    "Francisco Javier Hernández Retana",
+    "Gerencia de Calidad",
+    form.dashboard.generatedAt,
+    form.version,
+    form.status === "Activo" ? "current" : "draft",
+    false,
+    form.id,
+  );
 }
 
 function makeDocument(

@@ -29,6 +29,10 @@ describe("getDueStatus", () => {
   it("keeps distant dates current", () => {
     expect(getDueStatus("2026-10-15", "2026-07-29")).toBe("current");
   });
+
+  it("treats missing schedule dates as requiring attention", () => {
+    expect(getDueStatus("", "2026-07-29")).toBe("overdue");
+  });
 });
 
 describe("isCorrectiveActionOverdue", () => {

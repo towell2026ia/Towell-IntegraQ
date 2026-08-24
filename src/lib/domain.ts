@@ -49,6 +49,9 @@ export function getDueStatus(
   today: string,
   warningDays = 30,
 ): DueStatus {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDueDate)) {
+    return "overdue";
+  }
   const remainingDays = daysBetween(today, nextDueDate);
 
   if (remainingDays < 0) {
@@ -66,6 +69,7 @@ export function getAssetDueStatus(
   asset: MeasurementAsset,
   today: string,
 ): DueStatus {
+  if (asset.schedulePending) return "overdue";
   return getDueStatus(asset.nextDueDate, today);
 }
 

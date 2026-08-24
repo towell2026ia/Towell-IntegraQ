@@ -71,15 +71,6 @@ export function SuppliersModule() {
         <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={rncpDashboardSummary.inProcess} tone="danger" />
       </section>
 
-      <section className="quality-source-note supplier-source-note">
-        <Link2 size={18} />
-        <div>
-          <strong>Una captura, dos vistas</strong>
-          <p>F-CA-24 alimenta la matriz y el dashboard; F-CA-25 define el reporte. Auditorías, planes y evidencias se registran aquí y se replican al portal del proveedor correspondiente.</p>
-        </div>
-        <span>Sin Root2Cause</span>
-      </section>
-
       <div className="quality-view-tabs supplier-tabs" aria-label="Vistas de calidad de proveedores">
         <button className={view === "directory" ? "active" : ""} type="button" onClick={() => setView("directory")}>Proveedores</button>
         <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Auditorías semestrales</button>

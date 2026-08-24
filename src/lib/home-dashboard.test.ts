@@ -36,6 +36,26 @@ function buildSources(session: ActiveSession = activeSession): HomeDashboardSour
 }
 
 describe("home dashboard aggregation", () => {
+  it("exposes the complete cross-module scope to administrators", () => {
+    const dashboard = buildHomeDashboard(buildSources(), undefined, asOf);
+    const restrictedSession: ActiveSession = {
+      ...activeSession,
+      userId: "USR-DOC-001",
+      userType: "Usuario interno",
+      assignedProcessIds: ["P-08"],
+    };
+    const restrictedDashboard = buildHomeDashboard(
+      buildSources(restrictedSession),
+      undefined,
+      asOf,
+    );
+
+    expect(dashboard.filterOptions.processes.length)
+      .toBeGreaterThan(restrictedDashboard.filterOptions.processes.length);
+    expect(searchHomeDashboard(dashboard.searchIndex, "P-01").length).toBeGreaterThan(0);
+    expect(searchHomeDashboard(dashboard.searchIndex, "P-16").length).toBeGreaterThan(0);
+  });
+
   it("recalculates document counters from the controlled document source", () => {
     const sources = buildSources();
     const initial = buildHomeDashboard(sources, undefined, asOf);
@@ -69,7 +89,7 @@ describe("home dashboard aggregation", () => {
     const standardSession: ActiveSession = {
       ...activeSession,
       userId: "USR-DOC-001",
-      userType: "Usuario",
+      userType: "Usuario interno",
       assignedProcessIds: ["P-08"],
     };
     const dashboard = buildHomeDashboard(buildSources(standardSession), undefined, asOf);

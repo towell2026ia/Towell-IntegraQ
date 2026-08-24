@@ -1,5 +1,9 @@
-import { IntegraQWorkspace } from "@/components/integraq-workspace";
+import { IntegraQApp } from "@/components/integraq-app";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 
-export default function Home() {
-  return <IntegraQWorkspace />;
+export const dynamic = "force-dynamic";
+
+export default async function Home() {
+  const session = await getAuthenticatedSession();
+  return <IntegraQApp initialSession={session} />;
 }

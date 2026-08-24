@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALL_INDICATOR_AREAS,
   canManageIndicatorCatalog,
   canUpdateIndicatorResult,
   canViewIndicator,
+  getAccessibleIndicators,
+  getDefaultIndicatorArea,
+  matchesIndicatorArea,
 } from "@/lib/indicator-access";
 import { buildInitialIndicatorDefinitions } from "@/lib/indicator-data";
 import type { ActiveSession } from "@/lib/session-data";
@@ -26,7 +30,7 @@ const user: ActiveSession = {
   name: "Usuario",
   shortName: "Usuario",
   initials: "US",
-  userType: "Usuario",
+  userType: "Usuario interno",
   assignedProcessIds: ["P-08"],
 };
 
@@ -41,5 +45,19 @@ describe("indicator access policy", () => {
     expect(canUpdateIndicatorResult(user, qualityIndicator)).toBe(true);
     expect(canViewIndicator(user, { processId: "P-13" })).toBe(false);
     expect(canUpdateIndicatorResult(user, { processId: "P-13" })).toBe(false);
+  });
+
+  it("gives administrators the complete indicator scope by default", () => {
+    const indicators = buildInitialIndicatorDefinitions();
+
+    expect(getAccessibleIndicators(admin, indicators)).toHaveLength(indicators.length);
+    expect(getDefaultIndicatorArea(admin)).toBe(ALL_INDICATOR_AREAS);
+    expect(matchesIndicatorArea(admin, indicators[0], ALL_INDICATOR_AREAS)).toBe(true);
+    expect(matchesIndicatorArea(admin, indicators.at(-1)!, ALL_INDICATOR_AREAS)).toBe(true);
+  });
+
+  it("keeps standard users inside their assigned area", () => {
+    expect(getDefaultIndicatorArea(user)).toBe("Calidad");
+    expect(matchesIndicatorArea(user, qualityIndicator, ALL_INDICATOR_AREAS)).toBe(false);
   });
 });

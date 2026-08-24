@@ -2,10 +2,8 @@
 
 import {
   ArrowLeft,
-  BarChart3,
   BookOpen,
   BookOpenCheck,
-  Bot,
   ChevronRight,
   ClipboardList,
   Code2,
@@ -26,6 +24,7 @@ import type { LucideIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import {
   processCatalog,
   type ProcessCatalogItem,
@@ -36,14 +35,12 @@ import {
 } from "@/lib/document-control-data";
 import { documentTypeCatalog } from "@/lib/document-data";
 import {
-  appFormCatalog,
-  buildFormDashboard,
   serializeFormRecordsToCsv,
   type AppFormDefinition,
   type AppFormField,
   type AppFormValue,
 } from "@/lib/form-data";
-import { activeSession } from "@/lib/session-data";
+import type { ActiveSession } from "@/lib/session-data";
 
 const documentTypeIcons: Record<string, LucideIcon> = {
   processes: Workflow,
@@ -68,14 +65,18 @@ type FormView = "dashboard" | "data";
 
 interface DocumentsModuleProps {
   controlledDocuments: ControlledDocument[];
+  forms: AppFormDefinition[];
   focusId?: string;
   onControlledDocumentsChange: (documents: ControlledDocument[]) => void;
+  session: ActiveSession;
 }
 
 export function DocumentsModule({
   controlledDocuments,
+  forms,
   focusId,
   onControlledDocumentsChange,
+  session,
 }: DocumentsModuleProps) {
   const focusedDocument = controlledDocuments.find((document) => document.id === focusId);
   const [query, setQuery] = useState("");
@@ -90,13 +91,13 @@ export function DocumentsModule({
     const normalized = query.trim().toLocaleLowerCase("es");
     return processCatalog.filter(
       (process) =>
-        getDocumentPermissions(activeSession, process.id).view &&
+        getDocumentPermissions(session, process.id).view &&
         (!normalized ||
           [process.id, process.name].some((value) =>
             value.toLocaleLowerCase("es").includes(normalized),
           )),
     );
-  }, [query]);
+  }, [query, session]);
 
   const selected =
     filtered.find((process) => process.id === selectedId) ??
@@ -105,14 +106,13 @@ export function DocumentsModule({
   const selectedType =
     documentTypeCatalog.find((item) => item.id === selectedTypeId) ??
     documentTypeCatalog[0];
-  const selectedPermissions = getDocumentPermissions(activeSession, selected.id);
+  const selectedPermissions = getDocumentPermissions(session, selected.id);
   const typeDocuments = controlledDocuments.filter(
     (document) =>
       document.processId === selected.id &&
       document.documentTypeId === selectedType.id,
   );
-  const selectedForm =
-    appFormCatalog.find((form) => form.id === selectedFormId) ?? null;
+  const selectedForm = forms.find((form) => form.id === selectedFormId) ?? null;
 
   function selectProcess(processId: string) {
     setSelectedId(processId);
@@ -156,7 +156,7 @@ export function DocumentsModule({
         <DocumentMetric icon={<FileText size={18} />} label="Tipos documentales" value={8} tone="neutral" />
         <DocumentMetric icon={<BookOpenCheck size={18} />} label="Procesos clasificados" value={processCatalog.length} tone="success" />
         <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={0} tone="warning" />
-        <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={appFormCatalog.length} tone="danger" />
+        <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={forms.filter((form) => form.status === "Activo").length} tone="danger" />
       </section>
 
       <section className={`documents-layout ${documentsView === "process" ? "" : "documents-layout-focus"}`}>
@@ -216,7 +216,7 @@ export function DocumentsModule({
               documentType={selectedType}
               documents={typeDocuments}
               permissions={selectedPermissions}
-              session={activeSession}
+              session={session}
               onBack={() => setDocumentsView("process")}
               onOpenForm={openForm}
               onChangeDocument={changeDocument}
@@ -367,7 +367,7 @@ function FormWorkspace({
         </button>
       </nav>
 
-      {view === "dashboard" ? <FormDashboard form={form} /> : null}
+      {view === "dashboard" ? <FormIntelligenceDashboard form={form} /> : null}
       {view === "data" ? <FormDataTable form={form} /> : null}
 
       {structureOpen ? (
@@ -378,107 +378,6 @@ function FormWorkspace({
         />
       ) : null}
     </>
-  );
-}
-
-function FormDashboard({ form }: { form: AppFormDefinition }) {
-  const snapshot = buildFormDashboard(form);
-  const metricField = form.fields.find(
-    (field) => field.id === form.dashboard.metricField,
-  );
-  const trendMaximum = Math.max(...snapshot.monthlyTrend.map((item) => item.value), 1);
-  const categoryMaximum = Math.max(...snapshot.categoryBreakdown.map((item) => item.value), 1);
-  const statusMaximum = Math.max(...snapshot.statusBreakdown.map((item) => item.value), 1);
-
-  return (
-    <div className="form-dashboard-view">
-      <section className="form-agent-band">
-        <span><Bot size={18} /></span>
-        <div>
-          <small>Estructura de análisis</small>
-          <strong>{form.dashboard.id} · Versión {form.dashboard.version}</strong>
-          <p>{form.dashboard.agentName} · Generada el {formatDate(form.dashboard.generatedAt)}</p>
-        </div>
-        <span className="form-agent-update">
-          Datos al {snapshot.lastRecordAt ? formatDate(snapshot.lastRecordAt) : "Sin registros"}
-        </span>
-      </section>
-
-      <section className="form-dashboard-metrics" aria-label="Indicadores del formulario">
-        <DashboardMetric label="Registros totales" value={String(snapshot.totalRecords)} />
-        <DashboardMetric label="Registros este mes" value={String(snapshot.recordsThisMonth)} />
-        <DashboardMetric
-          label={snapshot.metricLabel ? `Promedio · ${snapshot.metricLabel}` : "Promedio"}
-          value={snapshot.metricAverage === null ? "—" : `${formatNumber(snapshot.metricAverage)}${metricField?.unit ? ` ${metricField.unit}` : ""}`}
-        />
-        <DashboardMetric label="Último registro" value={snapshot.lastRecordAt ? formatDate(snapshot.lastRecordAt) : "—"} compact />
-      </section>
-
-      <section className="form-dashboard-grid">
-        <div className="form-dashboard-panel">
-          <div className="section-title-row">
-            <h4>Registros por mes</h4>
-            <BarChart3 size={16} />
-          </div>
-          <div className="form-trend-chart" aria-label="Tendencia de registros de los últimos seis meses">
-            {snapshot.monthlyTrend.map((item) => (
-              <div key={item.label}>
-                <span>{item.value}</span>
-                <i style={{ height: `${Math.max((item.value / trendMaximum) * 100, item.value ? 12 : 2)}%` }} />
-                <small>{item.label}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="form-dashboard-panel">
-          <div className="section-title-row">
-            <h4>Distribución por estado</h4>
-            <span className="count-badge">{snapshot.statusBreakdown.length}</span>
-          </div>
-          <div className="form-breakdown-list">
-            {snapshot.statusBreakdown.map((item) => (
-              <div key={item.label}>
-                <span><strong>{item.label}</strong><small>{item.value}</small></span>
-                <i><b style={{ width: `${(item.value / statusMaximum) * 100}%` }} /></i>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="form-dashboard-panel form-dashboard-panel-wide">
-          <div className="section-title-row">
-            <h4>Distribución · {form.fields.find((field) => field.id === form.dashboard.categoryField)?.label}</h4>
-            <span className="count-badge">{snapshot.categoryBreakdown.length}</span>
-          </div>
-          <div className="form-category-grid">
-            {snapshot.categoryBreakdown.map((item) => (
-              <div key={item.label}>
-                <span><strong>{item.label}</strong><small>{item.value} registros</small></span>
-                <i><b style={{ width: `${(item.value / categoryMaximum) * 100}%` }} /></i>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function DashboardMetric({
-  label,
-  value,
-  compact = false,
-}: {
-  label: string;
-  value: string;
-  compact?: boolean;
-}) {
-  return (
-    <div>
-      <small>{label}</small>
-      <strong className={compact ? "compact" : ""}>{value}</strong>
-    </div>
   );
 }
 

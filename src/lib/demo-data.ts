@@ -1,4 +1,5 @@
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
+import { measurementAssetCatalog } from "@/lib/metrology-catalog";
 
 export const demoCorrectiveActions: CorrectiveAction[] = [
   {
@@ -33,6 +34,7 @@ export const demoCorrectiveActions: CorrectiveAction[] = [
     progress: 68,
     evidenceCount: 7,
     relatedParty: "Cliente corporativo A",
+    relatedPartyId: "customer-001",
     rootCause:
       "El ajuste de tensión no se verifica después de cambios de turno.",
     a3: {
@@ -132,6 +134,8 @@ export const demoCorrectiveActions: CorrectiveAction[] = [
     status: "closed",
     progress: 100,
     evidenceCount: 6,
+    relatedParty: "United Dragon",
+    relatedPartyId: "supplier-022",
     rootCause:
       "La orden de compra no incluía el requisito documental como condición de recepción.",
   },
@@ -152,12 +156,16 @@ export function enrichSavedCorrectiveActions(
       ...demoAction,
       ...savedAction,
       relatedParty: savedAction.relatedParty ?? demoAction.relatedParty,
+      relatedPartyId: savedAction.relatedPartyId ?? demoAction.relatedPartyId,
       a3: savedAction.a3 ?? demoAction.a3,
     };
   });
 }
 
-export const demoMeasurementAssets: MeasurementAsset[] = [
+export const demoMeasurementAssets = measurementAssetCatalog;
+
+/** @deprecated Datos de maqueta conservados sólo como referencia de migración. */
+export const legacyMeasurementAssets: MeasurementAsset[] = [
   {
     id: "asset-001",
     code: "EQ-MET-023",
@@ -169,7 +177,8 @@ export const demoMeasurementAssets: MeasurementAsset[] = [
     lastCompletedAt: "2025-07-18",
     nextDueDate: "2026-07-18",
     evidenceCount: 2,
-    standard: "Patrón trazable CENAM",
+    standard: "Calibración de alcance completo bajo ISO/IEC 17025",
+    externalProvider: "Laboratorio acreditado de masa",
   },
   {
     id: "asset-002",
@@ -183,6 +192,7 @@ export const demoMeasurementAssets: MeasurementAsset[] = [
     nextDueDate: "2026-08-02",
     evidenceCount: 8,
     standard: "Placa blanca certificada",
+    referenceStandardId: "standard-white-tile",
   },
   {
     id: "asset-003",
@@ -190,12 +200,13 @@ export const demoMeasurementAssets: MeasurementAsset[] = [
     name: "Termómetro digital de proceso",
     location: "Tintorería",
     owner: "Miguel Nava",
-    activity: "both",
+    activity: "verification",
     frequencyMonths: 6,
     lastCompletedAt: "2026-03-14",
     nextDueDate: "2026-09-14",
     evidenceCount: 4,
     standard: "Termómetro patrón PT-100",
+    referenceStandardId: "standard-pt100",
   },
   {
     id: "asset-004",
@@ -209,6 +220,7 @@ export const demoMeasurementAssets: MeasurementAsset[] = [
     nextDueDate: "2026-08-10",
     evidenceCount: 12,
     standard: "Bloques patrón grado 1",
+    referenceStandardId: "standard-gauge-blocks",
   },
   {
     id: "asset-005",
@@ -216,11 +228,72 @@ export const demoMeasurementAssets: MeasurementAsset[] = [
     name: "Báscula de mesa 30 kg",
     location: "Empaque",
     owner: "Daniel Vega",
-    activity: "calibration",
+    activity: "verification",
     frequencyMonths: 12,
     lastCompletedAt: "2025-08-24",
     nextDueDate: "2026-08-24",
     evidenceCount: 1,
     standard: "Pesas patrón clase F1",
+    referenceStandardId: "standard-f1-weights",
+  },
+  {
+    id: "standard-white-tile",
+    code: "PAT-COL-001",
+    name: "Placa blanca certificada",
+    location: "Laboratorio de color",
+    owner: "Ana Torres",
+    activity: "calibration",
+    frequencyMonths: 12,
+    lastCompletedAt: "2026-01-15",
+    nextDueDate: "2027-01-15",
+    evidenceCount: 3,
+    standard: "Certificado de reflectancia trazable",
+    isReferenceStandard: true,
+    externalProvider: "Laboratorio acreditado de color",
+  },
+  {
+    id: "standard-pt100",
+    code: "PAT-TEM-002",
+    name: "Termómetro patrón PT-100",
+    location: "Laboratorio de calidad",
+    owner: "Laura Campos",
+    activity: "calibration",
+    frequencyMonths: 12,
+    lastCompletedAt: "2026-02-20",
+    nextDueDate: "2027-02-20",
+    evidenceCount: 2,
+    standard: "Certificado de temperatura trazable",
+    isReferenceStandard: true,
+    externalProvider: "Laboratorio acreditado de temperatura",
+  },
+  {
+    id: "standard-gauge-blocks",
+    code: "PAT-DIM-003",
+    name: "Juego de bloques patrón grado 1",
+    location: "Laboratorio de calidad",
+    owner: "Laura Campos",
+    activity: "calibration",
+    frequencyMonths: 12,
+    lastCompletedAt: "2026-04-05",
+    nextDueDate: "2027-04-05",
+    evidenceCount: 4,
+    standard: "Certificado dimensional trazable",
+    isReferenceStandard: true,
+    externalProvider: "Laboratorio acreditado dimensional",
+  },
+  {
+    id: "standard-f1-weights",
+    code: "PAT-MAS-004",
+    name: "Juego de pesas patrón clase F1",
+    location: "Laboratorio de calidad",
+    owner: "José Lara",
+    activity: "calibration",
+    frequencyMonths: 12,
+    lastCompletedAt: "2026-06-12",
+    nextDueDate: "2027-06-12",
+    evidenceCount: 5,
+    standard: "Certificado de masa trazable",
+    isReferenceStandard: true,
+    externalProvider: "Laboratorio acreditado de masa",
   },
 ];

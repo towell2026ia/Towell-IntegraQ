@@ -6,10 +6,16 @@ import {
   createDocumentRevision,
   getDocumentPermissions,
   rejectDocumentVersion,
+  synchronizeAppFormDocuments,
   submitDocumentVersion,
   type DocumentPermissionAssignment,
 } from "@/lib/document-control-data";
+import { appFormCatalog } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
+import {
+  buildSessionFromAccount,
+  createUserAccessAccount,
+} from "@/lib/user-access-data";
 
 const baseSession: ActiveSession = {
   userId: "ADM-001",
@@ -37,7 +43,7 @@ describe("document control permissions", () => {
   });
 
   it("keeps validation separate from upload and edit permissions", () => {
-    const user = { ...baseSession, userId: "USR-001", userType: "Usuario" as const, assignedProcessIds: ["P-08"] };
+    const user = { ...baseSession, userId: "USR-001", userType: "Usuario interno" as const, assignedProcessIds: ["P-08"] };
     const assignments: DocumentPermissionAssignment[] = [{
       userId: user.userId,
       processId: "P-08",
@@ -45,6 +51,45 @@ describe("document control permissions", () => {
     }];
     expect(getDocumentPermissions(user, "P-08", assignments).validate).toBe(false);
     expect(getDocumentPermissions(user, "P-13", assignments).view).toBe(false);
+  });
+
+  it("inherits modifier permissions from a responsible organigram position", () => {
+    const account = createUserAccessAccount({
+      id: "USR-TEJ-001",
+      fullName: "Jefatura de Tejido",
+      email: "tejido@towell.test",
+      userType: "Usuario interno",
+      positionId: "PU-12",
+      createdAt: "2026-08-17T12:00:00.000Z",
+    });
+    const permissions = getDocumentPermissions(
+      buildSessionFromAccount(account!),
+      "P-13",
+      [],
+    );
+    expect(permissions.edit).toBe(true);
+    expect(permissions.submit).toBe(true);
+    expect(permissions.validate).toBe(false);
+  });
+
+  it("inherits authorizer permissions from an approving organigram position", () => {
+    const account = createUserAccessAccount({
+      id: "USR-OPS-001",
+      fullName: "Dirección de Operaciones",
+      email: "operaciones@towell.test",
+      userType: "Usuario interno",
+      positionId: "PU-02",
+      createdAt: "2026-08-17T12:00:00.000Z",
+    });
+    const permissions = getDocumentPermissions(
+      buildSessionFromAccount(account!),
+      "P-13",
+      [],
+    );
+    expect(permissions.view).toBe(true);
+    expect(permissions.validate).toBe(true);
+    expect(permissions.edit).toBe(false);
+    expect(permissions.history).toBe(false);
   });
 });
 
@@ -64,5 +109,20 @@ describe("document revision workflow", () => {
     const pending = buildInitialControlledDocuments().find((item) => item.id === "DOC-P01-PRC-01")!;
     expect(rejectDocumentVersion(pending, "", "2026-08-14T12:00:00.000Z")).toEqual(pending);
     expect(rejectDocumentVersion(pending, "Corregir alcance", "2026-08-14T12:00:00.000Z").versions[0].rejectionReason).toBe("Corregir alcance");
+  });
+
+  it("reflects a form revision in information documented and preserves history", () => {
+    const documents = buildInitialControlledDocuments();
+    const form = appFormCatalog[0];
+    const synchronized = synchronizeAppFormDocuments(documents, [
+      { ...form, name: "Registro comercial actualizado", version: form.version + 1 },
+      ...appFormCatalog.slice(1),
+    ]);
+    const document = synchronized.find((item) => item.appFormId === form.id)!;
+
+    expect(document.name).toBe("Registro comercial actualizado");
+    expect(document.versions[0].revision).toBe(form.version + 1);
+    expect(document.versions[0].status).toBe("current");
+    expect(document.versions.some((version) => version.status === "obsolete")).toBe(true);
   });
 });

@@ -5,8 +5,9 @@ Sistema de Gestion de Calidad. El proyecto organiza procesos, informacion
 documentada, indicadores, auditorias, acciones correctivas y relaciones con
 clientes y proveedores desde una sola interfaz.
 
-> Estado actual: prototipo funcional de frontend. La autenticacion y la
-> persistencia definitiva en Supabase se conectaran en una siguiente etapa.
+> Estado actual: frontend funcional con autenticacion Supabase SSR. La
+> migracion inicial de identidad, organigrama, procesos, permisos y RLS se
+> encuentra en `supabase/migrations`.
 
 ## Modulos disponibles
 
@@ -46,15 +47,19 @@ anterior. El historial completo de versiones se reserva al administrador.
 
 ## Permisos
 
-Existen dos tipos base de usuario:
+Existen cuatro alcances de cuenta:
 
 - `Administrador`: acceso total a modulos, procesos, catalogos, validacion e
   historial documental.
-- `Usuario`: acceso unicamente a procesos y acciones asignados. Consultar,
+- `Usuario interno`: acceso unicamente a procesos y acciones asignados. Consultar,
   cargar, editar, enviar y validar son permisos independientes.
+- `Cliente`: acceso exclusivo al portal y a los registros de su empresa.
+- `Proveedor`: acceso exclusivo al portal y a los registros de su empresa.
 
-Estas reglas ya se aplican en el frontend. Cuando se conecte Supabase tambien
-deberan aplicarse en el servidor mediante politicas RLS y validaciones de API.
+La interfaz consume la sesion resuelta por el servidor. La migracion aplica
+RLS a perfiles, puestos, procesos y permisos; las tablas operativas que se
+incorporen deberan reutilizar el alcance de empresa para aislar clientes y
+proveedores.
 
 ## Tecnologia
 
@@ -86,8 +91,9 @@ INTEGRAQ_AI_ENDPOINT=
 INTEGRAQ_AI_API_KEY=
 
 NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SECRET_KEY=
+NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
 Nunca publiques `.env.local` ni credenciales reales en Git.
@@ -115,6 +121,7 @@ pnpm build
 src/app/                  App Router, estilos globales y API server-to-server
 src/components/           Shell, navegacion y modulos de la aplicacion
 src/lib/                  Catalogos, reglas de acceso, dominio y datos de demo
+supabase/migrations/      Esquema SQL, herencia de permisos y politicas RLS
 public/                   Logotipos y activos publicos
 data/metromap/            Fuente editable del Metro Map
 docs/                     Arquitectura y notas tecnicas
@@ -129,10 +136,10 @@ modulo utiliza una respuesta local identificada como demostracion.
 
 ## Persistencia
 
-El prototipo utiliza datos de demostracion y, en algunos modulos,
-`localStorage`. Supabase sera responsable de autenticacion, Postgres, Storage,
-historial, notificaciones y politicas de acceso cuando comience la etapa de
-backend.
+Supabase ya administra la autenticacion y la sesion mediante cookies SSR. La
+migracion inicial prepara Postgres para perfiles, puestos, procesos, permisos y
+bitacora. Algunos modulos operativos conservan datos de demostracion o
+`localStorage` hasta que se migre su modelo, Storage e historial.
 
 ## Uso
 

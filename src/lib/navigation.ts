@@ -44,7 +44,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   "supplier-portal": { label: "Portal de proveedores", breadcrumb: "Portales", status: "Disponible" },
   "management-review": { label: "Revisión por la Dirección", breadcrumb: "Dirección", status: "Disponible" },
   "continuous-improvement": { label: "Mejora continua", breadcrumb: "Operación", status: "Disponible" },
-  forms: { label: "Formularios y dashboards", breadcrumb: "Configuración", status: "Estructura" },
+  forms: { label: "Formularios y dashboards", breadcrumb: "Configuración", status: "Disponible" },
   "ai-assistant": { label: "IA asistente", breadcrumb: "Plataforma", status: "Pendiente" },
   integrations: { label: "Notificaciones e integraciones", breadcrumb: "Plataforma", status: "Estructura" },
   "data-traceability": { label: "Datos y trazabilidad", breadcrumb: "Plataforma", status: "Estructura" },
@@ -54,4 +54,3 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
 export function isWorkspaceModuleId(value: string): value is WorkspaceModuleId {
   return value in workspaceModuleMeta;
 }
-

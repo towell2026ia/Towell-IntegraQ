@@ -95,10 +95,11 @@ export interface CorrectiveAction {
   rootCause?: string;
   aiDraft?: AiRootCauseDraft;
   relatedParty?: string;
+  relatedPartyId?: string;
   a3?: A3Analysis;
 }
 
-export type MeasurementActivity = "calibration" | "verification" | "both";
+export type MeasurementActivity = "calibration" | "verification";
 
 export interface MeasurementAsset {
   id: string;
@@ -112,6 +113,23 @@ export interface MeasurementAsset {
   nextDueDate: string;
   evidenceCount: number;
   standard: string;
+  isReferenceStandard?: boolean;
+  referenceStandardId?: string;
+  referenceStandardIds?: string[];
+  externalProvider?: string;
+  measurementCategory?: string;
+  measurementType?: string;
+  brand?: string;
+  model?: string;
+  serialNumber?: string;
+  measurementRange?: string;
+  resolution?: string;
+  frequencyDays?: number;
+  calibrationReport?: string;
+  observations?: string;
+  schedulePending?: boolean;
+  sourceDocument?: string;
+  sourceRow?: number;
 }
 
 export type DueStatus = "current" | "due_soon" | "overdue";

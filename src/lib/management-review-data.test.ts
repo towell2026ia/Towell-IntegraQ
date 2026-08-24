@@ -85,7 +85,7 @@ describe("management review aggregation and approvals", () => {
     const operationsSession = {
       ...activeSession,
       userId: "USR-OPS-001",
-      userType: "Usuario" as const,
+      userType: "Usuario interno" as const,
       position: "Dirección de Operaciones",
     };
 
@@ -123,4 +123,3 @@ describe("management review aggregation and approvals", () => {
     expect(history.every((record) => record.approvals.every((approval) => approval.status === "approved"))).toBe(true);
   });
 });
-

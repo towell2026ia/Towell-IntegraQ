@@ -42,11 +42,14 @@ import {
   type Quarter,
 } from "@/lib/indicator-data";
 import {
+  ALL_INDICATOR_AREAS,
   canManageIndicatorCatalog,
   canUpdateIndicatorResult,
+  getDefaultIndicatorArea,
   getAccessibleIndicators,
+  matchesIndicatorArea,
 } from "@/lib/indicator-access";
-import { activeSession } from "@/lib/session-data";
+import type { ActiveSession } from "@/lib/session-data";
 
 type IndicatorView = "dashboard" | "sheet" | "pending" | "catalog" | "submission";
 
@@ -70,6 +73,7 @@ interface IndicatorsModuleProps {
   results: IndicatorResults;
   onDefinitionsChange: (definitions: ConfiguredIndicator[]) => void;
   onResultsChange: (results: IndicatorResults) => void;
+  session: ActiveSession;
 }
 
 export function IndicatorsModule({
@@ -78,30 +82,36 @@ export function IndicatorsModule({
   results,
   onDefinitionsChange,
   onResultsChange,
+  session,
 }: IndicatorsModuleProps) {
-  const canManageCatalog = canManageIndicatorCatalog(activeSession);
+  const canManageCatalog = canManageIndicatorCatalog(session);
   const focusedIndicator = definitions.find((indicator) => indicator.id === focusId);
   const [view, setView] = useState<IndicatorView>("dashboard");
   const [year, setYear] = useState(2026);
-  const [area, setArea] = useState(focusedIndicator?.area ?? activeSession.department);
+  const [area, setArea] = useState(
+    getDefaultIndicatorArea(session, focusedIndicator?.area),
+  );
   const [query, setQuery] = useState(focusedIndicator?.id ?? "");
   const [dashboardQuarter, setDashboardQuarter] = useState<Quarter>("Q2");
   const [pendingQuarter, setPendingQuarter] = useState<Quarter>("Q3");
   const [submission, setSubmission] = useState<SubmissionSelection | null>(null);
 
   const accessibleDefinitions = useMemo(
-    () => getAccessibleIndicators(activeSession, definitions),
-    [definitions],
+    () => getAccessibleIndicators(session, definitions),
+    [definitions, session],
   );
-  const areas = useMemo(() => Array.from(new Set(accessibleDefinitions.map((indicator) => indicator.area))), [accessibleDefinitions]);
+  const areas = useMemo(() => {
+    const assignedAreas = Array.from(new Set(accessibleDefinitions.map((indicator) => indicator.area)));
+    return canManageCatalog ? [ALL_INDICATOR_AREAS, ...assignedAreas] : assignedAreas;
+  }, [accessibleDefinitions, canManageCatalog]);
   const visibleIndicators = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
     return accessibleDefinitions.filter(
       (indicator) =>
-        indicator.area === area &&
+        matchesIndicatorArea(session, indicator, area) &&
         (!normalized || [indicator.id, indicator.name, indicator.leader, indicator.description].some((value) => value.toLocaleLowerCase("es").includes(normalized))),
     );
-  }, [accessibleDefinitions, area, query]);
+  }, [accessibleDefinitions, area, query, session]);
 
   function openSubmission(indicatorId: string, selectedYear: number, quarter: Quarter) {
     if (!accessibleDefinitions.some((indicator) => indicator.id === indicatorId)) return;
@@ -146,6 +156,7 @@ export function IndicatorsModule({
           onResult={(record) => onResultsChange(setIndicatorRecord(results, submission.indicatorId, submission.year, submission.quarter, record))}
           quarter={submission.quarter}
           record={getIndicatorRecord(results, submission.indicatorId, submission.year, submission.quarter)}
+          session={session}
           year={submission.year}
         />
       ) : null}
@@ -183,7 +194,7 @@ function IndicatorDashboard({ area, areas, indicators, onAreaChange, onQueryChan
         <StatusSummary status="noncompliant" value={statusCounts.noncompliant} />
         <StatusSummary status="not_uploaded" value={statusCounts.not_uploaded} />
       </div>
-      <header className="indicator-section-header"><div><p className="module-kicker">Lectura por métrica</p><h3>{area}</h3></div><IndicatorLegend compact /></header>
+      <header className="indicator-section-header"><div><p className="module-kicker">Lectura por métrica</p><h3>{formatIndicatorArea(area)}</h3></div><IndicatorLegend compact /></header>
       {groups.map((group) => (
         <section className="indicator-process-group" key={group.area}>
           <header><div><strong>{group.area}</strong><small>{group.items[0]?.processId}</small></div><span>{group.items.length} indicadores</span></header>
@@ -281,12 +292,12 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
   );
 }
 
-function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => void; quarter: Quarter; record?: IndicatorResultRecord; year: number }) {
+function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => void; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
   const [evidence, setEvidence] = useState<File | null>(null);
   const [saved, setSaved] = useState(false);
   const rule = parseIndicatorMetric(indicator.metric);
   const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
-  const editable = canUpdateIndicatorResult(activeSession, indicator) && canSubmitIndicator(indicator, year, quarter);
+  const editable = canUpdateIndicatorResult(session, indicator) && canSubmitIndicator(indicator, year, quarter);
   const scheduledDate = getIndicatorScheduleDate(indicator, year, quarter);
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -299,7 +310,7 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, yea
       evidenceName: evidence?.name ?? record?.evidenceName,
       evidenceSize: evidence?.size ?? record?.evidenceSize,
       submittedAt: new Date().toISOString(),
-      submittedBy: activeSession.name,
+      submittedBy: session.name,
     });
     setSaved(true);
   }
@@ -412,7 +423,7 @@ function IndicatorEditor({ definitions, indicator, onClose, onSave, year }: { de
 }
 
 function IndicatorToolbar({ area, areas, children, onAreaChange, onQueryChange, onYearChange, query, year }: Omit<SharedViewProps, "indicators" | "results"> & { children: ReactNode }) {
-  return <div className="indicator-toolbar"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar indicador" onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar KPI o responsable" value={query} /></label><label><span>Área o proceso</span><select aria-label="Área o proceso" value={area} onChange={(event) => onAreaChange(event.target.value)}>{areas.map((item) => <option key={item}>{item}</option>)}</select></label><label><span>Año</span><select aria-label="Año" value={year} onChange={(event) => onYearChange(Number(event.target.value))}>{yearOptions.map((item) => <option key={item}>{item}</option>)}</select></label><div className="indicator-toolbar-extra">{children}</div></div>;
+  return <div className="indicator-toolbar"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar indicador" onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar KPI o responsable" value={query} /></label><label><span>Área o proceso</span><select aria-label="Área o proceso" value={area} onChange={(event) => onAreaChange(event.target.value)}>{areas.map((item) => <option key={item} value={item}>{formatIndicatorArea(item)}</option>)}</select></label><label><span>Año</span><select aria-label="Año" value={year} onChange={(event) => onYearChange(Number(event.target.value))}>{yearOptions.map((item) => <option key={item}>{item}</option>)}</select></label><div className="indicator-toolbar-extra">{children}</div></div>;
 }
 
 function IndicatorGauge({ indicator, rule, status, value }: { indicator: ConfiguredIndicator; rule: ReturnType<typeof parseIndicatorMetric>; status: IndicatorStatus; value: number | undefined }) {
@@ -442,4 +453,5 @@ function countStatuses(indicators: ConfiguredIndicator[], results: IndicatorResu
 
 function formatScheduleDate(value: string) { if (!value) return "Sin programar"; return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }
 function formatTimestamp(value: string) { return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)); }
+function formatIndicatorArea(value: string) { return value === ALL_INDICATOR_AREAS ? "Todos los procesos" : value; }
 function csvCell(value: string) { return `"${value.replaceAll('"', '""')}"`; }

@@ -25,11 +25,21 @@ export type SupplierQualityRecord = {
 
 export type SupplierAuditCalendarEvent = {
   id: string;
+  supplierId: string;
   supplierCode: string;
   supplierName: string;
   qualityLevel: number;
   date: string;
   status: "Programada" | "Realizada" | "Pendiente" | "Cancelada";
+};
+
+type SupplierAuditCalendarEventSeed = Omit<
+  SupplierAuditCalendarEvent,
+  "supplierId"
+>;
+
+type SupplierAuditSemesterSeed = Omit<SupplierAuditSemester, "events"> & {
+  events: SupplierAuditCalendarEventSeed[];
 };
 
 export type SupplierAuditSemester = {
@@ -181,7 +191,7 @@ export const supplierQualityCatalog: SupplierQualityRecord[] = supplierSeeds.map
   },
 );
 
-export const supplierAuditSemesters: SupplierAuditSemester[] = [
+const supplierAuditSemesterSeeds: SupplierAuditSemesterSeed[] = [
   {
     id: "semester-1-2026",
     label: "Semestre 1",
@@ -229,6 +239,18 @@ export const supplierAuditSemesters: SupplierAuditSemester[] = [
   },
 ];
 
+export const supplierAuditSemesters: SupplierAuditSemester[] =
+  supplierAuditSemesterSeeds.map((semester) => ({
+    ...semester,
+    events: semester.events.map((event) => ({
+      ...event,
+      supplierId:
+        supplierQualityCatalog.find(
+          (supplier) => supplier.code === event.supplierCode,
+        )?.id ?? "supplier-unassigned",
+    })),
+  }));
+
 export const rncpDashboardSummary = {
   total: 204,
   closed: 158,
@@ -268,13 +290,49 @@ export const rncpDashboardSummary = {
 };
 
 export const externalAuditCalendar = [
-  { id: "AUD-EXT-026", party: "Cliente corporativo A", date: "2026-09-22", scope: "Sistema de calidad", status: "Programada" },
-  { id: "AUD-EXT-027", party: "Cliente exportación B", date: "2026-11-05", scope: "Producto y trazabilidad", status: "Programada" },
-  { id: "AUD-CER-011", party: "Organismo certificador", date: "2027-02-16", scope: "Seguimiento de certificación", status: "Planeada" },
+  { id: "AUD-EXT-026", companyId: "customer-001", party: "Cliente corporativo A", date: "2026-09-22", scope: "Sistema de calidad", status: "Programada" },
+  { id: "AUD-EXT-027", companyId: "customer-002", party: "Cliente exportación B", date: "2026-11-05", scope: "Producto y trazabilidad", status: "Programada" },
+  { id: "AUD-CER-011", companyId: "certifier-001", party: "Organismo certificador", date: "2027-02-16", scope: "Seguimiento de certificación", status: "Planeada" },
 ];
 
 export const activeCertifications = [
-  { name: "ISO 9001", certificate: "Certificado del SGC", validUntil: "2027-06-30" },
-  { name: "OEKO-TEX", certificate: "Standard 100", validUntil: "2027-01-31" },
-  { name: "Certificado fiscal", certificate: "Constancia vigente", validUntil: "2026-12-31" },
+  { name: "ISO 9001", certificate: "Certificado del SGC", validUntil: "2027-06-30", sharedWithCompanyIds: ["customer-001", "customer-002", "customer-003"] },
+  { name: "OEKO-TEX", certificate: "Standard 100", validUntil: "2027-01-31", sharedWithCompanyIds: ["customer-001", "customer-002"] },
+  { name: "Certificado fiscal", certificate: "Constancia vigente", validUntil: "2026-12-31", sharedWithCompanyIds: ["customer-001"] },
+];
+
+export const supplierPortalRncpRecords = [
+  {
+    id: "RNCP0204",
+    companyId: "supplier-022",
+    title: "Hilo 20/2 con mayor torsión",
+    material: "Hilo",
+    date: "2026-08-01",
+    dueDate: "2026-08-14",
+    evidenceCount: 0,
+    status: "En proceso",
+  },
+];
+
+export const supplierPortalAuditResults = [
+  {
+    id: "AUD-PROV-UD-2026",
+    companyId: "supplier-022",
+    score: 87,
+    findings: 3,
+    compliant: 20,
+    nonCompliant: 3,
+    status: "Seguimiento",
+  },
+];
+
+export const supplierPortalPlans = [
+  {
+    id: "PLAN-RNCP0204",
+    companyId: "supplier-022",
+    rncpId: "RNCP0204",
+    dueDate: "2026-08-14",
+    evidenceCount: 0,
+    status: "En tiempo",
+  },
 ];

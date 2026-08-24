@@ -22,7 +22,11 @@ import {
 import type { WorkspaceModuleId } from "@/lib/navigation";
 import type { ManagementReviewRecord } from "@/lib/management-review-data";
 import type { SupplierAuditCalendarEvent } from "@/lib/quality-parties-data";
-import type { ActiveSession } from "@/lib/session-data";
+import {
+  canAccessProcess,
+  isAdministrator,
+  type ActiveSession,
+} from "@/lib/session-data";
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
 
 export type HomePriority = "critical" | "attention" | "normal";
@@ -197,7 +201,7 @@ export function buildHomeDashboard(
   const today = toIsoDate(now);
   const year = now.getFullYear();
   const currentQuarter = quarters[Math.floor(now.getMonth() / 3)] as Quarter;
-  const isAdministrator = sources.session.userType === "Administrador";
+  const hasGlobalAccess = isAdministrator(sources.session);
   const processById = new Map(processCatalog.map((process) => [process.id, process]));
 
   const accessibleDocuments = sources.documents.filter((document) =>
@@ -205,22 +209,22 @@ export function buildHomeDashboard(
   );
   const accessibleActions = sources.actions.filter(
     (action) =>
-      isAdministrator ||
+      hasGlobalAccess ||
       action.owner === sources.session.name ||
       action.area === sources.session.department,
   );
   const accessibleAssets = sources.assets.filter(
     (asset) =>
-      isAdministrator ||
+      hasGlobalAccess ||
       asset.owner === sources.session.name ||
       asset.location === sources.session.department,
   );
   const accessibleIndicators = sources.indicators.filter(
     (indicator) =>
-      isAdministrator || sources.session.assignedProcessIds.includes(indicator.processId),
+      canAccessProcess(sources.session, indicator.processId),
   );
   const canViewAudits =
-    isAdministrator || ["Calidad", "Compras"].includes(sources.session.department);
+    hasGlobalAccess || ["Calidad", "Compras"].includes(sources.session.department);
   const accessibleSupplierAudits = canViewAudits ? sources.supplierAudits : [];
   const accessibleExternalAudits = canViewAudits ? sources.externalAudits : [];
 
@@ -980,9 +984,8 @@ function buildSearchIndex({
   processCatalog
     .filter(
       (process) =>
-        session.userType === "Administrador" ||
-        session.assignedProcessIds.includes(process.id) ||
-        (process.parentId && session.assignedProcessIds.includes(process.parentId)),
+        canAccessProcess(session, process.id) ||
+        (process.parentId && canAccessProcess(session, process.parentId)),
     )
     .forEach((process) => items.push({
       id: process.id,
@@ -1131,4 +1134,3 @@ function normalizeSearchText(value: string) {
     .toLocaleLowerCase("es")
     .trim();
 }
-

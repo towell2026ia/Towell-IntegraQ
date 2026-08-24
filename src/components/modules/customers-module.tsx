@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ClipboardCheck,
   FileCheck2,
-  Link2,
   Plus,
   Search,
   ShieldCheck,
@@ -81,15 +80,6 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
         <QualityMetric icon={<ClipboardCheck size={18} />} label="Reclamos y hallazgos" value={customers.reduce((total, item) => total + item.claims + item.findings, 0)} tone="danger" />
         <QualityMetric icon={<CheckCircle2 size={18} />} label="Acciones abiertas" value={customers.reduce((total, item) => total + item.openActions, 0)} tone="warning" />
         <QualityMetric icon={<CalendarDays size={18} />} label="Auditorías programadas" value={externalAuditCalendar.length} tone="success" />
-      </section>
-
-      <section className="quality-source-note">
-        <Link2 size={18} />
-        <div>
-          <strong>Fuente única: Root2Cause</strong>
-          <p>Reclamos, acciones correctivas y planes de acción se registran una vez. El portal filtra únicamente los registros de la cuenta cliente autenticada.</p>
-        </div>
-        <span>Aislamiento por cliente</span>
       </section>
 
       <div className="quality-view-tabs" aria-label="Vistas de calidad de clientes">

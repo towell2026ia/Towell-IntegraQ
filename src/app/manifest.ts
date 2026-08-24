@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Sistema integrado de gestión de calidad",
     start_url: "/",
     display: "standalone",
-    background_color: "#f4f6f3",
-    theme_color: "#1768ad",
+    background_color: "#071425",
+    theme_color: "#071425",
     lang: "es-MX",
     icons: [
       {
