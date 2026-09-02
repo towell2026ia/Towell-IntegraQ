@@ -4561,6 +4561,65 @@ button:disabled {
 .a3-report-footer span { display: flex; align-items: center; gap: 5px; }
 .portal-report-link { width: fit-content; margin-top: 10px; }
 
+/* Las vistas divididas usan tarjetas independientes; ninguna columna fuerza
+   espacios vacíos para igualar la altura del módulo contiguo. */
+.configuration-layout,
+.documents-layout,
+.party-directory-layout,
+.forms-studio-layout {
+  min-height: 0;
+  align-items: start;
+  gap: 16px;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.configuration-list-panel,
+.configuration-detail-panel,
+.documents-process-panel,
+.documents-detail-panel,
+.party-list-panel,
+.party-detail-panel,
+.forms-catalog-panel,
+.forms-studio-workspace {
+  min-width: 0;
+  align-self: start;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.configuration-list-panel,
+.documents-process-panel,
+.party-list-panel,
+.forms-catalog-panel {
+  background: #fafbfa;
+}
+
+.documents-detail-panel-home {
+  display: grid;
+  gap: 16px;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+.documents-detail-panel-home > .documents-detail-header,
+.documents-detail-panel-home > .documents-detail-section,
+.documents-detail-panel-home > .configuration-actions {
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.documents-detail-panel-home > .department-chart-section { background: #fbfcfb; }
+.documents-detail-panel-home > .configuration-actions { min-height: 54px; align-items: center; }
+
 .sidebar-scrim {
   display: none;
 }
@@ -4681,8 +4740,7 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .organization-list-panel,
-  .documents-process-panel {
+  .organization-list-panel {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
@@ -4727,11 +4785,6 @@ button:disabled {
 
   .party-directory-layout {
     grid-template-columns: 1fr;
-  }
-
-  .party-list-panel {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
   }
 
   .party-list {
@@ -5343,11 +5396,6 @@ button:disabled {
 
   .configuration-layout {
     grid-template-columns: 1fr;
-  }
-
-  .configuration-list-panel {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
   }
 
   .process-list {
@@ -6220,7 +6268,7 @@ button:disabled {
 
 @media (max-width: 900px) {
   .forms-studio-layout { grid-template-columns: 1fr; }
-  .forms-catalog-panel { max-height: 282px; overflow-y: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .forms-catalog-panel { max-height: 282px; overflow-y: auto; }
   .forms-catalog-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .forms-catalog-list button:nth-child(odd) { border-right: 1px solid var(--line); }
   .forms-field-list article { min-width: 760px; }
@@ -6232,7 +6280,7 @@ button:disabled {
   .forms-module-heading { align-items: stretch; flex-direction: column; }
   .forms-heading-actions { align-items: stretch; flex-direction: column; }
   .forms-module-heading .button { width: 100%; }
-  .forms-studio-layout { min-height: 600px; }
+  .forms-studio-layout { min-height: 0; }
   .forms-catalog-list { grid-template-columns: 1fr; }
   .forms-catalog-list button:nth-child(odd) { border-right: 0; }
   .forms-studio-header { min-height: 92px; align-items: flex-start; padding: 14px 16px; }

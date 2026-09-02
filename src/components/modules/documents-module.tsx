@@ -210,7 +210,7 @@ export function DocumentsModule({
           </div>
         </div>
 
-        <div className="documents-detail-panel">
+        <div className={`documents-detail-panel ${documentsView === "process" ? "documents-detail-panel-home" : "documents-detail-panel-focus"}`}>
           {documentsView === "process" ? (
             <ProcessDocumentHome
               process={selected}
