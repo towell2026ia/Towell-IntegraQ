@@ -16,9 +16,10 @@ Para cada proceso se debe definir: `Incluido`, `Solo referencia`, `Integracion` 
 | P-06 | Proceso | | Contabilidad | Circulo de inicio | Por definir | | |
 | P-07 | Proceso | | Tecnologías de Información | Circulo de inicio | Por definir | | |
 | P-08 | Proceso | | Calidad | Circulo de inicio | Por definir | | |
+| P-35 | Proceso | | Sistemas de Gestión de Calidad | Circulo de inicio | Por definir | | Proceso confirmado a partir del circulo de control documental. |
 | P-09 | Proceso | | Almacén | Circulo de inicio | Por definir | | |
 | P-10 | Proceso | | Compras | Circulo de inicio | Por definir | | |
-| P-11 | Proceso | | Patrimonial | Circulo de inicio | Por definir | | |
+| P-11 | Proceso | | Recursos Humanos | Circulo de inicio | Por definir | | |
 | P-12 | Proceso | | Mantenimiento | Circulo de inicio | Por definir | | |
 | P-13 | Proceso | | Tejido | Circulo de inicio | Por definir | | |
 | P-14 | Subproceso | P-13 Tejido | Manufactura Urdido | Circulo de manufactura | Por definir | | |
@@ -51,9 +52,22 @@ Para cada proceso se debe definir: `Incluido`, `Solo referencia`, `Integracion` 
 - `Ventas`: P-33.
 - `PT`: P-28, P-30 y P-32.
 
-## Circulo pendiente de identificar
+## Agrupacion documental confirmada
 
-En la zona izquierda del Metro Map aparece un circulo sin rotulo. Su primera actividad visible es `Control de documentacion dada de alta en el Sistema de Gestion`. El nombre del proceso debe confirmarse antes de incorporarlo al catalogo.
+La organizacion de expedientes documentales es independiente de la jerarquia
+operativa anterior:
+
+- `P-13 Tejido`: P-14, P-15, P-16 y P-19.
+- `P-17 Tintoreria`: P-18, P-19, P-20 y P-21.
+- `P-22 Costura`: P-23, P-24, P-25, P-26 y P-27.
+- `P-34 PT`: P-28, P-29, P-30, P-32 y P-33.
+
+P-19 pertenece a los expedientes de Tejido y Tintoreria. La aplicacion debe
+mostrar el mismo registro documental en ambos, sin duplicar el archivo fuente.
+
+## Proceso de sistema de gestion identificado
+
+El circulo de la zona izquierda cuya primera actividad es `Control de documentacion dada de alta en el Sistema de Gestion` corresponde a `P-35 Sistemas de Gestión de Calidad`.
 
 ## Criterio sugerido
 

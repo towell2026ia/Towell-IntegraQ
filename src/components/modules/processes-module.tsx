@@ -49,6 +49,12 @@ export function ProcessesModule() {
     (process) => process.parentId === selected.id,
   );
   const positionLinks = getPositionsForProcess(selected.id);
+  const processCount = processCatalog.filter((process) => process.level === "process").length;
+  const subprocessCount = processCatalog.length - processCount;
+  const hierarchyCount = processCatalog.filter((process) =>
+    processCatalog.some((candidate) => candidate.parentId === process.id),
+  ).length;
+  const draftCount = processCatalog.filter((process) => process.status === "Borrador").length;
 
   return (
     <>
@@ -59,7 +65,7 @@ export function ProcessesModule() {
           <p>Jerarquía validada del Metro Map, preparada para asignar alcance.</p>
         </div>
         <div className="module-heading-actions">
-          <span className="draft-badge">34 en borrador</span>
+          <span className="draft-badge">{draftCount} en borrador</span>
           <button className="button button-primary" type="button" onClick={() => setEditorOpen(true)}>
             <FilePenLine size={17} /> Editar Metro Map
           </button>
@@ -67,10 +73,10 @@ export function ProcessesModule() {
       </section>
 
       <section className="metric-grid" aria-label="Resumen de procesos">
-        <ProcessMetric label="Procesos" value={20} tone="neutral" />
-        <ProcessMetric label="Subprocesos" value={14} tone="success" />
-        <ProcessMetric label="Jerarquías" value={5} tone="warning" />
-        <ProcessMetric label="Alcance pendiente" value={34} tone="danger" />
+        <ProcessMetric label="Procesos" value={processCount} tone="neutral" />
+        <ProcessMetric label="Subprocesos" value={subprocessCount} tone="success" />
+        <ProcessMetric label="Jerarquías" value={hierarchyCount} tone="warning" />
+        <ProcessMetric label="Alcance pendiente" value={draftCount} tone="danger" />
       </section>
 
       <section className="metromap-source" aria-label="Archivo fuente del Metro Map">

@@ -33,7 +33,12 @@ import {
   getDocumentPermissions,
   type ControlledDocument,
 } from "@/lib/document-control-data";
-import { documentTypeCatalog } from "@/lib/document-data";
+import {
+  documentTypeCatalog,
+  getDocumentProcessIds,
+  getPrimaryDocumentProcessId,
+  isGroupedDocumentProcess,
+} from "@/lib/document-data";
 import {
   serializeFormRecordsToCsv,
   type AppFormDefinition,
@@ -80,7 +85,9 @@ export function DocumentsModule({
 }: DocumentsModuleProps) {
   const focusedDocument = controlledDocuments.find((document) => document.id === focusId);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(focusedDocument?.processId ?? "P-01");
+  const [selectedId, setSelectedId] = useState(
+    getPrimaryDocumentProcessId(focusedDocument?.processId ?? "P-01"),
+  );
   const [documentsView, setDocumentsView] = useState<DocumentsView>(
     focusedDocument?.appFormId ? "form" : focusedDocument ? "type" : "process",
   );
@@ -91,6 +98,7 @@ export function DocumentsModule({
     const normalized = query.trim().toLocaleLowerCase("es");
     return processCatalog.filter(
       (process) =>
+        !isGroupedDocumentProcess(process.id) &&
         getDocumentPermissions(session, process.id).view &&
         (!normalized ||
           [process.id, process.name].some((value) =>
@@ -107,9 +115,10 @@ export function DocumentsModule({
     documentTypeCatalog.find((item) => item.id === selectedTypeId) ??
     documentTypeCatalog[0];
   const selectedPermissions = getDocumentPermissions(session, selected.id);
+  const selectedDocumentProcessIds = getDocumentProcessIds(selected.id);
   const typeDocuments = controlledDocuments.filter(
     (document) =>
-      document.processId === selected.id &&
+      selectedDocumentProcessIds.includes(document.processId) &&
       document.documentTypeId === selectedType.id,
   );
   const selectedForm = forms.find((form) => form.id === selectedFormId) ?? null;
@@ -154,7 +163,7 @@ export function DocumentsModule({
 
       <section className="metric-grid" aria-label="Resumen documental">
         <DocumentMetric icon={<FileText size={18} />} label="Tipos documentales" value={8} tone="neutral" />
-        <DocumentMetric icon={<BookOpenCheck size={18} />} label="Procesos clasificados" value={processCatalog.length} tone="success" />
+        <DocumentMetric icon={<BookOpenCheck size={18} />} label="Expedientes de proceso" value={processCatalog.filter((process) => !isGroupedDocumentProcess(process.id)).length} tone="success" />
         <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={0} tone="warning" />
         <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={forms.filter((form) => form.status === "Activo").length} tone="danger" />
       </section>
@@ -175,8 +184,9 @@ export function DocumentsModule({
           <div className="configuration-count">{filtered.length} procesos</div>
           <div className="document-process-list">
             {filtered.map((process) => {
+              const processIds = getDocumentProcessIds(process.id);
               const documentCount = controlledDocuments.filter(
-                (document) => document.processId === process.id,
+                (document) => processIds.includes(document.processId),
               ).length;
               return (
                 <button
@@ -187,7 +197,9 @@ export function DocumentsModule({
                 >
                   <span>
                     <strong>{process.name}</strong>
-                    <small>{process.id} · {process.level === "process" ? "Proceso" : "Subproceso"}</small>
+                    <small>
+                      {process.id} · {processIds.length > 1 ? "Expediente consolidado" : "Expediente documental"}
+                    </small>
                   </span>
                   <span className="document-count-state">
                     {documentCount} {documentCount === 1 ? "doc" : "docs"}
@@ -203,7 +215,7 @@ export function DocumentsModule({
             <ProcessDocumentHome
               process={selected}
               documents={controlledDocuments.filter(
-                (document) => document.processId === selected.id,
+                (document) => selectedDocumentProcessIds.includes(document.processId),
               )}
               permissions={selectedPermissions}
               onOpenType={openDocumentType}
@@ -257,7 +269,11 @@ function ProcessDocumentHome({
       <header className="documents-detail-header">
         <span className="detail-eyebrow"><Workflow size={14} /> {process.id}</span>
         <h3>{process.name}</h3>
-        <p>{process.level === "process" ? "Proceso" : "Subproceso"} · Expediente documental</p>
+        <p>
+          Proceso · {getDocumentProcessIds(process.id).length > 1
+            ? "Expediente documental consolidado"
+            : "Expediente documental"}
+        </p>
       </header>
 
       <section className="documents-detail-section department-chart-section">

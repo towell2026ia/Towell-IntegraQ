@@ -1,4 +1,5 @@
 import { appFormCatalog, type AppFormDefinition } from "@/lib/form-data";
+import documentImportManifest from "@/lib/document-import-manifest.json";
 import {
   canAccessProcess,
   isAdministrator,
@@ -26,6 +27,13 @@ export interface ControlledDocumentVersion {
   authorizedBy?: string;
   authorizedAt?: string;
   rejectionReason?: string;
+  fileObjectId?: string;
+  storageBucket?: string;
+  storageObjectPath?: string;
+  sourceRelativePath?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  sha256?: string;
 }
 
 export interface ControlledDocument {
@@ -266,7 +274,7 @@ function updateVersion(
   };
 }
 
-const seedDocuments: ControlledDocument[] = [
+const legacySeedDocuments: ControlledDocument[] = [
   makeDocument("DOC-P01-PRO-01", "P-01", "processes", "P-01", "Caracterización del proceso de Ventas", "Gerencia de Ventas", "Francisco Javier Hernández Retana", "Dirección General", "2026-07-18T16:20:00.000Z", 2, "current", true),
   makeDocument("DOC-P01-MAN-01", "P-01", "manuals", "M-VE-01", "Manual comercial", "Gerencia de Ventas", "Ana Sofía Morales", "Dirección de Ventas", "2026-08-06T15:10:00.000Z", 1, "draft"),
   makeDocument("DOC-P01-PRC-01", "P-01", "procedures", "PR-VE-02", "Gestión y seguimiento de pedidos", "Gerencia de Ventas", "Laura Méndez", "Gerencia de Calidad", "2026-08-12T17:35:00.000Z", 3, "pending", true),
@@ -278,12 +286,67 @@ const seedDocuments: ControlledDocument[] = [
   makeDocument("DOC-P16-HOE-01", "P-16", "standard-operation-sheets", "HOE-TE-14", "Arranque de telar", "Jefatura de Tejido", "Jorge Ramírez", "Gerencia de Producción", "2026-06-11T12:15:00.000Z", 2, "current", true),
 ];
 
+const legacySeedDocumentIds = new Set(
+  legacySeedDocuments.map((document) => document.id),
+);
+
+type ImportedDocumentManifestItem = (typeof documentImportManifest)[number];
+
+function makeImportedDocument(
+  imported: ImportedDocumentManifestItem,
+): ControlledDocument {
+  return {
+    id: imported.id,
+    processId: imported.processId,
+    documentTypeId: imported.documentTypeId,
+    code: imported.code,
+    name: imported.name,
+    owner: imported.owner,
+    versions: [{
+      id: imported.versionId,
+      revision: imported.revision,
+      status: "pending",
+      fileName: imported.fileName,
+      uploadedBy: "Carga documental masiva",
+      validator: imported.validator,
+      modifiedAt: imported.modifiedAt,
+      changeReason: "Carga masiva inicial; pendiente de autorización por la jefatura del área",
+      fileObjectId: imported.fileObjectId,
+      sourceRelativePath: imported.sourceRelativePath,
+      storageBucket: imported.storageBucket,
+      storageObjectPath: imported.storageObjectPath,
+      mimeType: imported.mimeType,
+      sizeBytes: imported.sizeBytes,
+      sha256: imported.sha256,
+    }],
+  };
+}
+
+export function buildBulkImportedDocuments(): ControlledDocument[] {
+  return documentImportManifest.map(makeImportedDocument);
+}
+
 export function buildInitialControlledDocuments(): ControlledDocument[] {
   const applicationForms = appFormCatalog.map(makeApplicationFormDocument);
-  return [...seedDocuments, ...applicationForms].map((document) => ({
+  return [...buildBulkImportedDocuments(), ...applicationForms].map((document) => ({
     ...document,
     versions: document.versions.map((version) => ({ ...version })),
   }));
+}
+
+export function mergeInitialControlledDocuments(
+  savedDocuments: ControlledDocument[],
+): ControlledDocument[] {
+  const cleanedSavedDocuments = savedDocuments.filter(
+    (document) =>
+      !legacySeedDocumentIds.has(document.id) &&
+      !document.id.startsWith("DOC-BULK-"),
+  );
+  const savedIds = new Set(cleanedSavedDocuments.map((document) => document.id));
+  return [
+    ...cleanedSavedDocuments,
+    ...buildInitialControlledDocuments().filter((document) => !savedIds.has(document.id)),
+  ];
 }
 
 export function synchronizeAppFormDocuments(

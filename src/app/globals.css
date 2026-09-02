@@ -2037,6 +2037,7 @@ button:disabled {
 
 .document-control-modal { width: min(720px, calc(100vw - 28px)); }
 .document-control-modal form { display: block; }
+.document-upload-error { margin: 0 17px 14px; padding: 10px 12px; border: 1px solid #fecaca; border-radius: 10px; background: #fff1f2; color: #9f1239; font-size: .82rem; }
 .document-modal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; padding: 17px; }
 .document-modal-grid label, .document-reject-modal label { display: flex; min-width: 0; flex-direction: column; gap: 6px; color: var(--muted); font-size: 8px; font-weight: 750; }
 .document-modal-grid label.wide { grid-column: 1 / -1; }
@@ -2057,7 +2058,45 @@ button:disabled {
 .document-file-input small { font-size: 7px; font-weight: 500; }
 .document-control-modal footer, .document-preview-modal > footer, .document-reject-modal footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 17px; background: #f8faf8; border-top: 1px solid var(--line); }
 
-.document-preview-modal { width: min(760px, calc(100vw - 28px)); }
+.document-preview-modal { width: min(1180px, calc(100vw - 28px)); overflow: hidden; }
+.document-preview-modal > footer { align-items: center; }
+.secure-document-preview-body { display: grid; gap: 12px; padding: 14px 18px 18px; background: #f3f6f4; }
+.secure-preview-metadata { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(180px, auto) minmax(140px, auto); align-items: center; gap: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.secure-preview-metadata > span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.secure-preview-metadata strong { color: var(--ink); font-size: 9px; overflow-wrap: anywhere; }
+.secure-preview-metadata small { color: var(--muted); font-size: 7px; }
+.secure-preview-protection { margin-right: auto; color: #527167; font-size: 8px; font-weight: 700; }
+.secure-document-viewer { min-height: 480px; border: 1px solid #cdd6d0; border-radius: 9px; overflow: hidden; background: #e6ebe8; }
+.secure-document-state { display: grid; min-height: 480px; place-items: center; align-content: center; gap: 8px; color: #587067; text-align: center; }
+.secure-document-state strong { color: var(--ink); font-size: 12px; }
+.secure-document-state span { max-width: 440px; font-size: 9px; }
+.secure-document-error { color: #9f1239; background: #fff7f7; }
+.secure-preview-navigation { display: flex; min-height: 38px; align-items: center; justify-content: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid #cdd6d0; background: #fff; }
+.secure-preview-navigation button { display: inline-flex; min-height: 26px; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink); font-size: 8px; font-weight: 700; }
+.secure-preview-navigation button:disabled { opacity: .42; }
+.secure-preview-navigation span { color: var(--muted); font-size: 8px; font-weight: 700; }
+.secure-sheet-tabs { justify-content: flex-start; overflow-x: auto; }
+.secure-sheet-tabs button { white-space: nowrap; }
+.secure-sheet-tabs button.active { border-color: #3b816e; background: #e8f5f0; color: #236251; }
+.secure-preview-viewport { max-height: 62vh; overflow: auto; padding: 18px; }
+.secure-preview-surface { width: max-content; min-width: min(100%, 760px); margin: 0 auto; background: #fff; box-shadow: 0 8px 25px rgb(34 50 41 / 13%); }
+.secure-preview-pdf .secure-preview-surface { min-width: 0; }
+.secure-preview-surface canvas { display: block; max-width: 100%; height: auto; margin: 0 auto; transition: opacity .15s ease; }
+.secure-preview-surface canvas.rendering { opacity: .45; }
+.secure-docx-content { box-sizing: border-box; width: 816px; min-height: 1056px; padding: 72px 76px; color: #161b18; font-family: Arial, sans-serif; font-size: 11px; line-height: 1.48; overflow-wrap: anywhere; }
+.secure-docx-content img { max-width: 100%; height: auto; }
+.secure-docx-content table { width: 100%; border-collapse: collapse; }
+.secure-docx-content td, .secure-docx-content th { padding: 4px 6px; border: 1px solid #aeb9b2; }
+.secure-docx-content p { margin: 0 0 9px; }
+.secure-sheet-content { padding: 10px; }
+.secure-sheet-content table { border-collapse: collapse; color: #18201b; font-family: Arial, sans-serif; font-size: 9px; }
+.secure-sheet-content td { min-width: 76px; max-width: 240px; padding: 5px 7px; border: 1px solid #cfd7d2; background: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secure-sheet-content tr:first-child td { background: #edf4f1; font-weight: 700; }
+.secure-sheet-content p { margin: 9px 2px 2px; color: #765b15; font-size: 8px; }
+.secure-preview-image .secure-preview-surface { min-width: 0; }
+.secure-preview-surface > img { display: block; max-width: min(100%, 1000px); max-height: 1400px; object-fit: contain; }
+.spin { animation: preview-spin 1s linear infinite; }
+@keyframes preview-spin { to { transform: rotate(360deg); } }
 .document-preview-body { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 18px; padding: 18px; }
 .document-preview-file { display: flex; min-height: 250px; align-items: center; justify-content: center; flex-direction: column; padding: 20px; color: var(--blue); background: #f4f7fa; border: 1px solid #d8e1eb; border-radius: 6px; text-align: center; }
 .document-preview-file strong { max-width: 100%; margin-top: 12px; color: var(--ink); font-size: 9px; overflow-wrap: anywhere; }
@@ -4884,6 +4923,11 @@ button:disabled {
   .document-preview-body { grid-template-columns: 1fr; }
   .document-preview-file { min-height: 170px; }
   .document-preview-body dl > div { grid-template-columns: 112px minmax(0, 1fr); }
+  .secure-document-preview-body { padding: 10px; }
+  .secure-preview-metadata { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .secure-preview-viewport { max-height: 58vh; padding: 8px; }
+  .document-preview-modal > footer { flex-wrap: wrap; }
+  .secure-preview-protection { width: 100%; }
   .document-history-list article { grid-template-columns: 58px minmax(0, 1fr) 30px; }
   .document-history-list article > .document-status { grid-column: 2; justify-self: start; }
   .document-history-list article > button { grid-column: 3; grid-row: 1 / span 2; }

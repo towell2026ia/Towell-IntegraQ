@@ -57,9 +57,14 @@ import {
 } from "@/lib/access-policy";
 import {
   buildInitialControlledDocuments,
+  mergeInitialControlledDocuments,
   synchronizeAppFormDocuments,
   type ControlledDocument,
 } from "@/lib/document-control-data";
+import {
+  loadStoredControlledDocuments,
+  mergeStoredControlledDocuments,
+} from "@/lib/document-storage";
 import {
   appFormCatalog,
   normalizeAppForms,
@@ -224,7 +229,7 @@ export function IntegraQWorkspace({
           ? normalizeAppForms(JSON.parse(savedForms) as AppFormDefinition[])
           : normalizeAppForms(appFormCatalog);
         const hydratedDocuments = savedDocuments
-          ? (JSON.parse(savedDocuments) as ControlledDocument[])
+          ? mergeInitialControlledDocuments(JSON.parse(savedDocuments) as ControlledDocument[])
           : buildInitialControlledDocuments();
         setForms(hydratedForms);
         setControlledDocuments(
@@ -269,6 +274,25 @@ export function IntegraQWorkspace({
     if (!storageReady) return;
     window.localStorage.setItem("integraq.controlledDocuments.v1", JSON.stringify(controlledDocuments));
   }, [controlledDocuments, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    let active = true;
+    void loadStoredControlledDocuments()
+      .then((storedDocuments) => {
+        if (active) {
+          setControlledDocuments((current) =>
+            mergeStoredControlledDocuments(current, storedDocuments),
+          );
+        }
+      })
+      .catch(() => {
+        // El manifiesto local conserva la consulta si Supabase no está disponible.
+      });
+    return () => {
+      active = false;
+    };
+  }, [storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;

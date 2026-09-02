@@ -31,6 +31,7 @@ export const organizationPositions: OrganizationPosition[] = [
       { processId: "P-03", relationship: "owner" },
       { processId: "P-04", relationship: "approver" },
       { processId: "P-08", relationship: "approver" },
+      { processId: "P-35", relationship: "approver" },
     ],
   },
   {
@@ -114,6 +115,7 @@ export const organizationPositions: OrganizationPosition[] = [
     branch: "Calidad",
     processLinks: [
       { processId: "P-08", relationship: "owner" },
+      { processId: "P-35", relationship: "owner" },
       { processId: "P-33", relationship: "support" },
     ],
   },
@@ -146,7 +148,7 @@ export const organizationPositions: OrganizationPosition[] = [
     level: 3,
     parentId: "PU-04",
     branch: "Finanzas",
-    processLinks: [],
+    processLinks: [{ processId: "P-11", relationship: "owner" }],
   },
   {
     id: "PU-11",
@@ -209,6 +211,7 @@ export const organizationPositions: OrganizationPosition[] = [
     branch: "Calidad",
     processLinks: [
       { processId: "P-08", relationship: "participant" },
+      { processId: "P-35", relationship: "participant" },
       { processId: "P-13", relationship: "support" },
       { processId: "P-17", relationship: "support" },
       { processId: "P-22", relationship: "support" },

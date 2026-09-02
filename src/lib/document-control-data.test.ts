@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   approveDocumentVersion,
+  buildBulkImportedDocuments,
   buildInitialControlledDocuments,
   createDocumentRevision,
   getDocumentPermissions,
@@ -95,7 +96,7 @@ describe("document control permissions", () => {
 
 describe("document revision workflow", () => {
   it("submits and approves a revision while obsoleting the former current version", () => {
-    const source = buildInitialControlledDocuments().find((item) => item.id === "DOC-P01-PRO-01")!;
+    const source = buildInitialControlledDocuments().find((item) => item.appFormId)!;
     const draft = createDocumentRevision(source, "Editor", "2026-08-14T10:00:00.000Z");
     const pending = submitDocumentVersion(draft, "2026-08-14T11:00:00.000Z");
     const approved = approveDocumentVersion(pending, "Validador", "2026-08-14T12:00:00.000Z");
@@ -106,9 +107,19 @@ describe("document revision workflow", () => {
   });
 
   it("requires a rejection comment", () => {
-    const pending = buildInitialControlledDocuments().find((item) => item.id === "DOC-P01-PRC-01")!;
+    const pending = buildBulkImportedDocuments()[0];
     expect(rejectDocumentVersion(pending, "", "2026-08-14T12:00:00.000Z")).toEqual(pending);
     expect(rejectDocumentVersion(pending, "Corregir alcance", "2026-08-14T12:00:00.000Z").versions[0].rejectionReason).toBe("Corregir alcance");
+  });
+
+  it("loads every source document as pending area authorization", () => {
+    const imported = buildBulkImportedDocuments();
+
+    expect(imported).toHaveLength(465);
+    expect(imported.every((document) =>
+      document.versions.every((version) => version.status === "pending"),
+    )).toBe(true);
+    expect(new Set(imported.map((document) => document.id)).size).toBe(465);
   });
 
   it("reflects a form revision in information documented and preserves history", () => {
