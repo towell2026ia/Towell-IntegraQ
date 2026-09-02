@@ -11,6 +11,14 @@ const manifestPath = path.join(projectRoot, "src", "lib", "document-import-manif
 const applyImport = process.argv.includes("--apply");
 const checkOnly = process.argv.includes("--check");
 
+function argumentValue(name) {
+  const argument = process.argv.find((value) => value.startsWith(`${name}=`));
+  return argument?.slice(name.length + 1) || null;
+}
+
+const requestedProcessId = argumentValue("--process");
+const requestedDocumentTypeId = argumentValue("--document-type");
+
 function readEnvironment(source) {
   return Object.fromEntries(
     source
@@ -72,7 +80,14 @@ if (!supabaseUrl || !secretKey) {
 const supabase = createClient(supabaseUrl, secretKey, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
-const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const completeManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+const manifest = completeManifest.filter((document) =>
+  (!requestedProcessId || document.processId === requestedProcessId)
+  && (!requestedDocumentTypeId || document.documentTypeId === requestedDocumentTypeId),
+);
+if (!manifest.length) {
+  throw new Error("El filtro solicitado no contiene documentos para importar.");
+}
 
 if (checkOnly) {
   const probe = await fetch(`${supabaseUrl}/rest/v1/processes?select=id&limit=1`, {
@@ -129,6 +144,9 @@ const appQueryProbe = await assertNoError(
 
 const summary = {
   mode: checkOnly ? "check" : applyImport ? "apply" : "dry-run",
+  requestedProcessId,
+  requestedDocumentTypeId,
+  catalogDocuments: completeManifest.length,
   manifestDocuments: manifest.length,
   currentDocuments: currentDocuments.length,
   matchingManifestIds,

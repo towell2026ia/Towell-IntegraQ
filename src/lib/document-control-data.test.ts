@@ -115,11 +115,14 @@ describe("document revision workflow", () => {
   it("loads every source document as pending area authorization", () => {
     const imported = buildBulkImportedDocuments();
 
-    expect(imported).toHaveLength(465);
+    expect(imported).toHaveLength(528);
     expect(imported.every((document) =>
       document.versions.every((version) => version.status === "pending"),
     )).toBe(true);
-    expect(new Set(imported.map((document) => document.id)).size).toBe(465);
+    expect(new Set(imported.map((document) => document.id)).size).toBe(528);
+    expect(imported.filter((document) =>
+      document.processId === "P-08" && document.documentTypeId === "forms",
+    )).toHaveLength(63);
   });
 
   it("reflects a form revision in information documented and preserves history", () => {
