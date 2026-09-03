@@ -95,6 +95,11 @@ import {
 } from "@/lib/navigation";
 import { isExternalUser, type ActiveSession } from "@/lib/session-data";
 import {
+  loadRiskWorkspace,
+  saveRiskWorkspace,
+  startRiskAnalysis,
+} from "@/lib/risk-workspace-storage";
+import {
   activeCertifications,
   customerQualityCatalog,
   externalAuditCalendar,
@@ -105,6 +110,7 @@ import {
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
 import {
   buildInitialRiskWorkspace,
+  normalizeRiskWorkspace,
   type RiskWorkspaceState,
 } from "@/lib/risk-opportunity-data";
 
@@ -193,6 +199,7 @@ export function IntegraQWorkspace({
     buildInitialImprovementProjects,
   );
   const [storageReady, setStorageReady] = useState(false);
+  const [riskServerReady, setRiskServerReady] = useState(false);
 
   useEffect(() => {
     const syncModuleFromHash = () => {
@@ -246,7 +253,7 @@ export function IntegraQWorkspace({
         );
         if (savedDefinitions) setIndicatorDefinitions(normalizeConfiguredIndicators(JSON.parse(savedDefinitions) as ConfiguredIndicator[]));
         if (savedResults) setIndicatorResults(JSON.parse(savedResults) as IndicatorResults);
-        if (savedRiskWorkspace) setRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState);
+        if (savedRiskWorkspace) setRiskWorkspace(normalizeRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState));
         if (savedManagementReviews) {
           setManagementReviews(JSON.parse(savedManagementReviews) as ManagementReviewRecord[]);
         } else if (savedManagementReview) {
@@ -319,6 +326,29 @@ export function IntegraQWorkspace({
     if (!storageReady) return;
     window.localStorage.setItem("integraq.riskWorkspace.v1", JSON.stringify(riskWorkspace));
   }, [riskWorkspace, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady || isExternalUser(session)) return;
+    let active = true;
+    void loadRiskWorkspace()
+      .then(({ state }) => {
+        if (!active) return;
+        setRiskWorkspace(normalizeRiskWorkspace(state));
+        setRiskServerReady(true);
+      })
+      .catch(() => {
+        if (active) setRiskServerReady(false);
+      });
+    return () => { active = false; };
+  }, [session, storageReady]);
+
+  useEffect(() => {
+    if (!riskServerReady || isExternalUser(session)) return;
+    const timer = window.setTimeout(() => {
+      void saveRiskWorkspace(riskWorkspace).catch(() => setRiskServerReady(false));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [riskServerReady, riskWorkspace, session]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -498,7 +528,7 @@ export function IntegraQWorkspace({
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
-          {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} session={session} state={riskWorkspace} /> : null}
+          {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}

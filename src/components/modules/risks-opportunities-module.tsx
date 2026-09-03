@@ -32,6 +32,8 @@ import {
   riskTabs,
   riskTreatmentCatalog,
   type CrossContribution,
+  type DirectionCandidate,
+  type DirectionCandidateKind,
   type RiskRecord,
   type RiskTab,
   type RiskWorkspaceState,
@@ -74,16 +76,21 @@ interface Props {
   indicators: ConfiguredIndicator[];
   indicatorResults: IndicatorResults;
   onChange: (state: RiskWorkspaceState) => void;
+  onActivate: () => Promise<{ state: RiskWorkspaceState; notifiedUsers: number; processCount: number; uncoveredProcessIds: string[] }>;
   onNavigateToIndicators: (indicatorId?: string) => void;
+  serverConnected: boolean;
   session: ActiveSession;
   state: RiskWorkspaceState;
 }
 
-export function RisksOpportunitiesModule({ indicators, indicatorResults, onChange, onNavigateToIndicators, session, state }: Props) {
+export function RisksOpportunitiesModule({ indicators, indicatorResults, onActivate, onChange, onNavigateToIndicators, serverConnected, session, state }: Props) {
   const [tab, setTab] = useState<RiskTab>("summary");
   const [processId, setProcessId] = useState(() => accessibleProcesses(session)[0]?.id ?? masterProcesses[0]?.id ?? "P-01");
   const [riskEditorOpen, setRiskEditorOpen] = useState(false);
   const [contributionEditorOpen, setContributionEditorOpen] = useState(false);
+  const [activationMessage, setActivationMessage] = useState("");
+  const [activationError, setActivationError] = useState("");
+  const [activating, setActivating] = useState(false);
   const canEdit = canPerformModuleAction(session, "risks", "update");
   const allowedProcessIds = new Set(accessibleProcesses(session).map((process) => process.id));
   const visibleRisks = state.risks.filter((risk) => isAdministrator(session) || allowedProcessIds.has(risk.processId));
@@ -96,7 +103,7 @@ export function RisksOpportunitiesModule({ indicators, indicatorResults, onChang
     <div className="risk-module">
       <section className="module-heading risk-module-heading">
         <div><p className="module-kicker">Planeación, contexto y control</p><h2>Riesgos y oportunidades</h2><p>Estrategia de Dirección, FODA colaborativo, SO/SOD, tratamientos y eficacia en un solo expediente.</p></div>
-        <div className="risk-heading-meta"><span className="risk-cycle"><CalendarClock size={16} /><small>Ciclo</small><strong>{state.cycle}</strong></span><span className={`risk-cycle-status ${state.cycleStatus}`}>{state.cycleStatus === "preparation" ? "Histórico en preparación" : state.cycleStatus === "active" ? "Vigente" : "Cerrado"}</span></div>
+        <div className="risk-heading-meta"><span className={`risk-storage-status ${serverConnected ? "connected" : "local"}`}>{serverConnected ? "Conectado a Supabase" : "Copia local"}</span><span className="risk-cycle"><CalendarClock size={16} /><small>Ciclo</small><strong>{state.cycle}</strong></span><span className={`risk-cycle-status ${state.cycleStatus}`}>{state.cycleStatus === "preparation" ? "Histórico en preparación" : state.cycleStatus === "active" ? "Vigente" : "Cerrado"}</span></div>
       </section>
 
       <nav className="risk-tabs" aria-label="Vistas de riesgos y oportunidades">
@@ -104,7 +111,7 @@ export function RisksOpportunitiesModule({ indicators, indicatorResults, onChang
       </nav>
 
       {tab === "summary" ? <RiskSummary critical={critical} overdue={overdue} pendingContributions={pendingContributions} state={state} visibleRisks={visibleRisks} withoutDetection={withoutDetection} /> : null}
-      {tab === "direction" ? <DirectionView state={state} /> : null}
+      {tab === "direction" ? <DirectionView activationError={activationError} activationMessage={activationMessage} activating={activating} canEdit={isAdministrator(session)} onActivate={async () => { setActivationError(""); setActivationMessage(""); setActivating(true); try { const result = await onActivate(); setActivationMessage(`Análisis iniciado para ${result.processCount} procesos. ${result.notifiedUsers} usuarios recibieron la notificación.${result.uncoveredProcessIds.length ? ` Sin responsable directo: ${result.uncoveredProcessIds.join(", ")}.` : ""}`); } catch (error) { setActivationError(error instanceof Error ? error.message : "No fue posible iniciar el análisis."); } finally { setActivating(false); } }} onChange={onChange} serverConnected={serverConnected} state={state} /> : null}
       {tab === "okr" ? <OkrView indicators={indicators} indicatorResults={indicatorResults} onNavigate={onNavigateToIndicators} processIds={[...allowedProcessIds]} /> : null}
       {tab === "swot" ? <SwotView canEdit={canEdit} onChange={onChange} processId={processId} setProcessId={setProcessId} session={session} state={state} /> : null}
       {tab === "matrix" ? <RiskMatrix canEdit={canEdit} onAdd={() => setRiskEditorOpen(true)} risks={visibleRisks} /> : null}
@@ -135,8 +142,12 @@ function RiskSummary({ critical, overdue, pendingContributions, state, visibleRi
   </div>;
 }
 
-function DirectionView({ state }: { state: RiskWorkspaceState }) {
-  return <div className="risk-view-stack"><section className="work-panel risk-direction-intro"><div><FileWarning size={21} /><span><strong>Fuente histórica 2025 en preparación</strong><p>Los textos originales se conservan. Las metas ambiguas no se convierten automáticamente en OKR vigentes.</p></span></div><span>{state.importIssues.filter((issue) => issue.status === "pending").length} incidencias por resolver</span></section><section className="work-panel"><div className="risk-section-heading"><div><p className="module-kicker">Matriz estratégica</p><h3>12 ejes encontrados en la fuente</h3></div><span className="count-badge">{state.axes.length}</span></div><div className="strategy-axis-list">{state.axes.map((axis) => <article key={axis.id}><code>{axis.id}</code><span><strong>{axis.title}</strong><small>Origen: {axis.sourceCell}</small></span><span className="axis-target"><small>Meta original</small><strong>{axis.originalTarget}</strong></span><span className={`risk-status status-${axis.status}`}>{axis.status === "review" ? "Requiere definición" : "Lista para revisar"}</span></article>)}</div></section></div>;
+function DirectionView({ activationError, activationMessage, activating, canEdit, onActivate, onChange, serverConnected, state }: { activationError: string; activationMessage: string; activating: boolean; canEdit: boolean; onActivate: () => Promise<void>; onChange: (state: RiskWorkspaceState) => void; serverConnected: boolean; state: RiskWorkspaceState }) {
+  const [query, setQuery] = useState("");
+  const [kind, setKind] = useState<DirectionCandidateKind | "all">("all");
+  const candidates = (state.directionCandidates ?? []).filter((item) => (kind === "all" || item.classification === kind) && (!query.trim() || [item.description, item.controlPoint, item.responsibleLabel, String(item.sourceRow)].some((value) => value.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")))));
+  function updateCandidate(id: string, patch: Partial<DirectionCandidate>) { onChange({ ...state, directionCandidates: (state.directionCandidates ?? []).map((item) => item.id === id ? { ...item, ...patch, reviewStatus: patch.classification && patch.classification !== "pending" ? "ready" : item.reviewStatus } : item) }); }
+  return <div className="risk-view-stack"><section className="work-panel risk-direction-intro"><div><FileWarning size={21} /><span><strong>Matriz de Dirección 2025 cargada como base</strong><p>Se conservaron 12 ejes y 74 renglones con responsable, punto de control, marcas R/O, ponderaciones y avance histórico.</p></span></div><span>{state.importIssues.filter((issue) => issue.status === "pending").length} incidencias por resolver</span></section>{canEdit ? <section className="work-panel direction-launch-panel"><div><Target size={21} /><span><strong>Despliegue anual a procesos</strong><p>Al iniciar, IntegraQ notificará una sola vez a los responsables para elaborar FODA, FODA cruzado, riesgos y matriz de operaciones.</p></span></div><button className="button button-primary" disabled={!serverConnected || activating} onClick={() => void onActivate()} type="button">{activating ? "Enviando…" : state.cycleStatus === "active" ? "Reenviar a nuevos responsables" : "Iniciar análisis en 18 procesos"}</button>{activationMessage ? <p className="launch-result success">{activationMessage}</p> : null}{activationError ? <p className="launch-result error">{activationError}</p> : null}</section> : null}<section className="work-panel"><div className="risk-section-heading"><div><p className="module-kicker">Matriz estratégica</p><h3>12 ejes encontrados en la fuente</h3></div><span className="count-badge">{state.axes.length}</span></div><div className="strategy-axis-list">{state.axes.map((axis) => <article key={axis.id}><code>{axis.id}</code><span><strong>{axis.title}</strong><small>Origen: {axis.sourceCell}</small></span><span className="axis-target"><small>Meta original</small><strong>{axis.originalTarget}</strong></span><span className={`risk-status status-${axis.status}`}>{axis.status === "review" ? "Requiere definición" : "Lista para revisar"}</span></article>)}</div></section><section className="work-panel direction-candidates-panel"><div className="risk-section-heading"><div><p className="module-kicker">Preparación por Dirección</p><h3>Renglones históricos para clasificar y asignar</h3></div><span>{candidates.length} de {(state.directionCandidates ?? []).length}</span></div><div className="direction-candidate-toolbar"><label className="panel-search"><input aria-label="Buscar en matriz de Dirección" placeholder="Buscar descripción, control o responsable" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select aria-label="Filtrar clasificación" value={kind} onChange={(event) => setKind(event.target.value as DirectionCandidateKind | "all")}><option value="all">Todas las clasificaciones</option><option value="pending">Pendiente</option><option value="objective">Objetivo</option><option value="key_result">Resultado clave</option><option value="risk">Riesgo</option><option value="opportunity">Oportunidad</option><option value="initiative">Iniciativa</option><option value="control">Control</option><option value="activity">Actividad</option></select></div><div className="direction-candidate-list">{candidates.map((item) => <article key={item.id}><span><code>Fila {item.sourceRow}</code><strong>{item.description}</strong><small>{item.controlPoint || "Sin punto de control"} · Responsable original: {item.responsibleLabel || "Sin definir"}</small></span><span className="source-marks"><small>R/O original</small><strong>{item.roPrimary || "—"} / {item.roSecondary || "—"}</strong><small>Avance histórico: {item.historicalProgress === null ? "—" : `${Math.round(item.historicalProgress * 100)}%`}</small></span><label><span>Clasificación</span><select disabled={!canEdit} value={item.classification} onChange={(event) => updateCandidate(item.id, { classification: event.target.value as DirectionCandidateKind })}><option value="pending">Pendiente</option><option value="objective">Objetivo</option><option value="key_result">Resultado clave</option><option value="risk">Riesgo</option><option value="opportunity">Oportunidad</option><option value="initiative">Iniciativa</option><option value="control">Control</option><option value="activity">Actividad</option></select></label><label><span>Proceso responsable</span><select disabled={!canEdit} value={item.processId ?? ""} onChange={(event) => updateCandidate(item.id, { processId: event.target.value || undefined })}><option value="">Por asignar</option>{masterProcesses.map((process) => <option key={process.id} value={process.id}>{process.id} · {process.name}</option>)}</select></label><label><span>Responsable confirmado</span><input defaultValue={item.ownerName ?? ""} disabled={!canEdit} placeholder="Nombre del responsable" onBlur={(event) => updateCandidate(item.id, { ownerName: event.target.value.trim() || undefined })} /></label></article>)}</div></section></div>;
 }
 
 function OkrView({ indicators, indicatorResults, onNavigate, processIds }: { indicators: ConfiguredIndicator[]; indicatorResults: IndicatorResults; onNavigate: (id?: string) => void; processIds: string[] }) {

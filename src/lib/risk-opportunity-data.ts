@@ -1,4 +1,5 @@
 import type { ConfiguredIndicator } from "@/lib/indicator-data";
+import directionSource from "@/lib/risk-direction-source-2025.json";
 
 export const riskTabs = [
   "summary",
@@ -112,6 +113,24 @@ export interface ImportIssue {
   status: "pending" | "resolved";
 }
 
+export type DirectionCandidateKind = "pending" | "objective" | "key_result" | "risk" | "opportunity" | "initiative" | "control" | "activity";
+
+export interface DirectionCandidate {
+  id: string;
+  sourceRow: number;
+  description: string;
+  responsibleLabel: string;
+  controlPoint: string;
+  roPrimary: string;
+  roSecondary: string;
+  historicalProgress: number | null;
+  axisWeights: Array<number | string | null>;
+  classification: DirectionCandidateKind;
+  processId?: string;
+  ownerName?: string;
+  reviewStatus: "pending" | "ready";
+}
+
 export interface RiskWorkspaceState {
   cycle: number;
   cycleStatus: "preparation" | "active" | "closed";
@@ -121,6 +140,7 @@ export interface RiskWorkspaceState {
   actions: RiskAction[];
   contributions: CrossContribution[];
   importIssues: ImportIssue[];
+  directionCandidates: DirectionCandidate[];
 }
 
 const axisSource: Array<[string, string]> = [
@@ -140,7 +160,7 @@ const axisSource: Array<[string, string]> = [
 
 export function buildInitialRiskWorkspace(): RiskWorkspaceState {
   return {
-    cycle: 2025,
+    cycle: new Date().getFullYear(),
     cycleStatus: "preparation",
     axes: axisSource.map(([title, originalTarget], index) => ({
       id: `EJE-${String(index + 1).padStart(2, "0")}`,
@@ -190,6 +210,35 @@ export function buildInitialRiskWorkspace(): RiskWorkspaceState {
       { id: "IMP-004", location: "Matriz de riesgos!M10", value: "31-06-25", issue: "Fecha inválida; se conserva para corrección sin inventar un valor.", status: "pending" },
       { id: "IMP-005", location: "Matriz 2025 ISO!M13", value: "+", issue: "Meta no cuantificada; requiere definición de unidad, base y periodo.", status: "pending" },
     ],
+    directionCandidates: directionSource.rows.map((row) => ({
+      id: `DIR-2025-${String(row.sourceRow).padStart(3, "0")}`,
+      sourceRow: row.sourceRow,
+      description: row.description,
+      responsibleLabel: row.responsibleLabel,
+      controlPoint: row.controlPoint,
+      roPrimary: row.roPrimary,
+      roSecondary: row.roSecondary,
+      historicalProgress: row.historicalProgress,
+      axisWeights: row.weights,
+      classification: "pending",
+      reviewStatus: "pending",
+    })),
+  };
+}
+
+export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null | undefined): RiskWorkspaceState {
+  const baseline = buildInitialRiskWorkspace();
+  if (!value) return baseline;
+  return {
+    ...baseline,
+    ...value,
+    axes: Array.isArray(value.axes) ? value.axes : baseline.axes,
+    swotItems: Array.isArray(value.swotItems) ? value.swotItems : baseline.swotItems,
+    risks: Array.isArray(value.risks) ? value.risks : baseline.risks,
+    actions: Array.isArray(value.actions) ? value.actions : baseline.actions,
+    contributions: Array.isArray(value.contributions) ? value.contributions : baseline.contributions,
+    importIssues: Array.isArray(value.importIssues) ? value.importIssues : baseline.importIssues,
+    directionCandidates: Array.isArray(value.directionCandidates) && value.directionCandidates.length ? value.directionCandidates : baseline.directionCandidates,
   };
 }
 
