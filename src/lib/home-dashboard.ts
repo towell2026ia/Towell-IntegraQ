@@ -21,6 +21,7 @@ import {
 } from "@/lib/indicator-data";
 import type { WorkspaceModuleId } from "@/lib/navigation";
 import type { ManagementReviewRecord } from "@/lib/management-review-data";
+import type { RiskWorkspaceState } from "@/lib/risk-opportunity-data";
 import type { SupplierAuditCalendarEvent } from "@/lib/quality-parties-data";
 import {
   canAccessProcess,
@@ -68,6 +69,7 @@ export interface HomeDashboardSources {
     status: string;
   }>;
   managementReview?: ManagementReviewRecord | null;
+  risks?: RiskWorkspaceState;
 }
 
 export interface HomeDocumentMetric {
@@ -369,6 +371,13 @@ export function buildHomeDashboard(
     today,
     now,
   });
+  const accessibleRisks = (sources.risks?.risks ?? []).filter((risk) => canAccessProcess(sources.session, risk.processId));
+  const accessibleRiskIds = new Set(accessibleRisks.map((risk) => risk.id));
+  const riskPendingTasks: HomeWorkItem[] = [
+    ...accessibleRisks.filter((risk) => (risk.latest ?? risk.initial).level === "CRÍTICO" && risk.status !== "closed").map((risk) => ({ id: `risk-${risk.id}`, title: risk.title, detail: `SO ${(risk.latest ?? risk.initial).so} · requiere seguimiento`, module: "risks" as const, moduleLabel: "Riesgos", priority: "critical" as const, area: processById.get(risk.processId)?.name ?? risk.processId, processId: risk.processId, responsible: risk.owner, status: risk.status, targetId: risk.id })),
+    ...(sources.risks?.actions ?? []).filter((action) => accessibleRiskIds.has(action.riskId) && action.status !== "completed" && action.dueDate < today).map((action) => ({ id: `risk-action-${action.id}`, title: action.title, detail: `Acción de riesgo vencida · ${action.riskId}`, module: "risks" as const, moduleLabel: "Riesgos", priority: "attention" as const, dueDate: action.dueDate, area: "Riesgos y oportunidades", responsible: action.owner, status: action.status, targetId: action.riskId })),
+  ];
+  const allPendingTasks = [...pendingTasks, ...riskPendingTasks];
 
   const informativeAlerts: HomeAlert[] = reviewedThisWeek
     .filter((document) => getWorkingVersion(document)?.status === "current")
@@ -387,7 +396,7 @@ export function buildHomeDashboard(
       status: "current",
     }));
   const alerts: HomeAlert[] = [
-    ...pendingTasks
+    ...allPendingTasks
       .filter((item) => item.priority !== "normal")
       .map((item) => ({
         ...item,
@@ -482,6 +491,8 @@ export function buildHomeDashboard(
   const pendingIndicatorCaptures = pendingTasks.filter(
     (item) => item.module === "indicators",
   ).length;
+  const criticalRisks = accessibleRisks.filter((risk) => (risk.latest ?? risk.initial).level === "CRÍTICO" && risk.status !== "closed").length;
+  const pendingRiskActions = (sources.risks?.actions ?? []).filter((action) => accessibleRiskIds.has(action.riskId) && action.status !== "completed").length;
   const moduleStatus: HomeModuleStatus[] = [
     {
       id: "documents",
@@ -495,11 +506,11 @@ export function buildHomeDashboard(
     {
       id: "risks",
       label: "Riesgos",
-      value: "Fuente pendiente",
-      detail: "Sin registros disponibles",
-      tone: "neutral",
+      value: `${criticalRisks} críticos`,
+      detail: `${pendingRiskActions} acciones abiertas`,
+      tone: criticalRisks > 0 ? "danger" : "success",
       module: "risks",
-      sourceConnected: false,
+      sourceConnected: Boolean(sources.risks),
     },
     {
       id: "corrective-actions",
@@ -660,7 +671,7 @@ export function buildHomeDashboard(
   return {
     generatedAt: now.toISOString(),
     documentMetrics,
-    pendingTasks,
+    pendingTasks: allPendingTasks,
     alerts,
     kpis,
     moduleStatus,

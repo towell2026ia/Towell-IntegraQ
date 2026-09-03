@@ -34,4 +34,11 @@ describe("user and access matrix", () => {
       level: "process",
     });
   });
+
+  it("uses the 18 existing master processes for strategic deployment", () => {
+    expect(processCatalog.filter((process) => process.level === "process")).toHaveLength(18);
+    expect(processCatalog.find((process) => process.id === "P-18")).toMatchObject({ level: "subprocess", parentId: "P-17" });
+    expect(processCatalog.find((process) => process.id === "P-23")).toMatchObject({ level: "subprocess", parentId: "P-22" });
+    expect(processCatalog.find((process) => process.id === "P-24")).toMatchObject({ level: "subprocess", parentId: "P-22" });
+  });
 });

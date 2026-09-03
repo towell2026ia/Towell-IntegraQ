@@ -42,6 +42,7 @@ import { ManagementReviewModule } from "@/components/modules/management-review-m
 import { ModulePlaceholder } from "@/components/modules/module-placeholder";
 import { OrganizationModule } from "@/components/modules/organization-module";
 import { ProcessesModule } from "@/components/modules/processes-module";
+import { RisksOpportunitiesModule } from "@/components/modules/risks-opportunities-module";
 import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal-module";
 import { SuppliersModule } from "@/components/modules/suppliers-module";
 import {
@@ -102,6 +103,10 @@ import {
   supplierQualityCatalog,
 } from "@/lib/quality-parties-data";
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
+import {
+  buildInitialRiskWorkspace,
+  type RiskWorkspaceState,
+} from "@/lib/risk-opportunity-data";
 
 const navigationGroups = [
   {
@@ -178,6 +183,9 @@ export function IntegraQWorkspace({
   const [indicatorResults, setIndicatorResults] = useState<IndicatorResults>(
     buildInitialIndicatorResults,
   );
+  const [riskWorkspace, setRiskWorkspace] = useState<RiskWorkspaceState>(
+    buildInitialRiskWorkspace,
+  );
   const [managementReviews, setManagementReviews] = useState<ManagementReviewRecord[]>(
     buildDemoManagementReviewHistory,
   );
@@ -214,6 +222,7 @@ export function IntegraQWorkspace({
         const savedForms = window.localStorage.getItem("integraq.appForms.v1");
         const savedDefinitions = window.localStorage.getItem("integraq.indicatorDefinitions.v3") ?? window.localStorage.getItem("integraq.indicatorDefinitions.v2");
         const savedResults = window.localStorage.getItem("integraq.indicatorResults.v3") ?? window.localStorage.getItem("integraq.indicatorResults.v2");
+        const savedRiskWorkspace = window.localStorage.getItem("integraq.riskWorkspace.v1");
         const savedManagementReviews = window.localStorage.getItem("integraq.managementReviews.v2");
         const savedManagementReview = window.localStorage.getItem("integraq.managementReview.v1");
         const savedImprovementProjects = window.localStorage.getItem("integraq.improvementProjects.v2") ?? window.localStorage.getItem("integraq.improvementProjects.v1");
@@ -237,6 +246,7 @@ export function IntegraQWorkspace({
         );
         if (savedDefinitions) setIndicatorDefinitions(normalizeConfiguredIndicators(JSON.parse(savedDefinitions) as ConfiguredIndicator[]));
         if (savedResults) setIndicatorResults(JSON.parse(savedResults) as IndicatorResults);
+        if (savedRiskWorkspace) setRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState);
         if (savedManagementReviews) {
           setManagementReviews(JSON.parse(savedManagementReviews) as ManagementReviewRecord[]);
         } else if (savedManagementReview) {
@@ -307,6 +317,11 @@ export function IntegraQWorkspace({
 
   useEffect(() => {
     if (!storageReady) return;
+    window.localStorage.setItem("integraq.riskWorkspace.v1", JSON.stringify(riskWorkspace));
+  }, [riskWorkspace, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
     window.localStorage.setItem("integraq.managementReviews.v2", JSON.stringify(managementReviews));
   }, [managementReviews, storageReady]);
 
@@ -335,8 +350,9 @@ export function IntegraQWorkspace({
       supplierAudits: supplierAuditSemesters.flatMap((semester) => semester.events),
       externalAudits: externalAuditCalendar,
       managementReview: currentManagementReview,
+      risks: riskWorkspace,
     }),
-    [actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, session],
+    [actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
   );
   const managementReviewSources = useMemo(
     () => ({
@@ -482,6 +498,7 @@ export function IntegraQWorkspace({
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
+          {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} session={session} state={riskWorkspace} /> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
@@ -490,7 +507,7 @@ export function IntegraQWorkspace({
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
-          {!["home", "processes", "organization", "access", "documents", "forms", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
         </main>
       </div>
 

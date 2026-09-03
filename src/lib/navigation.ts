@@ -33,7 +33,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   organization: { label: "Organización y puestos", breadcrumb: "Configuración", status: "Disponible" },
   access: { label: "Usuarios y acceso", breadcrumb: "Configuración", status: "Disponible" },
   documents: { label: "Información documentada", breadcrumb: "Operación", status: "Disponible" },
-  risks: { label: "Riesgos y oportunidades", breadcrumb: "Operación", status: "Estructura" },
+  risks: { label: "Riesgos y oportunidades", breadcrumb: "Operación", status: "Disponible" },
   indicators: { label: "Objetivos e indicadores", breadcrumb: "Operación", status: "Disponible" },
   audits: { label: "Auditorías", breadcrumb: "Operación", status: "Estructura" },
   "audit-app": { label: "App de auditorías", breadcrumb: "Operación", status: "Pendiente" },
