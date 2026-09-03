@@ -13,11 +13,14 @@ import {
   LayoutDashboard,
   ListChecks,
   MessageSquareText,
+  Pencil,
   Plus,
   Save,
   Settings2,
   ShieldAlert,
   Target,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { type FormEvent, useState } from "react";
@@ -25,6 +28,7 @@ import { type FormEvent, useState } from "react";
 import { processCatalog } from "@/lib/configuration-data";
 import type { ConfiguredIndicator, IndicatorResults } from "@/lib/indicator-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
+import { directionCandidateFingerprint, parseDirectionImportRows, type DirectionImportCell } from "@/lib/risk-direction-import";
 import {
   buildInitialRiskWorkspace,
   calculateAssessment,
@@ -37,6 +41,7 @@ import {
   type RiskRecord,
   type RiskTab,
   type RiskWorkspaceState,
+  type StrategicAxis,
   type SwotQuadrant,
 } from "@/lib/risk-opportunity-data";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
@@ -71,6 +76,7 @@ const quadrantLabels: Record<SwotQuadrant, string> = {
 };
 
 const masterProcesses = processCatalog.filter((process) => process.level === "process");
+const directionKindLabels: Record<DirectionCandidateKind, string> = { pending: "Pendiente", objective: "Objetivo", key_result: "Resultado clave", risk: "Riesgo", opportunity: "Oportunidad", initiative: "Iniciativa", control: "Control", activity: "Actividad" };
 
 interface Props {
   indicators: ConfiguredIndicator[];
@@ -145,9 +151,117 @@ function RiskSummary({ critical, overdue, pendingContributions, state, visibleRi
 function DirectionView({ activationError, activationMessage, activating, canEdit, onActivate, onChange, serverConnected, state }: { activationError: string; activationMessage: string; activating: boolean; canEdit: boolean; onActivate: () => Promise<void>; onChange: (state: RiskWorkspaceState) => void; serverConnected: boolean; state: RiskWorkspaceState }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<DirectionCandidateKind | "all">("all");
-  const candidates = (state.directionCandidates ?? []).filter((item) => (kind === "all" || item.classification === kind) && (!query.trim() || [item.description, item.controlPoint, item.responsibleLabel, String(item.sourceRow)].some((value) => value.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")))));
-  function updateCandidate(id: string, patch: Partial<DirectionCandidate>) { onChange({ ...state, directionCandidates: (state.directionCandidates ?? []).map((item) => item.id === id ? { ...item, ...patch, reviewStatus: patch.classification && patch.classification !== "pending" ? "ready" : item.reviewStatus } : item) }); }
-  return <div className="risk-view-stack"><section className="work-panel risk-direction-intro"><div><FileWarning size={21} /><span><strong>Matriz de Dirección 2025 cargada como base</strong><p>Se conservaron 12 ejes y 74 renglones con responsable, punto de control, marcas R/O, ponderaciones y avance histórico.</p></span></div><span>{state.importIssues.filter((issue) => issue.status === "pending").length} incidencias por resolver</span></section>{canEdit ? <section className="work-panel direction-launch-panel"><div><Target size={21} /><span><strong>Despliegue anual a procesos</strong><p>Al iniciar, IntegraQ notificará una sola vez a los responsables para elaborar FODA, FODA cruzado, riesgos y matriz de operaciones.</p></span></div><button className="button button-primary" disabled={!serverConnected || activating} onClick={() => void onActivate()} type="button">{activating ? "Enviando…" : state.cycleStatus === "active" ? "Reenviar a nuevos responsables" : "Iniciar análisis en 18 procesos"}</button>{activationMessage ? <p className="launch-result success">{activationMessage}</p> : null}{activationError ? <p className="launch-result error">{activationError}</p> : null}</section> : null}<section className="work-panel"><div className="risk-section-heading"><div><p className="module-kicker">Matriz estratégica</p><h3>12 ejes encontrados en la fuente</h3></div><span className="count-badge">{state.axes.length}</span></div><div className="strategy-axis-list">{state.axes.map((axis) => <article key={axis.id}><code>{axis.id}</code><span><strong>{axis.title}</strong><small>Origen: {axis.sourceCell}</small></span><span className="axis-target"><small>Meta original</small><strong>{axis.originalTarget}</strong></span><span className={`risk-status status-${axis.status}`}>{axis.status === "review" ? "Requiere definición" : "Lista para revisar"}</span></article>)}</div></section><section className="work-panel direction-candidates-panel"><div className="risk-section-heading"><div><p className="module-kicker">Preparación por Dirección</p><h3>Renglones históricos para clasificar y asignar</h3></div><span>{candidates.length} de {(state.directionCandidates ?? []).length}</span></div><div className="direction-candidate-toolbar"><label className="panel-search"><input aria-label="Buscar en matriz de Dirección" placeholder="Buscar descripción, control o responsable" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select aria-label="Filtrar clasificación" value={kind} onChange={(event) => setKind(event.target.value as DirectionCandidateKind | "all")}><option value="all">Todas las clasificaciones</option><option value="pending">Pendiente</option><option value="objective">Objetivo</option><option value="key_result">Resultado clave</option><option value="risk">Riesgo</option><option value="opportunity">Oportunidad</option><option value="initiative">Iniciativa</option><option value="control">Control</option><option value="activity">Actividad</option></select></div><div className="direction-candidate-list">{candidates.map((item) => <article key={item.id}><span><code>Fila {item.sourceRow}</code><strong>{item.description}</strong><small>{item.controlPoint || "Sin punto de control"} · Responsable original: {item.responsibleLabel || "Sin definir"}</small></span><span className="source-marks"><small>R/O original</small><strong>{item.roPrimary || "—"} / {item.roSecondary || "—"}</strong><small>Avance histórico: {item.historicalProgress === null ? "—" : `${Math.round(item.historicalProgress * 100)}%`}</small></span><label><span>Clasificación</span><select disabled={!canEdit} value={item.classification} onChange={(event) => updateCandidate(item.id, { classification: event.target.value as DirectionCandidateKind })}><option value="pending">Pendiente</option><option value="objective">Objetivo</option><option value="key_result">Resultado clave</option><option value="risk">Riesgo</option><option value="opportunity">Oportunidad</option><option value="initiative">Iniciativa</option><option value="control">Control</option><option value="activity">Actividad</option></select></label><label><span>Proceso responsable</span><select disabled={!canEdit} value={item.processId ?? ""} onChange={(event) => updateCandidate(item.id, { processId: event.target.value || undefined })}><option value="">Por asignar</option>{masterProcesses.map((process) => <option key={process.id} value={process.id}>{process.id} · {process.name}</option>)}</select></label><label><span>Responsable confirmado</span><input defaultValue={item.ownerName ?? ""} disabled={!canEdit} placeholder="Nombre del responsable" onBlur={(event) => updateCandidate(item.id, { ownerName: event.target.value.trim() || undefined })} /></label></article>)}</div></section></div>;
+  const [candidateEditor, setCandidateEditor] = useState<DirectionCandidate | "new" | null>(null);
+  const [axisEditor, setAxisEditor] = useState<StrategicAxis | "new" | null>(null);
+  const [importMessage, setImportMessage] = useState("");
+  const [importing, setImporting] = useState(false);
+  const candidates = (state.directionCandidates ?? []).filter((item) => (kind === "all" || item.classification === kind) && (!query.trim() || [item.description, item.controlPoint, item.responsibleLabel, item.sourceName ?? "", String(item.sourceRow)].some((value) => value.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")))));
+
+  function updateCandidate(id: string, patch: Partial<DirectionCandidate>) {
+    onChange({ ...state, directionCandidates: (state.directionCandidates ?? []).map((item) => item.id === id ? { ...item, ...patch, reviewStatus: patch.classification && patch.classification !== "pending" ? "ready" : item.reviewStatus } : item) });
+  }
+
+  function saveCandidate(candidate: DirectionCandidate) {
+    const exists = state.directionCandidates.some((item) => item.id === candidate.id);
+    onChange({ ...state, directionCandidates: exists ? state.directionCandidates.map((item) => item.id === candidate.id ? candidate : item) : [...state.directionCandidates, candidate] });
+    setCandidateEditor(null);
+  }
+
+  function deleteCandidate(candidate: DirectionCandidate) {
+    if (!window.confirm(`¿Eliminar “${candidate.description}”? Esta acción retirará el registro del ciclo de Dirección.`)) return;
+    onChange({ ...state, directionCandidates: state.directionCandidates.filter((item) => item.id !== candidate.id) });
+  }
+
+  function saveAxis(axis: StrategicAxis) {
+    const exists = state.axes.some((item) => item.id === axis.id);
+    onChange({ ...state, axes: exists ? state.axes.map((item) => item.id === axis.id ? axis : item) : [...state.axes, axis] });
+    setAxisEditor(null);
+  }
+
+  function deleteAxis(axis: StrategicAxis) {
+    const referenced = state.risks.some((item) => item.strategicAxisId === axis.id) || state.swotItems.some((item) => item.strategicAxisId === axis.id);
+    if (referenced) { window.alert("Este eje está relacionado con un FODA o riesgo. Reasigna esos registros antes de eliminarlo."); return; }
+    if (!window.confirm(`¿Eliminar el eje “${axis.title}”?`)) return;
+    onChange({ ...state, axes: state.axes.filter((item) => item.id !== axis.id) });
+  }
+
+  async function importHistory(file: File) {
+    setImporting(true);
+    setImportMessage("");
+    try {
+      const XLSX = await import("xlsx");
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const sheetName = workbook.SheetNames[0];
+      const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null }) as DirectionImportCell[][];
+      const parsed = parseDirectionImportRows(rows, file.name);
+      const known = new Set(state.directionCandidates.map(directionCandidateFingerprint));
+      const fresh = parsed.filter((item) => { const fingerprint = directionCandidateFingerprint(item); if (known.has(fingerprint)) return false; known.add(fingerprint); return true; });
+      if (!fresh.length) { setImportMessage(parsed.length ? "El archivo no agregó filas: todos los registros ya existían." : "No se encontraron filas reconocibles. Usa una columna Descripción o la estructura histórica B:U."); return; }
+      const stamp = Date.now();
+      onChange({ ...state, directionCandidates: [...state.directionCandidates, ...fresh.map((item, index) => ({ ...item, id: `DIR-${state.cycle}-IMP-${stamp}-${index + 1}` }))] });
+      setImportMessage(`${fresh.length} registros incorporados desde ${file.name}.${parsed.length > fresh.length ? ` ${parsed.length - fresh.length} duplicados se omitieron.` : ""}`);
+    } catch (error) {
+      setImportMessage(error instanceof Error ? `No fue posible leer el archivo: ${error.message}` : "No fue posible leer el archivo.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return <div className="risk-view-stack">
+    <section className="work-panel risk-direction-intro direction-history-step">
+      <div><FileWarning size={21} /><span><strong>Paso 1 · Historial como punto de partida</strong><p>La matriz 2025 permanece como antecedente. Puedes sumar otro Excel/CSV o capturar registros sin sustituir lo ya revisado.</p></span></div>
+      {canEdit ? <div className="direction-step-actions"><label className={`button button-secondary file-button ${importing ? "disabled" : ""}`}><Upload size={16} /> {importing ? "Cargando…" : "Cargar historial"}<input accept=".xlsx,.xls,.xlsm,.csv" disabled={importing} type="file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importHistory(file); event.currentTarget.value = ""; }} /></label><button className="button button-primary" onClick={() => setCandidateEditor("new")} type="button"><Plus size={16} /> Captura manual</button></div> : <span>{state.directionCandidates.length} registros históricos</span>}
+      {importMessage ? <p className="direction-import-result">{importMessage}</p> : null}
+    </section>
+
+    <section className="work-panel">
+      <div className="risk-section-heading"><div><p className="module-kicker">Paso 2 · Estructura estratégica</p><h3>Ejes editables por Dirección</h3></div><div className="direction-heading-actions"><span className="count-badge">{state.axes.length}</span>{canEdit ? <button className="button button-secondary" onClick={() => setAxisEditor("new")} type="button"><Plus size={15} /> Nuevo eje</button> : null}</div></div>
+      <div className="strategy-axis-list">{state.axes.map((axis) => <article key={axis.id}><code>{axis.id}</code><span><strong>{axis.title}</strong><small>Origen: {axis.sourceCell}</small></span><span className="axis-target"><small>Meta</small><strong>{axis.originalTarget}</strong></span><span className={`risk-status status-${axis.status}`}>{axis.status === "review" ? "Requiere definición" : "Lista para revisar"}</span>{canEdit ? <span className="direction-row-actions"><button className="icon-button" onClick={() => setAxisEditor(axis)} title="Editar eje" type="button"><Pencil size={14} /></button><button className="icon-button danger" onClick={() => deleteAxis(axis)} title="Eliminar eje" type="button"><Trash2 size={14} /></button></span> : null}</article>)}</div>
+    </section>
+
+    <section className="work-panel direction-candidates-panel">
+      <div className="risk-section-heading"><div><p className="module-kicker">Paso 2 · Revisión y asignación</p><h3>Registros históricos y manuales</h3></div><span>{candidates.length} de {state.directionCandidates.length}</span></div>
+      <div className="direction-candidate-toolbar"><label className="panel-search"><input aria-label="Buscar en matriz de Dirección" placeholder="Buscar descripción, control, responsable o archivo" value={query} onChange={(event) => setQuery(event.target.value)} /></label><select aria-label="Filtrar clasificación" value={kind} onChange={(event) => setKind(event.target.value as DirectionCandidateKind | "all")}><option value="all">Todas las etapas</option>{Object.entries(directionKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>
+      <div className="direction-candidate-list">{candidates.map((item) => <article key={item.id}><span><code>{item.sourceType === "manual" ? "Captura manual" : `Fila ${item.sourceRow}`}</code><strong>{item.description}</strong><small>{item.controlPoint || "Sin punto de control"} · Responsable original: {item.responsibleLabel || "Sin definir"}</small><small className="direction-source-label">{item.sourceName ?? "Historial cargado"}</small></span><span className="source-marks"><small>R/O original</small><strong>{item.roPrimary || "—"} / {item.roSecondary || "—"}</strong><small>Avance histórico: {item.historicalProgress === null ? "—" : `${Math.round(item.historicalProgress * 100)}%`}</small></span><label><span>Etapa</span><select disabled={!canEdit} value={item.classification} onChange={(event) => updateCandidate(item.id, { classification: event.target.value as DirectionCandidateKind })}>{Object.entries(directionKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>Proceso responsable</span><select disabled={!canEdit} value={item.processId ?? ""} onChange={(event) => updateCandidate(item.id, { processId: event.target.value || undefined })}><option value="">Por asignar</option>{masterProcesses.map((process) => <option key={process.id} value={process.id}>{process.id} · {process.name}</option>)}</select></label><label><span>Responsable confirmado</span><input value={item.ownerName ?? ""} disabled={!canEdit} placeholder="Nombre del responsable" onChange={(event) => updateCandidate(item.id, { ownerName: event.target.value || undefined })} /></label>{canEdit ? <span className="direction-row-actions"><button className="icon-button" onClick={() => setCandidateEditor(item)} title="Editar registro" type="button"><Pencil size={14} /></button><button className="icon-button danger" onClick={() => deleteCandidate(item)} title="Eliminar registro" type="button"><Trash2 size={14} /></button></span> : null}</article>)}</div>
+    </section>
+
+    {canEdit ? <section className="work-panel direction-launch-panel"><div><Target size={21} /><span><strong>Paso 3 · Despliegue anual a procesos</strong><p>Al iniciar, IntegraQ guardará la versión preparada y notificará una sola vez a los responsables para elaborar FODA, FODA cruzado, riesgos y matriz de operaciones.</p></span></div><button className="button button-primary" disabled={!serverConnected || activating} onClick={() => void onActivate()} type="button">{activating ? "Enviando…" : state.cycleStatus === "active" ? "Reenviar a nuevos responsables" : "Iniciar análisis en 18 procesos"}</button>{activationMessage ? <p className="launch-result success">{activationMessage}</p> : null}{activationError ? <p className="launch-result error">{activationError}</p> : null}</section> : null}
+
+    {candidateEditor ? <DirectionCandidateEditor candidate={candidateEditor === "new" ? undefined : candidateEditor} cycle={state.cycle} nextRow={Math.max(0, ...state.directionCandidates.map((item) => item.sourceRow)) + 1} onClose={() => setCandidateEditor(null)} onSave={saveCandidate} /> : null}
+    {axisEditor ? <StrategicAxisEditor axis={axisEditor === "new" ? undefined : axisEditor} nextId={`EJE-${String(Math.max(0, ...state.axes.map((item) => Number(item.id.match(/\d+/)?.[0] ?? 0))) + 1).padStart(2, "0")}`} onClose={() => setAxisEditor(null)} onSave={saveAxis} /> : null}
+  </div>;
+}
+
+function DirectionCandidateEditor({ candidate, cycle, nextRow, onClose, onSave }: { candidate?: DirectionCandidate; cycle: number; nextRow: number; onClose: () => void; onSave: (candidate: DirectionCandidate) => void }) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const itemClassification = String(form.get("classification")) as DirectionCandidateKind;
+    const historicalProgress = String(form.get("historicalProgress")).trim();
+    onSave({
+      id: candidate?.id ?? `DIR-${cycle}-MAN-${Date.now()}`,
+      sourceRow: candidate?.sourceRow ?? nextRow,
+      description: String(form.get("description")).trim(),
+      responsibleLabel: String(form.get("responsibleLabel")).trim(),
+      controlPoint: String(form.get("controlPoint")).trim(),
+      roPrimary: String(form.get("roPrimary")).trim(),
+      roSecondary: String(form.get("roSecondary")).trim(),
+      historicalProgress: historicalProgress ? Number(historicalProgress) / 100 : null,
+      axisWeights: candidate?.axisWeights ?? [],
+      classification: itemClassification,
+      processId: String(form.get("processId")) || undefined,
+      ownerName: String(form.get("ownerName")).trim() || undefined,
+      reviewStatus: itemClassification === "pending" ? "pending" : "ready",
+      sourceType: candidate?.sourceType ?? "manual",
+      sourceName: candidate?.sourceName ?? "Captura manual de Dirección",
+    });
+  }
+  return <div className="quality-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="quality-modal direction-editor-modal" role="dialog" aria-modal="true" aria-labelledby="direction-editor-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span>DIRECCIÓN · CICLO {cycle}</span><h3 id="direction-editor-title">{candidate ? "Editar registro" : "Nuevo registro manual"}</h3></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={17} /></button></header><form onSubmit={submit}><div className="direction-editor-grid"><label className="span-2"><span>Descripción</span><textarea defaultValue={candidate?.description} name="description" required rows={3} /></label><label><span>Responsable histórico</span><input defaultValue={candidate?.responsibleLabel} name="responsibleLabel" /></label><label><span>Responsable confirmado</span><input defaultValue={candidate?.ownerName} name="ownerName" /></label><label className="span-2"><span>Punto de control</span><input defaultValue={candidate?.controlPoint} name="controlPoint" /></label><label><span>Marca R/O 1</span><input defaultValue={candidate?.roPrimary} name="roPrimary" /></label><label><span>Marca R/O 2</span><input defaultValue={candidate?.roSecondary} name="roSecondary" /></label><label><span>Avance histórico (%)</span><input defaultValue={candidate?.historicalProgress === null || candidate?.historicalProgress === undefined ? "" : Math.round(candidate.historicalProgress * 100)} max="100" min="0" name="historicalProgress" type="number" /></label><label><span>Etapa</span><select defaultValue={candidate?.classification ?? "pending"} name="classification">{Object.entries(directionKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label><span>Proceso responsable</span><select defaultValue={candidate?.processId ?? ""} name="processId"><option value="">Por asignar</option>{masterProcesses.map((process) => <option key={process.id} value={process.id}>{process.id} · {process.name}</option>)}</select></label><label><span>Origen</span><input disabled value={candidate?.sourceName ?? "Captura manual de Dirección"} /></label></div><footer><button className="button button-secondary" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" type="submit"><Save size={16} /> Guardar registro</button></footer></form></section></div>;
+}
+
+function StrategicAxisEditor({ axis, nextId, onClose, onSave }: { axis?: StrategicAxis; nextId: string; onClose: () => void; onSave: (axis: StrategicAxis) => void }) {
+  function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); onSave({ id: axis?.id ?? nextId, title: String(form.get("title")).trim(), originalTarget: String(form.get("target")).trim(), status: String(form.get("status")) as StrategicAxis["status"], sourceCell: axis?.sourceCell ?? "Captura manual" }); }
+  return <div className="quality-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="quality-modal direction-editor-modal compact" role="dialog" aria-modal="true" aria-labelledby="axis-editor-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span>DIRECCIÓN · ESTRUCTURA</span><h3 id="axis-editor-title">{axis ? "Editar eje estratégico" : "Nuevo eje estratégico"}</h3></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={17} /></button></header><form onSubmit={submit}><div className="direction-editor-grid"><label className="span-2"><span>Nombre del eje</span><input defaultValue={axis?.title} name="title" required /></label><label><span>Meta</span><input defaultValue={axis?.originalTarget} name="target" required /></label><label><span>Estado</span><select defaultValue={axis?.status ?? "review"} name="status"><option value="review">Requiere definición</option><option value="ready">Listo para revisar</option></select></label></div><footer><button className="button button-secondary" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" type="submit"><Save size={16} /> Guardar eje</button></footer></form></section></div>;
 }
 
 function OkrView({ indicators, indicatorResults, onNavigate, processIds }: { indicators: ConfiguredIndicator[]; indicatorResults: IndicatorResults; onNavigate: (id?: string) => void; processIds: string[] }) {

@@ -129,6 +129,8 @@ export interface DirectionCandidate {
   processId?: string;
   ownerName?: string;
   reviewStatus: "pending" | "ready";
+  sourceType?: "history" | "manual" | "file";
+  sourceName?: string;
 }
 
 export interface RiskWorkspaceState {
@@ -222,6 +224,8 @@ export function buildInitialRiskWorkspace(): RiskWorkspaceState {
       axisWeights: row.weights,
       classification: "pending",
       reviewStatus: "pending",
+      sourceType: "history",
+      sourceName: directionSource.sourceFile,
     })),
   };
 }
@@ -238,7 +242,7 @@ export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null
     actions: Array.isArray(value.actions) ? value.actions : baseline.actions,
     contributions: Array.isArray(value.contributions) ? value.contributions : baseline.contributions,
     importIssues: Array.isArray(value.importIssues) ? value.importIssues : baseline.importIssues,
-    directionCandidates: Array.isArray(value.directionCandidates) && value.directionCandidates.length ? value.directionCandidates : baseline.directionCandidates,
+    directionCandidates: Array.isArray(value.directionCandidates) && value.directionCandidates.length ? value.directionCandidates.map((item) => ({ sourceType: "history", sourceName: directionSource.sourceFile, ...item })) : baseline.directionCandidates,
   };
 }
 
