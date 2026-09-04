@@ -8,7 +8,7 @@ export type ProcessLink = {
 export type OrganizationPosition = {
   id: string;
   name: string;
-  level: 1 | 2 | 3 | 4;
+  level: number;
   parentId?: string;
   branch: string;
   processLinks: ProcessLink[];

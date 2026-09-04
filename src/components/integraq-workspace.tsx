@@ -523,7 +523,7 @@ export function IntegraQWorkspace({
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
           {activeModule === "home" ? <HomeModule loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
-          {activeModule === "organization" ? <OrganizationModule /> : null}
+          {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}

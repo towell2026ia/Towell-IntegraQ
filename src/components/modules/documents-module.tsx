@@ -21,10 +21,11 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
+import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
 import {
   processCatalog,
   type ProcessCatalogItem,
@@ -46,6 +47,10 @@ import {
   type AppFormValue,
 } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
+import {
+  loadProcessOrganizationSources,
+  type ProcessOrganizationSource,
+} from "@/lib/organization-chart-storage";
 
 const documentTypeIcons: Record<string, LucideIcon> = {
   processes: Workflow,
@@ -94,6 +99,12 @@ export function DocumentsModule({
   const [selectedTypeId, setSelectedTypeId] = useState(focusedDocument?.documentTypeId ?? "processes");
   const [selectedFormId, setSelectedFormId] = useState<string | null>(focusedDocument?.appFormId ?? null);
   const [formView, setFormView] = useState<FormView>("dashboard");
+  const [organizationSources, setOrganizationSources] = useState<ProcessOrganizationSource[]>([]);
+  const loadOrganizationSources = useCallback(async () => {
+    try { setOrganizationSources(await loadProcessOrganizationSources()); }
+    catch { setOrganizationSources([]); }
+  }, []);
+  useEffect(() => { void Promise.resolve().then(loadOrganizationSources); }, [loadOrganizationSources]);
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
     return processCatalog.filter(
@@ -164,7 +175,7 @@ export function DocumentsModule({
       <section className="metric-grid" aria-label="Resumen documental">
         <DocumentMetric icon={<FileText size={18} />} label="Tipos documentales" value={8} tone="neutral" />
         <DocumentMetric icon={<BookOpenCheck size={18} />} label="Expedientes de proceso" value={processCatalog.filter((process) => !isGroupedDocumentProcess(process.id)).length} tone="success" />
-        <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={0} tone="warning" />
+        <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={new Set(organizationSources.map((source) => source.processId)).size} tone="warning" />
         <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={forms.filter((form) => form.status === "Activo").length} tone="danger" />
       </section>
 
@@ -218,6 +229,8 @@ export function DocumentsModule({
                 (document) => selectedDocumentProcessIds.includes(document.processId),
               )}
               permissions={selectedPermissions}
+              source={organizationSources.find((source) => source.processId === selected.id)}
+              onOrganizationSaved={loadOrganizationSources}
               onOpenType={openDocumentType}
             />
           ) : null}
@@ -257,11 +270,15 @@ function ProcessDocumentHome({
   process,
   documents,
   permissions,
+  source,
+  onOrganizationSaved,
   onOpenType,
 }: {
   process: ProcessCatalogItem;
   documents: ControlledDocument[];
   permissions: ReturnType<typeof getDocumentPermissions>;
+  source?: ProcessOrganizationSource;
+  onOrganizationSaved: () => Promise<void> | void;
   onOpenType: (documentTypeId: string) => void;
 }) {
   return (
@@ -276,28 +293,7 @@ function ProcessDocumentHome({
         </p>
       </header>
 
-      <section className="documents-detail-section department-chart-section">
-        <div className="section-title-row">
-          <h4>Organigrama del departamento</h4>
-          <span className="pending-badge">Pendiente por subir</span>
-        </div>
-        <div className="department-chart-placeholder">
-          <div className="department-chart-flow" aria-hidden="true">
-            <span />
-            <i />
-            <span />
-            <i />
-            <span />
-          </div>
-          <div>
-            <strong>Organigrama vertical</strong>
-            <p>{process.name}</p>
-          </div>
-          <button className="button button-secondary" type="button" disabled>
-            Subir organigrama
-          </button>
-        </div>
-      </section>
+      <ProcessOrganizationChart process={process} permissions={permissions} source={source} onSaved={onOrganizationSaved} />
 
       <section className="documents-detail-section">
         <div className="section-title-row">
