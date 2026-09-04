@@ -3,34 +3,30 @@
 import {
   AlertTriangle,
   BadgeCheck,
-  Bot,
-  CalendarCheck,
-  CheckCircle2,
   ClipboardCheck,
-  Copy,
   ExternalLink,
-  FileUp,
+  FileText,
   Filter,
   FlaskConical,
   Plus,
+  QrCode,
   Search,
   ShieldCheck,
   Truck,
   Wrench,
   X,
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { calculateNextDueDate, getAssetDueStatus, toIsoDate } from "@/lib/domain";
-import {
-  buildMetrologyAgentContext,
-  getCurrentReferenceStandards,
-  getVerificationReadiness,
-  metrologyAgent,
-} from "@/lib/metrology-data";
+import { getCurrentReferenceStandards, getVerificationReadiness } from "@/lib/metrology-data";
+import { latestReportForAsset, getMetrologyReportTemplate, getMetrologyTemplateName, type CalibrationValues, type MetrologyReport } from "@/lib/metrology-report-data";
+import { loadMetrologyWorkspace, saveMetrologyWorkspace } from "@/lib/metrology-workspace-storage";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import type { ActiveSession } from "@/lib/session-data";
 import type { DueStatus, MeasurementActivity, MeasurementAsset } from "@/lib/types";
+import { MetrologyQrModal } from "@/components/modules/metrology-qr-modal";
+import { MetrologyReportForm } from "@/components/modules/metrology-report-form";
 
 interface CalibrationsModuleProps {
   assets: MeasurementAsset[];
@@ -60,11 +56,25 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [selectedAsset, setSelectedAsset] = useState<MeasurementAsset | null>(focusedAsset);
   const [isCreateOpen, setCreateOpen] = useState(false);
-  const [agentAssetId, setAgentAssetId] = useState(focusedAsset?.id ?? assets.find((asset) => !asset.isReferenceStandard)?.id ?? assets[0]?.id ?? "");
-  const [agentRequest, setAgentRequest] = useState("Revisa la aptitud metrológica del equipo y señala riesgos, evidencia faltante y siguiente acción recomendada.");
-  const [contextCopied, setContextCopied] = useState(false);
+  const [formAssetId, setFormAssetId] = useState(focusedAsset?.id ?? assets.find((asset) => !asset.isReferenceStandard)?.id ?? assets[0]?.id ?? "");
+  const [qrAsset, setQrAsset] = useState<MeasurementAsset | null>(null);
+  const [reports, setReports] = useState<MetrologyReport[]>([]);
+  const [serverConnected, setServerConnected] = useState(false);
+  const [workspaceError, setWorkspaceError] = useState("");
   const canExecute = canPerformModuleAction(session, "calibrations", "update");
   const canManageAssets = canPerformModuleAction(session, "calibrations", "manage");
+
+  useEffect(() => {
+    let active = true;
+    void loadMetrologyWorkspace().then(({ workspace }) => {
+      if (!active) return;
+      onAssetsChange(workspace.assets);
+      setReports(workspace.reports);
+      setServerConnected(true);
+      setFormAssetId((current) => workspace.assets.some((asset) => asset.id === current) ? current : workspace.assets.find((asset) => !asset.isReferenceStandard)?.id ?? workspace.assets[0]?.id ?? "");
+    }).catch((error) => { if (active) setWorkspaceError(error instanceof Error ? error.message : "No fue posible conectar el expediente."); });
+    return () => { active = false; };
+  }, [onAssetsChange]);
 
   const referenceStandards = useMemo(() => assets.filter((asset) => asset.isReferenceStandard), [assets]);
   const currentStandards = useMemo(() => getCurrentReferenceStandards(assets, today), [assets, today]);
@@ -108,37 +118,38 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
     overdue: assets.filter((asset) => getAssetDueStatus(asset, today) === "overdue").length,
   }), [assets, currentStandards.length, referenceStandards.length, today]);
 
-  const agentAsset = assets.find((asset) => asset.id === agentAssetId) ?? assets[0];
-  const agentContext = useMemo(
-    () => buildMetrologyAgentContext(agentAsset, assets, today, agentRequest),
-    [agentAsset, agentRequest, assets, today],
-  );
+  const formAsset = assets.find((asset) => asset.id === formAssetId) ?? assets[0];
+  const formAssetReport = formAsset ? latestReportForAsset(reports, formAsset.id) : undefined;
 
-  function completeActivity(
-    asset: MeasurementAsset,
-    execution: { completedAt: string; externalProvider?: string; referenceStandardId?: string },
-  ) {
-    onAssetsChange(assets.map((item) => item.id === asset.id ? {
+  async function persist(nextAssets: MeasurementAsset[], nextReports: MetrologyReport[]) {
+    const saved = await saveMetrologyWorkspace({ assets: nextAssets, reports: nextReports });
+    onAssetsChange(saved.workspace.assets);
+    setReports(saved.workspace.reports);
+    setServerConnected(true);
+    setWorkspaceError("");
+  }
+
+  async function completeActivity(asset: MeasurementAsset, report: MetrologyReport) {
+    const calibration = report.template === "CALIBRATION" ? report.values as CalibrationValues : undefined;
+    const nextAssets = assets.map((item) => item.id === asset.id ? {
       ...item,
-      lastCompletedAt: execution.completedAt,
-      nextDueDate: calculateAssetNextDueDate(item, execution.completedAt),
+      lastCompletedAt: report.completedAt,
+      nextDueDate: report.nextDueDate,
       schedulePending: false,
-      externalProvider: execution.externalProvider ?? item.externalProvider,
-      referenceStandardId: execution.referenceStandardId ?? item.referenceStandardId,
+      externalProvider: calibration?.provider ?? item.externalProvider,
+      calibrationReport: calibration?.certificate ?? item.calibrationReport,
       evidenceCount: item.evidenceCount + 1,
-    } : item));
+    } : item);
+    const nextReports = [report, ...reports.filter((item) => item.id !== report.id)];
+    await persist(nextAssets, nextReports);
     setSelectedAsset(null);
   }
 
   function addAsset(asset: Omit<MeasurementAsset, "id" | "evidenceCount">) {
-    onAssetsChange([{ ...asset, id: crypto.randomUUID(), evidenceCount: 0 }, ...assets]);
+    const nextAssets = [{ ...asset, id: crypto.randomUUID(), publicToken: crypto.randomUUID().replace(/-/g, ""), evidenceCount: 0 }, ...assets];
+    onAssetsChange(nextAssets);
     setCreateOpen(false);
-  }
-
-  function openMetrologyAgent() {
-    setContextCopied(false);
-    void navigator.clipboard?.writeText(agentContext).then(() => setContextCopied(true)).catch(() => setContextCopied(false));
-    window.open(metrologyAgent.url, "_blank", "noopener,noreferrer");
+    void persist(nextAssets, reports).catch((error) => setWorkspaceError(error instanceof Error ? error.message : "No fue posible guardar el equipo."));
   }
 
   return (
@@ -155,13 +166,14 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
         <CalibrationMetric icon={<AlertTriangle size={19} />} label="Vencidos" value={metrics.overdue} tone="danger" />
       </section>
 
-      <section className="metrology-agent-panel work-panel">
-        <header><span><Bot size={20} /></span><div><small>Agente de metrología</small><h3>{metrologyAgent.name}</h3></div><a className="button button-secondary" href={metrologyAgent.url} target="_blank" rel="noreferrer"><ExternalLink size={15} /> Abrir agente</a></header>
+      <section className="metrology-agent-panel metrology-native-workflow work-panel">
+        <header><span><FileText size={20} /></span><div><small>Mini app interna</small><h3>Captura y firma de informes metrológicos</h3></div><span className={`risk-storage-status ${serverConnected ? "connected" : "local"}`}>{serverConnected ? "Conectado a Supabase" : "Sin conexión"}</span></header>
         <div className="metrology-agent-controls">
-          <label><span>Equipo en contexto</span><select value={agentAsset?.id ?? ""} onChange={(event) => { setAgentAssetId(event.target.value); setContextCopied(false); }}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.code} · {asset.name}</option>)}</select></label>
-          <label><span>Consulta</span><textarea value={agentRequest} onChange={(event) => { setAgentRequest(event.target.value); setContextCopied(false); }} /></label>
+          <label><span>Equipo</span><select value={formAsset?.id ?? ""} onChange={(event) => setFormAssetId(event.target.value)}>{assets.filter((asset) => !asset.isReferenceStandard).map((asset) => <option key={asset.id} value={asset.id}>{asset.code} · {asset.name}</option>)}</select></label>
+          <div className="metrology-form-route"><span>Formato asignado</span><strong>{formAsset ? getMetrologyTemplateName(getMetrologyReportTemplate(formAsset)) : "Selecciona un equipo"}</strong><small>{formAssetReport ? `Último: ${formatDate(formAssetReport.completedAt)} · ${formAssetReport.performedBy}` : "Sin informe previo en la plataforma"}</small></div>
         </div>
-        <footer><span className={contextCopied ? "copied" : ""}>{contextCopied ? <><BadgeCheck size={15} /> Contexto copiado; pégalo en el agente.</> : <>Se incluirán alcance, patrón o proveedor, vigencia y método.</>}</span><button className="button button-primary" type="button" onClick={openMetrologyAgent}><Copy size={15} /> Copiar contexto y abrir</button></footer>
+        {workspaceError ? <p className="metrology-workspace-error"><AlertTriangle size={15} />{workspaceError}</p> : null}
+        <footer><span><BadgeCheck size={15} /> El formato se llena, firma y guarda sin salir de IntegraQ.</span><button className="button button-primary" disabled={!formAsset || !serverConnected || !canExecute} type="button" onClick={() => formAsset && setSelectedAsset(formAsset)}><ClipboardCheck size={15} /> Abrir formato</button></footer>
       </section>
 
       <section className="table-panel metrology-register">
@@ -185,18 +197,19 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
             const readiness = getVerificationReadiness(asset, assets, today);
             return <tr key={asset.id}><td><div className="equipment-cell"><div className={`equipment-icon ${asset.isReferenceStandard ? "standard" : ""}`}>{asset.isReferenceStandard ? <FlaskConical size={17} /> : <Wrench size={17} />}</div><span><strong>{asset.name}</strong><small>{asset.code}{asset.model ? ` · ${asset.model}` : ""}{asset.isReferenceStandard ? " · Patrón" : ""}</small></span></div></td>
               <td><span className={`metrology-scope scope-${asset.activity}`}>{activityLabels[asset.activity]}</span></td>
-              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td>{canExecute ? <button className="icon-button compact-button" title={asset.activity === "verification" ? "Registrar verificación" : "Registrar calibración"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={18} /></button> : null}</td></tr>;
+              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td><span className="metrology-table-actions">{canExecute ? <button className="icon-button compact-button" title={asset.activity === "verification" ? "Llenar verificación" : "Registrar calibración"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={17} /></button> : null}{latestReportForAsset(reports, asset.id) && asset.publicToken ? <a className="icon-button compact-button" href={`/equipment/${asset.publicToken}`} rel="noreferrer" target="_blank" title="Ver último informe"><ExternalLink size={16} /></a> : null}<button className="icon-button compact-button" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} title="Ver QR del equipo" type="button"><QrCode size={17} /></button></span></td></tr>;
           })}
         </tbody></table></div>
 
         <div className="mobile-asset-list">{filteredAssets.map((asset) => {
           const status = getAssetDueStatus(asset, today);
           const readiness = getVerificationReadiness(asset, assets, today);
-          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl>{canExecute ? <button className="button button-secondary button-full" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> Registrar {asset.activity === "verification" ? "verificación" : "calibración"}</button> : null}</article>;
+          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl><div className="metrology-mobile-actions">{canExecute ? <button className="button button-secondary" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> Llenar informe</button> : null}<button className="button button-secondary" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} type="button"><QrCode size={16} /> QR</button></div></article>;
         })}</div>
       </section>
 
-      {selectedAsset && canExecute ? <CompleteActivityModal asset={selectedAsset} assets={assets} onClose={() => setSelectedAsset(null)} onSubmit={(execution) => completeActivity(selectedAsset, execution)} /> : null}
+      {selectedAsset && canExecute ? <MetrologyReportForm asset={selectedAsset} assets={assets} onClose={() => setSelectedAsset(null)} onSave={(report) => completeActivity(selectedAsset, report)} session={session} /> : null}
+      {qrAsset ? <MetrologyQrModal asset={qrAsset} lastReport={latestReportForAsset(reports, qrAsset.id)} onClose={() => setQrAsset(null)} /> : null}
       {isCreateOpen && canManageAssets ? <CreateAssetModal assets={assets} today={today} onClose={() => setCreateOpen(false)} onSubmit={addAsset} /> : null}
     </>
   );
@@ -214,53 +227,6 @@ function MetrologySupport({ asset, readiness }: { asset: MeasurementAsset; readi
 
 function CalibrationMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number | string; tone: "neutral" | "danger" | "success" }) {
   return <div className={`metric metric-${tone}`}><div className="metric-icon">{icon}</div><div><strong>{value}</strong><span>{label}</span></div></div>;
-}
-
-function CompleteActivityModal({
-  asset,
-  assets,
-  onClose,
-  onSubmit,
-}: {
-  asset: MeasurementAsset;
-  assets: MeasurementAsset[];
-  onClose: () => void;
-  onSubmit: (execution: { completedAt: string; externalProvider?: string; referenceStandardId?: string }) => void;
-}) {
-  const today = toIsoDate(new Date());
-  const [completedAt, setCompletedAt] = useState(today);
-  const readiness = getVerificationReadiness(asset, assets, today);
-  const [externalProvider, setExternalProvider] = useState(
-    asset.externalProvider?.toLocaleLowerCase("es-MX").includes("pendiente") ? "" : asset.externalProvider ?? "",
-  );
-  const [referenceStandardId, setReferenceStandardId] = useState(
-    readiness.currentReferences.find((reference) => reference.id === asset.referenceStandardId)?.id
-      ?? readiness.currentReferences[0]?.id
-      ?? "",
-  );
-  const nextDate = calculateAssetNextDueDate(asset, completedAt);
-  const canComplete = asset.activity === "verification"
-    ? readiness.ready && Boolean(referenceStandardId)
-    : Boolean(externalProvider.trim());
-
-  return <div className="modal-backdrop" role="presentation"><div className="modal modal-compact" role="dialog" aria-modal="true"><div className="modal-header"><div><p className="module-kicker">{asset.code}</p><h3>Registrar {asset.activity === "verification" ? "verificación interna" : "calibración externa"}</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={19} /></button></div>
-    <form onSubmit={(event) => { event.preventDefault(); if (canComplete) onSubmit({ completedAt, externalProvider: asset.activity === "calibration" ? externalProvider.trim() : undefined, referenceStandardId: asset.activity === "verification" ? referenceStandardId : undefined }); }}><div className="completion-summary"><Wrench size={20} /><div><strong>{asset.name}</strong><span>{activityLabels[asset.activity]}</span></div></div>
-      <dl className="metrology-equipment-data">
-        {asset.model ? <div><dt>Modelo</dt><dd>{asset.model}</dd></div> : null}
-        {asset.serialNumber ? <div><dt>Serie</dt><dd>{asset.serialNumber}</dd></div> : null}
-        {asset.measurementRange ? <div><dt>Alcance</dt><dd>{asset.measurementRange}</dd></div> : null}
-        {asset.resolution ? <div><dt>Resolución</dt><dd>{asset.resolution}</dd></div> : null}
-        {asset.observations ? <div className="span-2"><dt>Observaciones</dt><dd>{asset.observations}</dd></div> : null}
-      </dl>
-      <div className={`metrology-readiness ${canComplete ? "ready" : "blocked"}`}>{canComplete ? <BadgeCheck size={18} /> : <AlertTriangle size={18} />}<span><strong>{asset.activity === "verification" ? readiness.reason : externalProvider.trim() || "Asigna el proveedor de calibración."}</strong><small>{asset.activity === "verification" ? "Sólo se muestran patrones con calibración vigente." : "El certificado del proveedor será la evidencia obligatoria."}</small></span></div>
-      <div className="form-grid single-column">
-        <label className="field"><span>Fecha de ejecución</span><input required type="date" value={completedAt} onChange={(event) => setCompletedAt(event.target.value)} /></label>
-        {asset.activity === "verification" ? <label className="field"><span>Patrón utilizado</span><select required value={referenceStandardId} onChange={(event) => setReferenceStandardId(event.target.value)}>{readiness.currentReferences.length ? readiness.currentReferences.map((reference) => <option key={reference.id} value={reference.id}>{reference.code} · {reference.name} · vence {formatDate(reference.nextDueDate)}</option>) : <option value="">No hay patrones vigentes</option>}</select></label> : <label className="field"><span>Proveedor externo</span><input required value={externalProvider} onChange={(event) => setExternalProvider(event.target.value)} placeholder="Laboratorio o proveedor de calibración" /></label>}
-        <label className="field"><span>Resultado</span><select defaultValue="approved"><option value="approved">Conforme</option><option value="adjusted">Con ajuste</option><option value="rejected">Fuera de servicio</option></select></label>
-        <label className="field"><span>{asset.activity === "verification" ? "Evidencia de verificación" : "Certificado de calibración"}</span><span className="file-control"><FileUp size={17} /><input required type="file" aria-label="Adjuntar evidencia metrológica" /></span></label>
-      </div>
-      <div className="next-date-callout"><CalendarCheck size={18} /><span><small>Siguiente fecha calculada</small><strong>{formatDate(nextDate)}</strong></span></div><div className="modal-footer"><button className="button button-ghost" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" disabled={!canComplete} type="submit"><CheckCircle2 size={16} /> Guardar ejecución</button></div>
-    </form></div></div>;
 }
 
 function CreateAssetModal({ assets, today, onClose, onSubmit }: { assets: MeasurementAsset[]; today: string; onClose: () => void; onSubmit: (asset: Omit<MeasurementAsset, "id" | "evidenceCount">) => void }) {
@@ -305,11 +271,4 @@ function formatDate(value: string) {
 
 function formatDueLabel(asset: MeasurementAsset, status: DueStatus) {
   return asset.schedulePending || !asset.nextDueDate ? "Sin fecha" : dueLabels[status];
-}
-
-function calculateAssetNextDueDate(asset: MeasurementAsset, completedAt: string) {
-  if (!asset.frequencyDays) return calculateNextDueDate(completedAt, asset.frequencyMonths);
-  const completed = new Date(`${completedAt}T00:00:00Z`);
-  completed.setUTCDate(completed.getUTCDate() + asset.frequencyDays);
-  return toIsoDate(completed);
 }

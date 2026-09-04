@@ -133,6 +133,7 @@ export interface MeasurementAsset {
   schedulePending?: boolean;
   sourceDocument?: string;
   sourceRow?: number;
+  publicToken?: string;
 }
 
 export type DueStatus = "current" | "due_soon" | "overdue";
