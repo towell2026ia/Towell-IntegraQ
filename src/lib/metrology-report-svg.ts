@@ -41,5 +41,9 @@ function lengthBody(values: LengthVerificationValues) {
 }
 
 function calibrationBody(values: CalibrationValues) {
-  return `<div class="section"><h3>Informe de calibración externa</h3><table><tbody>${row(["Proveedor / laboratorio", values.provider])}${row(["Certificado", values.certificate])}${row(["Alcance calibrado", values.scope])}${row(["Incertidumbre", values.uncertainty])}</tbody></table></div><div class="section"><h3>Observaciones</h3><p class="notes">${escape(values.observations)}</p></div>`;
+  const certificates = values.certificates ?? [];
+  if (!values.reportDeliveryDate && values.certificate) {
+    return `<div class="section"><h3>Informe de calibración externa</h3><table><tbody>${row(["Proveedor / laboratorio", values.provider])}${row(["Certificado", values.certificate])}${row(["Alcance calibrado", values.scope])}${row(["Incertidumbre", values.uncertainty])}</tbody></table></div><div class="section"><h3>Observaciones</h3><p class="notes">${escape(values.observations)}</p></div>`;
+  }
+  return `<div class="section"><h3>Cierre de calibración externa</h3><table><tbody>${row(["Fecha de entrega del reporte", values.reportDeliveryDate])}${row(["Confirmación", values.confirmedOk ? "EQUIPO OK" : "Pendiente"])}</tbody></table></div><div class="section"><h3>Certificados adjuntos</h3><table><thead>${row(["Archivo", "Tipo", "Tamaño"])}</thead><tbody>${certificates.map((file) => row([file.fileName, file.mimeType, `${Math.max(1, Math.round(file.sizeBytes / 1024))} KB`])).join("") || row(["Sin archivos registrados", "—", "—"])}</tbody></table></div>`;
 }

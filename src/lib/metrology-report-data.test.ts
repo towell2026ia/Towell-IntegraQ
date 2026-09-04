@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getMetrologyReportTemplate, latestReportForAsset, normalizeMetrologyWorkspace, type MetrologyReport } from "@/lib/metrology-report-data";
+import { calculateMetrologyNextDueDate, getMetrologyReportTemplate, latestReportForAsset, normalizeMetrologyWorkspace, type MetrologyReport } from "@/lib/metrology-report-data";
 import { renderMetrologyReportSvg } from "@/lib/metrology-report-svg";
 import type { MeasurementAsset } from "@/lib/types";
 
@@ -17,6 +17,11 @@ describe("metrology report workflow", () => {
     expect(normalizeMetrologyWorkspace(null, [baseAsset])).toEqual({ assets: [baseAsset], reports: [] });
   });
 
+  it("reprograms from the administrator-defined term", () => {
+    expect(calculateMetrologyNextDueDate({ ...baseAsset, frequencyDays: 60 }, "2026-09-04")).toBe("2026-11-03");
+    expect(calculateMetrologyNextDueDate({ ...baseAsset, frequencyDays: undefined, frequencyMonths: 3 }, "2026-09-30")).toBe("2026-12-30");
+  });
+
   it("returns only the latest report for one equipment", () => {
     const common = { assetId: "asset-1", assetCode: "TOW-MAS-001", template: "F-CA-51", nextDueDate: "2026-01-01", result: "accepted", performedBy: "Calidad", performedByUserId: "user", signedAt: "2026-01-01", values: {}, createdAt: "2026-01-01" } as unknown as MetrologyReport;
     expect(latestReportForAsset([{ ...common, id: "old", completedAt: "2025-01-01" }, { ...common, id: "new", completedAt: "2026-01-01" }], "asset-1")?.id).toBe("new");
@@ -28,5 +33,12 @@ describe("metrology report workflow", () => {
     expect(svg).toContain("<svg");
     expect(svg).toContain("Reporte de Verificación de Básculas");
     expect(svg).toContain("Usuario de calidad");
+  });
+
+  it("renders certificate delivery and OK confirmation for external calibration", () => {
+    const report = { id: "cal-1", assetId: "asset-1", assetCode: "TOW-MAS-001", template: "CALIBRATION", completedAt: "2026-09-04", nextDueDate: "2027-09-04", result: "accepted", performedBy: "Usuario", performedByUserId: "user", signedAt: "2026-09-04T12:00:00Z", createdAt: "2026-09-04T12:00:00Z", values: { reportDeliveryDate: "2026-09-04", confirmedOk: true, certificates: [{ id: "file-1", fileName: "certificado.pdf", mimeType: "application/pdf", sizeBytes: 2048, storageBucket: "integraq-private", storageObjectPath: "path", uploadedAt: "2026-09-04" }] } } as MetrologyReport;
+    const svg = renderMetrologyReportSvg({ ...baseAsset, activity: "calibration" }, report);
+    expect(svg).toContain("EQUIPO OK");
+    expect(svg).toContain("certificado.pdf");
   });
 });

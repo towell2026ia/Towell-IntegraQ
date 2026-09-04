@@ -1,11 +1,11 @@
 "use client";
 
-import { CheckCircle2, Eraser, PenLine, Save, X } from "lucide-react";
+import { CalendarCheck, CheckCircle2, Eraser, FileCheck2, Paperclip, PenLine, Save, Trash2, Upload, X } from "lucide-react";
 import { type FormEvent, type PointerEvent as ReactPointerEvent, useRef, useState } from "react";
 
-import { calculateNextDueDate, toIsoDate } from "@/lib/domain";
 import { getVerificationReadiness } from "@/lib/metrology-data";
-import { buildReportIdentity, getMetrologyReportTemplate, getMetrologyTemplateName, lengthInspectionItems, scaleInspectionItems, type InspectionResult, type LengthVerificationValues, type MetrologyReport, type MetrologyResult, type ScaleVerificationValues } from "@/lib/metrology-report-data";
+import { buildReportIdentity, calculateMetrologyNextDueDate, getMetrologyReportTemplate, getMetrologyTemplateName, lengthInspectionItems, scaleInspectionItems, type CalibrationValues, type InspectionResult, type LengthVerificationValues, type MetrologyReport, type MetrologyResult, type ScaleVerificationValues } from "@/lib/metrology-report-data";
+import { uploadCalibrationCertificates } from "@/lib/metrology-workspace-storage";
 import type { ActiveSession } from "@/lib/session-data";
 import type { MeasurementAsset } from "@/lib/types";
 
@@ -18,6 +18,11 @@ interface Props {
 }
 
 export function MetrologyReportForm({ asset, assets, onClose, onSave, session }: Props) {
+  if (asset.activity === "calibration") return <ExternalCalibrationCloseout asset={asset} onClose={onClose} onSave={onSave} session={session} />;
+  return <VerificationReportForm asset={asset} assets={assets} onClose={onClose} onSave={onSave} session={session} />;
+}
+
+function VerificationReportForm({ asset, assets, onClose, onSave, session }: Props) {
   const template = getMetrologyReportTemplate(asset);
   const [completedAt, setCompletedAt] = useState(new Date().toISOString().slice(0, 10));
   const [result, setResult] = useState<MetrologyResult>("accepted");
@@ -25,7 +30,7 @@ export function MetrologyReportForm({ asset, assets, onClose, onSave, session }:
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const readiness = getVerificationReadiness(asset, assets, completedAt);
-  const nextDueDate = calculateAssetNextDueDate(asset, completedAt);
+  const nextDueDate = calculateMetrologyNextDueDate(asset, completedAt);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,7 +40,7 @@ export function MetrologyReportForm({ asset, assets, onClose, onSave, session }:
       if (asset.activity === "verification" && !readiness.ready) throw new Error(readiness.reason);
       const form = new FormData(event.currentTarget);
       const common = { ...buildReportIdentity(asset, session, template, completedAt, nextDueDate), result, signatureDataUrl: signature };
-      const values = template === "F-CA-51" ? scaleValues(form) : template === "F-CA-53" ? lengthValues(form) : calibrationValues(form);
+      const values = template === "F-CA-51" ? scaleValues(form) : lengthValues(form);
       await onSave({ ...common, values });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No fue posible guardar el informe.");
@@ -48,16 +53,49 @@ export function MetrologyReportForm({ asset, assets, onClose, onSave, session }:
 
   return <div className="modal-backdrop metrology-form-backdrop" role="presentation"><section className="modal metrology-form-modal" role="dialog" aria-modal="true" aria-labelledby="metrology-form-title"><header className="metrology-form-header"><div><p>{template}</p><h3 id="metrology-form-title">{getMetrologyTemplateName(template)}</h3><span>Towel S.A. de C.V. · Formato digital controlado</span></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={19} /></button></header>
     <form onSubmit={submit}>
-      <section className="metrology-form-identification"><label><span>Número de referencia interno</span><input disabled value={asset.code} /></label><label><span>Fecha</span><input required type="date" value={completedAt} onChange={(event) => setCompletedAt(event.target.value)} /></label><label><span>Periodicidad de verificación</span><input defaultValue={asset.frequencyDays ? `${asset.frequencyDays} días` : `${asset.frequencyMonths} meses`} name="periodicity" required /></label><label><span>Ubicación</span><input disabled value={asset.location} /></label><label className="span-2"><span>Nombre del encargado de la verificación</span><input defaultValue={session.name} name="inspector" required /></label></section>
+      <section className="metrology-form-identification"><label><span>Número de referencia interno</span><input disabled value={asset.code} /></label><label><span>Fecha</span><input required type="date" value={completedAt} onChange={(event) => setCompletedAt(event.target.value)} /></label><label><span>Periodicidad de verificación</span><input readOnly defaultValue={asset.frequencyDays ? `${asset.frequencyDays} días` : `${asset.frequencyMonths} meses`} name="periodicity" required /></label><label><span>Ubicación</span><input disabled value={asset.location} /></label><label className="span-2"><span>Nombre del encargado de la verificación</span><input defaultValue={session.name} name="inspector" required /></label></section>
       {asset.activity === "verification" ? <p className={`metrology-readiness-inline ${readiness.ready ? "ready" : "blocked"}`}>{readiness.ready ? <CheckCircle2 size={15} /> : <X size={15} />}{readiness.reason}</p> : null}
 
       {template === "F-CA-51" ? <ScaleFields referenceNames={referenceNames} /> : null}
       {template === "F-CA-53" ? <LengthFields /> : null}
-      {template === "CALIBRATION" ? <CalibrationFields asset={asset} /> : null}
 
       <section className="metrology-signature-section"><div><p className="module-kicker">Cierre del informe</p><h4>Resultado y firma</h4></div><div className="metrology-signature-controls"><label><span>Resultado</span><select value={result} onChange={(event) => setResult(event.target.value as MetrologyResult)}><option value="accepted">Conforme</option><option value="conditional">Con ajuste / condicionado</option><option value="rejected">No conforme / fuera de servicio</option></select></label><label><span>Firma con usuario</span><input disabled value={`${session.name} · ${session.position}`} /></label></div><SignaturePad onChange={setSignature} /></section>
       {error ? <p className="form-error metrology-form-error">{error}</p> : null}
       <footer className="metrology-form-footer"><span><CheckCircle2 size={15} /> Se guardará con fecha, usuario y trazabilidad del equipo.</span><div><button className="button button-ghost" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" disabled={submitting} type="submit"><Save size={16} /> {submitting ? "Guardando…" : "Firmar y guardar"}</button></div></footer>
+    </form>
+  </section></div>;
+}
+
+function ExternalCalibrationCloseout({ asset, onClose, onSave, session }: Omit<Props, "assets">) {
+  const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().slice(0, 10));
+  const [files, setFiles] = useState<File[]>([]);
+  const [confirmedOk, setConfirmedOk] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const nextDueDate = calculateMetrologyNextDueDate(asset, deliveryDate);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setSubmitting(true); setError("");
+    try {
+      if (!files.length) throw new Error("Adjunta al menos un certificado de calibración.");
+      if (!confirmedOk) throw new Error("Confirma el check OK después de revisar los certificados.");
+      const certificates = await uploadCalibrationCertificates(files, asset);
+      const values: CalibrationValues = { reportDeliveryDate: deliveryDate, certificates, confirmedOk: true };
+      await onSave({ ...buildReportIdentity(asset, session, "CALIBRATION", deliveryDate, nextDueDate), result: "accepted", values });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No fue posible cerrar la calibración.");
+    } finally { setSubmitting(false); }
+  }
+
+  return <div className="modal-backdrop metrology-form-backdrop" role="presentation"><section className="modal metrology-form-modal metrology-external-closeout" role="dialog" aria-modal="true" aria-labelledby="external-calibration-title"><header className="metrology-form-header"><div><p>CALIBRACIÓN EXTERNA</p><h3 id="external-calibration-title">Entrega de certificados y cierre OK</h3><span>Incluye equipos de calibración y patrones externos</span></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={19} /></button></header>
+    <form onSubmit={submit}>
+      <section className="metrology-external-equipment"><div><small>Equipo</small><strong>{asset.code} · {asset.name}</strong></div><div><small>Ubicación</small><strong>{asset.location}</strong></div><div><small>Plazo administrado</small><strong>{asset.frequencyDays ? `${asset.frequencyDays} días` : `${asset.frequencyMonths} meses`}</strong></div><div><small>Responsable</small><strong>{asset.owner}</strong></div></section>
+      <section className="metrology-controlled-section"><header><h4>Entrega del reporte de calibración</h4><small>No se solicitan mediciones ni datos técnicos adicionales.</small></header><div className="metrology-external-fields"><label><span>Fecha de entrega del reporte</span><input required type="date" value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} /></label><div className="metrology-next-program"><CalendarCheck size={19} /><span><small>Siguiente calibración programada</small><strong>{formatDate(nextDueDate)}</strong></span></div></div></section>
+      <section className="metrology-controlled-section"><header><h4>Certificados adjuntos</h4><small>PDF o imágenes · uno o varios archivos</small></header><div className="metrology-certificate-upload"><label className={`button button-secondary file-button ${submitting ? "disabled" : ""}`}><Upload size={16} /> Adjuntar certificados<input accept=".pdf,.png,.jpg,.jpeg,.webp" disabled={submitting} multiple type="file" onChange={(event) => { const selected = Array.from(event.target.files ?? []); setFiles((current) => [...current, ...selected].filter((file, index, all) => all.findIndex((candidate) => candidate.name === file.name && candidate.size === file.size) === index)); event.currentTarget.value = ""; }} /></label>{files.length ? <div className="metrology-certificate-list">{files.map((file, index) => <div key={`${file.name}-${file.size}`}><FileCheck2 size={16} /><span><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></span><button className="icon-button" type="button" onClick={() => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))} aria-label={`Quitar ${file.name}`}><Trash2 size={15} /></button></div>)}</div> : <p><Paperclip size={16} /> Sin certificados adjuntos</p>}</div></section>
+      <label className={`metrology-ok-confirmation ${confirmedOk ? "checked" : ""}`}><input checked={confirmedOk} onChange={(event) => setConfirmedOk(event.target.checked)} type="checkbox" /><CheckCircle2 size={21} /><span><strong>Equipo OK</strong><small>Confirmo que revisé el o los certificados. Al guardar, el equipo quedará vigente y se reprogramará con el plazo definido por el administrador.</small></span></label>
+      <p className="metrology-system-trace">El cierre quedará registrado automáticamente a nombre de {session.name}.</p>
+      {error ? <p className="form-error metrology-form-error">{error}</p> : null}
+      <footer className="metrology-form-footer"><span><CheckCircle2 size={15} /> Sólo se guardan fecha de entrega, certificados y confirmación OK.</span><div><button className="button button-ghost" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" disabled={submitting || !files.length || !confirmedOk} type="submit"><Save size={16} /> {submitting ? "Guardando certificados…" : "Confirmar OK y reprogramar"}</button></div></footer>
     </form>
   </section></div>;
 }
@@ -94,10 +132,6 @@ function LengthFields() {
   </>;
 }
 
-function CalibrationFields({ asset }: { asset: MeasurementAsset }) {
-  return <section className="metrology-controlled-section"><header><h4>Informe de calibración externa</h4><small>Registro asociado exclusivamente al equipo seleccionado.</small></header><div className="metrology-calibration-fields"><label><span>Proveedor / laboratorio</span><input defaultValue={asset.externalProvider} name="provider" required /></label><label><span>Número de certificado</span><input defaultValue={asset.calibrationReport} name="certificate" required /></label><label><span>Alcance calibrado</span><input defaultValue={asset.measurementRange} name="scope" required /></label><label><span>Incertidumbre declarada</span><input name="uncertainty" /></label><label className="span-2"><span>Observaciones</span><textarea name="observations" rows={4} /></label></div></section>;
-}
-
 function MeasurementInputs({ count, label, name }: { count: number; label: string; name: string }) { return <div className="metrology-point-list">{Array.from({ length: count }, (_, index) => <label key={index}><span>{label} {index + 1}</span><input name={`${name}-${index}`} /></label>)}</div>; }
 
 function SignaturePad({ onChange }: { onChange: (value?: string) => void }) {
@@ -113,11 +147,11 @@ function SignaturePad({ onChange }: { onChange: (value?: string) => void }) {
 
 function scaleValues(form: FormData): ScaleVerificationValues { return { periodicity: String(form.get("periodicity")), inspector: String(form.get("inspector")), visual: Object.fromEntries(scaleInspectionItems.map((item, index) => [item, String(form.get(`visual-${index}`)) as InspectionResult])), stabilization: Array.from({ length: 3 }, (_, index) => String(form.get(`stabilization-${index}`))), eccentricityLoad: String(form.get("eccentricityLoad")), eccentricity: Array.from({ length: 5 }, (_, index) => String(form.get(`eccentricity-${index}`))), repeatability: Array.from({ length: 5 }, (_, index) => String(form.get(`repeatability-${index}`))), indication: Array.from({ length: 7 }, (_, index) => ({ reading: String(index + 1), nominal: String(form.get(`nominal-${index}`)), ascending: String(form.get(`ascending-${index}`)) })), standards: String(form.get("standards")), observations: String(form.get("observations")) }; }
 function lengthValues(form: FormData): LengthVerificationValues { return { periodicity: String(form.get("periodicity")), inspector: String(form.get("inspector")), visual: Object.fromEntries(lengthInspectionItems.map((item, index) => [item, String(form.get(`visual-${index}`)) as InspectionResult])), initialTemperature: String(form.get("initialTemperature")), initialHumidity: String(form.get("initialHumidity")), finalTemperature: String(form.get("finalTemperature")), finalHumidity: String(form.get("finalHumidity")), units: String(form.get("units")), measurements: Array.from({ length: 13 }, (_, index) => ({ dimension: String(form.get(`dimension-${index}`)), first: String(form.get(`first-${index}`)), second: String(form.get(`second-${index}`)), third: String(form.get(`third-${index}`)), average: String(form.get(`average-${index}`)) })), observations: String(form.get("observations")) }; }
-function calibrationValues(form: FormData) { return { provider: String(form.get("provider")), certificate: String(form.get("certificate")), scope: String(form.get("scope")), uncertainty: String(form.get("uncertainty")), observations: String(form.get("observations")) }; }
+function formatDate(value: string) {
+  return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+}
 
-function calculateAssetNextDueDate(asset: MeasurementAsset, completedAt: string) {
-  if (!asset.frequencyDays) return calculateNextDueDate(completedAt, asset.frequencyMonths);
-  const completed = new Date(`${completedAt}T00:00:00Z`);
-  completed.setUTCDate(completed.getUTCDate() + asset.frequencyDays);
-  return toIsoDate(completed);
+function formatBytes(value: number) {
+  if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
 }

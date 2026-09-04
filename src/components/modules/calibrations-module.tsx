@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   BadgeCheck,
+  CalendarDays,
   ClipboardCheck,
   ExternalLink,
   FileText,
@@ -11,6 +12,7 @@ import {
   Plus,
   QrCode,
   Search,
+  Settings2,
   ShieldCheck,
   Truck,
   Wrench,
@@ -27,6 +29,7 @@ import type { ActiveSession } from "@/lib/session-data";
 import type { DueStatus, MeasurementActivity, MeasurementAsset } from "@/lib/types";
 import { MetrologyQrModal } from "@/components/modules/metrology-qr-modal";
 import { MetrologyReportForm } from "@/components/modules/metrology-report-form";
+import { MetrologyAssetManager } from "@/components/modules/metrology-asset-manager";
 
 interface CalibrationsModuleProps {
   assets: MeasurementAsset[];
@@ -56,6 +59,7 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
   const [scopeFilter, setScopeFilter] = useState<ScopeFilter>("all");
   const [selectedAsset, setSelectedAsset] = useState<MeasurementAsset | null>(focusedAsset);
   const [isCreateOpen, setCreateOpen] = useState(false);
+  const [isManagerOpen, setManagerOpen] = useState(false);
   const [formAssetId, setFormAssetId] = useState(focusedAsset?.id ?? assets.find((asset) => !asset.isReferenceStandard)?.id ?? assets[0]?.id ?? "");
   const [qrAsset, setQrAsset] = useState<MeasurementAsset | null>(null);
   const [reports, setReports] = useState<MetrologyReport[]>([]);
@@ -136,9 +140,8 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
       lastCompletedAt: report.completedAt,
       nextDueDate: report.nextDueDate,
       schedulePending: false,
-      externalProvider: calibration?.provider ?? item.externalProvider,
-      calibrationReport: calibration?.certificate ?? item.calibrationReport,
-      evidenceCount: item.evidenceCount + 1,
+      calibrationReport: calibration?.certificates?.map((certificate) => certificate.fileName).join("; ") || calibration?.certificate || item.calibrationReport,
+      evidenceCount: item.evidenceCount + (calibration?.certificates?.length ?? 1),
     } : item);
     const nextReports = [report, ...reports.filter((item) => item.id !== report.id)];
     await persist(nextAssets, nextReports);
@@ -152,11 +155,15 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
     void persist(nextAssets, reports).catch((error) => setWorkspaceError(error instanceof Error ? error.message : "No fue posible guardar el equipo."));
   }
 
+  async function updateAsset(asset: MeasurementAsset) {
+    await persist(assets.map((item) => item.id === asset.id ? asset : item), reports);
+  }
+
   return (
     <>
       <section className="module-heading metrology-heading">
         <div><p className="module-kicker">Control metrológico</p><h2>Calibración y verificación</h2><p>Programa F-CA-37 · verificación interna con patrón vigente y calibración externa.</p></div>
-        {canManageAssets ? <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Nuevo equipo</button> : null}
+        {canManageAssets ? <div className="metrology-heading-actions"><button className="button button-secondary" type="button" onClick={() => setManagerOpen(true)}><Settings2 size={17} /> Editar o ajustar</button><button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Nuevo equipo</button></div> : null}
       </section>
 
       <section className="metric-grid" aria-label="Resumen metrológico">
@@ -167,14 +174,16 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
       </section>
 
       <section className="metrology-agent-panel metrology-native-workflow work-panel">
-        <header><span><FileText size={20} /></span><div><small>Mini app interna</small><h3>Captura y firma de informes metrológicos</h3></div><span className={`risk-storage-status ${serverConnected ? "connected" : "local"}`}>{serverConnected ? "Conectado a Supabase" : "Sin conexión"}</span></header>
+        <header><span><FileText size={20} /></span><div><small>Mini app interna</small><h3>Verificaciones y cierre de calibraciones externas</h3></div><span className={`risk-storage-status ${serverConnected ? "connected" : "local"}`}>{serverConnected ? "Conectado a Supabase" : "Sin conexión"}</span></header>
         <div className="metrology-agent-controls">
-          <label><span>Equipo</span><select value={formAsset?.id ?? ""} onChange={(event) => setFormAssetId(event.target.value)}>{assets.filter((asset) => !asset.isReferenceStandard).map((asset) => <option key={asset.id} value={asset.id}>{asset.code} · {asset.name}</option>)}</select></label>
+          <label><span>Equipo</span><select value={formAsset?.id ?? ""} onChange={(event) => setFormAssetId(event.target.value)}>{assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.code} · {asset.name}{asset.isReferenceStandard ? " · Patrón" : ""}</option>)}</select></label>
           <div className="metrology-form-route"><span>Formato asignado</span><strong>{formAsset ? getMetrologyTemplateName(getMetrologyReportTemplate(formAsset)) : "Selecciona un equipo"}</strong><small>{formAssetReport ? `Último: ${formatDate(formAssetReport.completedAt)} · ${formAssetReport.performedBy}` : "Sin informe previo en la plataforma"}</small></div>
         </div>
         {workspaceError ? <p className="metrology-workspace-error"><AlertTriangle size={15} />{workspaceError}</p> : null}
-        <footer><span><BadgeCheck size={15} /> El formato se llena, firma y guarda sin salir de IntegraQ.</span><button className="button button-primary" disabled={!formAsset || !serverConnected || !canExecute} type="button" onClick={() => formAsset && setSelectedAsset(formAsset)}><ClipboardCheck size={15} /> Abrir formato</button></footer>
+        <footer><span><BadgeCheck size={15} /> {formAsset?.activity === "calibration" ? "La calibración se cierra sólo con fecha, certificados y check OK." : "La verificación se llena y firma con su formato controlado."}</span><button className="button button-primary" disabled={!formAsset || !serverConnected || !canExecute} type="button" onClick={() => formAsset && setSelectedAsset(formAsset)}><ClipboardCheck size={15} /> {formAsset?.activity === "calibration" ? "Entregar certificados" : "Abrir formato"}</button></footer>
       </section>
+
+      <MetrologyCalendar assets={assets} today={today} />
 
       <section className="table-panel metrology-register">
         <div className="metrology-scope-tabs" role="tablist" aria-label="Alcances metrológicos">
@@ -197,22 +206,28 @@ export function CalibrationsModule({ assets, focusId, onAssetsChange, session }:
             const readiness = getVerificationReadiness(asset, assets, today);
             return <tr key={asset.id}><td><div className="equipment-cell"><div className={`equipment-icon ${asset.isReferenceStandard ? "standard" : ""}`}>{asset.isReferenceStandard ? <FlaskConical size={17} /> : <Wrench size={17} />}</div><span><strong>{asset.name}</strong><small>{asset.code}{asset.model ? ` · ${asset.model}` : ""}{asset.isReferenceStandard ? " · Patrón" : ""}</small></span></div></td>
               <td><span className={`metrology-scope scope-${asset.activity}`}>{activityLabels[asset.activity]}</span></td>
-              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td><span className="metrology-table-actions">{canExecute ? <button className="icon-button compact-button" title={asset.activity === "verification" ? "Llenar verificación" : "Registrar calibración"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={17} /></button> : null}{latestReportForAsset(reports, asset.id) && asset.publicToken ? <a className="icon-button compact-button" href={`/equipment/${asset.publicToken}`} rel="noreferrer" target="_blank" title="Ver último informe"><ExternalLink size={16} /></a> : null}<button className="icon-button compact-button" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} title="Ver QR del equipo" type="button"><QrCode size={17} /></button></span></td></tr>;
+              <td><MetrologySupport asset={asset} readiness={readiness} /></td><td>{asset.location}</td><td><strong>{formatDate(asset.nextDueDate)}</strong></td><td><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></td><td>{asset.owner}</td><td><span className="metrology-table-actions">{canExecute ? <button className="icon-button compact-button" title={asset.activity === "verification" ? "Llenar verificación" : "Adjuntar certificados y confirmar OK"} type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={17} /></button> : null}{latestReportForAsset(reports, asset.id) && asset.publicToken ? <a className="icon-button compact-button" href={`/equipment/${asset.publicToken}`} rel="noreferrer" target="_blank" title="Ver último informe"><ExternalLink size={16} /></a> : null}<button className="icon-button compact-button" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} title="Ver QR del equipo" type="button"><QrCode size={17} /></button></span></td></tr>;
           })}
         </tbody></table></div>
 
         <div className="mobile-asset-list">{filteredAssets.map((asset) => {
           const status = getAssetDueStatus(asset, today);
           const readiness = getVerificationReadiness(asset, assets, today);
-          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl><div className="metrology-mobile-actions">{canExecute ? <button className="button button-secondary" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> Llenar informe</button> : null}<button className="button button-secondary" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} type="button"><QrCode size={16} /> QR</button></div></article>;
+          return <article className="asset-mobile-row" key={asset.id}><div className="asset-mobile-header"><div><small>{asset.code}{asset.isReferenceStandard ? " · Patrón" : ""}</small><strong>{asset.name}</strong></div><span className={`due-badge due-${status}`}>{formatDueLabel(asset, status)}</span></div><dl><div><dt>Alcance</dt><dd>{activityLabels[asset.activity]}</dd></div><div><dt>Patrón / proveedor</dt><dd>{asset.activity === "verification" ? readiness.references.length === 1 ? readiness.reference?.code : `${readiness.references.length} patrones aplicables` : asset.externalProvider ?? "Sin proveedor"}</dd></div><div><dt>Próxima fecha</dt><dd>{formatDate(asset.nextDueDate)}</dd></div><div><dt>Responsable</dt><dd>{asset.owner}</dd></div></dl><div className="metrology-mobile-actions">{canExecute ? <button className="button button-secondary" type="button" onClick={() => setSelectedAsset(asset)}><ClipboardCheck size={16} /> {asset.activity === "calibration" ? "Certificados y OK" : "Llenar informe"}</button> : null}<button className="button button-secondary" disabled={!asset.publicToken} onClick={() => setQrAsset(asset)} type="button"><QrCode size={16} /> QR</button></div></article>;
         })}</div>
       </section>
 
       {selectedAsset && canExecute ? <MetrologyReportForm asset={selectedAsset} assets={assets} onClose={() => setSelectedAsset(null)} onSave={(report) => completeActivity(selectedAsset, report)} session={session} /> : null}
       {qrAsset ? <MetrologyQrModal asset={qrAsset} lastReport={latestReportForAsset(reports, qrAsset.id)} onClose={() => setQrAsset(null)} /> : null}
       {isCreateOpen && canManageAssets ? <CreateAssetModal assets={assets} today={today} onClose={() => setCreateOpen(false)} onSubmit={addAsset} /> : null}
+      {isManagerOpen && canManageAssets ? <MetrologyAssetManager assets={assets} onClose={() => setManagerOpen(false)} onSave={updateAsset} /> : null}
     </>
   );
+}
+
+function MetrologyCalendar({ assets, today }: { assets: MeasurementAsset[]; today: string }) {
+  const scheduled = [...assets].filter((asset) => !asset.schedulePending && asset.nextDueDate).sort((left, right) => left.nextDueDate.localeCompare(right.nextDueDate)).slice(0, 8);
+  return <section className="metrology-calendar-panel"><header><span><CalendarDays size={19} /></span><div><small>Programación derivada de los plazos administrativos</small><h3>Calendario de calibración y verificación</h3></div><strong>{scheduled.length} próximas actividades</strong></header><div>{scheduled.map((asset) => { const status = getAssetDueStatus(asset, today); return <article key={asset.id}><time dateTime={asset.nextDueDate}>{formatDate(asset.nextDueDate)}</time><span><strong>{asset.code} · {asset.name}</strong><small>{activityLabels[asset.activity]}{asset.isReferenceStandard ? " · Patrón" : ""} · {asset.location}</small></span><em className={`due-badge due-${status}`}>{dueLabels[status]}</em></article>; })}</div></section>;
 }
 
 function MetrologySupport({ asset, readiness }: { asset: MeasurementAsset; readiness: ReturnType<typeof getVerificationReadiness> }) {
@@ -251,7 +266,7 @@ function CreateAssetModal({ assets, today, onClose, onSubmit }: { assets: Measur
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    onSubmit({ code, name, location, owner, activity, frequencyMonths, frequencyDays: frequencyMonths * 30, lastCompletedAt, nextDueDate: calculateNextDueDate(lastCompletedAt, frequencyMonths), standard, isReferenceStandard, referenceStandardId: activity === "verification" ? referenceStandardId : undefined, referenceStandardIds: activity === "verification" && referenceStandardId ? [referenceStandardId] : undefined, externalProvider: activity === "calibration" ? externalProvider : undefined, measurementCategory, model, serialNumber, measurementRange, resolution, observations });
+    onSubmit({ code, name, location, owner, activity, frequencyMonths, lastCompletedAt, nextDueDate: calculateNextDueDate(lastCompletedAt, frequencyMonths), standard, isReferenceStandard, referenceStandardId: activity === "verification" ? referenceStandardId : undefined, referenceStandardIds: activity === "verification" && referenceStandardId ? [referenceStandardId] : undefined, externalProvider: activity === "calibration" ? externalProvider : undefined, measurementCategory, model, serialNumber, measurementRange, resolution, observations });
   }
 
   return <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true"><div className="modal-header"><div><p className="module-kicker">Control metrológico</p><h3>Registrar nuevo equipo</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={19} /></button></div>

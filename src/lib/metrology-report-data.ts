@@ -32,11 +32,24 @@ export interface LengthVerificationValues {
 }
 
 export interface CalibrationValues {
-  provider: string;
-  certificate: string;
-  scope: string;
-  uncertainty: string;
-  observations: string;
+  reportDeliveryDate: string;
+  certificates: MetrologyAttachment[];
+  confirmedOk: true;
+  provider?: string;
+  certificate?: string;
+  scope?: string;
+  uncertainty?: string;
+  observations?: string;
+}
+
+export interface MetrologyAttachment {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  storageBucket: string;
+  storageObjectPath: string;
+  uploadedAt: string;
 }
 
 export interface MetrologyReport {
@@ -73,7 +86,7 @@ export function getMetrologyReportTemplate(asset: MeasurementAsset): MetrologyRe
 export function getMetrologyTemplateName(template: MetrologyReportTemplate) {
   if (template === "F-CA-51") return "Reporte de Verificación de Básculas · Rev. 1";
   if (template === "F-CA-53") return "Reporte de Verificación de Flexómetros y Cintas Métricas · Rev. 0";
-  return "Informe de calibración externa";
+  return "Entrega de certificados de calibración externa";
 }
 
 export function normalizeMetrologyWorkspace(value: Partial<MetrologyWorkspaceState> | null | undefined, fallbackAssets: MeasurementAsset[]): MetrologyWorkspaceState {
@@ -101,4 +114,18 @@ export function buildReportIdentity(asset: MeasurementAsset, session: ActiveSess
 
 export function latestReportForAsset(reports: MetrologyReport[], assetId: string) {
   return reports.filter((report) => report.assetId === assetId).sort((a, b) => b.completedAt.localeCompare(a.completedAt) || b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+export function calculateMetrologyNextDueDate(asset: MeasurementAsset, completedAt: string) {
+  if (!asset.frequencyDays) {
+    const completed = new Date(`${completedAt}T00:00:00Z`);
+    const originalDay = completed.getUTCDate();
+    const target = new Date(Date.UTC(completed.getUTCFullYear(), completed.getUTCMonth() + asset.frequencyMonths, 1));
+    const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+    target.setUTCDate(Math.min(originalDay, lastDay));
+    return target.toISOString().slice(0, 10);
+  }
+  const completed = new Date(`${completedAt}T00:00:00Z`);
+  completed.setUTCDate(completed.getUTCDate() + asset.frequencyDays);
+  return completed.toISOString().slice(0, 10);
 }
