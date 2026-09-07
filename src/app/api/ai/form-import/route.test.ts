@@ -1,6 +1,14 @@
 import ExcelJS from "exceljs";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/supabase/auth-session", () => ({
+  getAuthenticatedSession: async () => ({ userId: "USR-1", authUserId: "auth-1", name: "Admin", shortName: "Admin", initials: "A", position: "Administrador", department: "Calidad", company: "Towell", userType: "Administrador", assignedProcessIds: [] }),
+}));
+vi.mock("@/ai/core/legacy-adapter", () => ({
+  authorizeLegacyAiRequest: () => ({ allowed: true, reason: "Autorizado.", grantedPermissions: [] }),
+  logLegacyAiRequest: async () => undefined,
+}));
+
 import { POST } from "./route";
 
 describe("form import API", () => {

@@ -1,17 +1,23 @@
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
+import { authorizeLegacyAiRequest, logLegacyAiRequest } from "@/ai/core/legacy-adapter";
 import {
   interpretExcelGrid,
   normalizeFormImportDraft,
   type FormImportDraft,
 } from "@/lib/form-import-data";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 
 const maxFileSize = 15 * 1024 * 1024;
 const excelExtensions = [".xlsx", ".xlsm"];
 const imageTypes = ["image/jpeg", "image/png", "image/webp"];
 
 export async function POST(request: Request) {
+  const session = await getAuthenticatedSession();
+  if (!session) return NextResponse.json({ error: "Inicia sesión para interpretar el formulario." }, { status: 401 });
+  const access = authorizeLegacyAiRequest(session, "forms", "ai.generate_draft");
+  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
   const body = await request.formData().catch(() => null);
   const file = body?.get("file");
   if (!(file instanceof File)) {
@@ -22,6 +28,7 @@ export async function POST(request: Request) {
   }
 
   const extension = `.${file.name.split(".").pop()?.toLocaleLowerCase("es-MX") ?? ""}`;
+  await logLegacyAiRequest({ user: session, module: "forms", capability: "legacy.form_import", input: { fileName: file.name, size: file.size, mimeType: file.type }, context: {}, recordType: "form_definition", requiresApproval: true });
   try {
     if (excelExtensions.includes(extension)) {
       return NextResponse.json({ draft: await interpretExcelFile(file) });

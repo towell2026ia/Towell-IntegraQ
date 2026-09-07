@@ -14,6 +14,7 @@ import {
   uploadProcessOrganizationChart,
 } from "@/lib/organization-chart-storage";
 import type { OrganizationPosition } from "@/lib/organization-data";
+import { normalizePositionName } from "@/lib/organization-position-data";
 import { createClient } from "@/lib/supabase/client";
 
 type PositionRow = { id: string; name: string; level: number; parent_id: string | null; branch: string };
@@ -82,7 +83,7 @@ export function ProcessOrganizationChart({
     const selectedRows = rows.filter((row) => row.include && row.name.trim());
     const items: OrganizationImportItem[] = selectedRows.map((row) => ({
       clientId: row.clientId,
-      name: row.name.trim(),
+      name: normalizePositionName(row.name),
       branch: row.branch.trim() || process.name,
       ...(row.parentRef.startsWith("draft:")
         ? { parentClientId: row.parentRef.slice(6) }

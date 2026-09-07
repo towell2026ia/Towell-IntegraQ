@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { authorizeLegacyAiRequest, logLegacyAiRequest } from "@/ai/core/legacy-adapter";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+
 import type {
   ManagementReviewAiDraft,
   ManagementReviewAiRequest,
@@ -229,6 +232,10 @@ function isDecision(value: unknown): value is ManagementReviewDecision {
 }
 
 export async function POST(request: Request) {
+  const session = await getAuthenticatedSession();
+  if (!session) return NextResponse.json({ error: "Inicia sesión para generar la revisión." }, { status: 401 });
+  const access = authorizeLegacyAiRequest(session, "management-review", "ai.generate_draft");
+  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
   const body: unknown = await request.json().catch(() => null);
   if (!isRequest(body)) {
     return NextResponse.json(
@@ -236,6 +243,8 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  await logLegacyAiRequest({ user: session, module: "management-review", capability: "legacy.management_review", input: { period: body.context.period }, context: { fingerprint: body.context.fingerprint, sources: body.context.sources.map((source) => source.id) }, recordType: "management_review", requiresApproval: true });
 
   const endpoint =
     process.env.INTEGRAQ_MANAGEMENT_REVIEW_AI_ENDPOINT ?? process.env.INTEGRAQ_AI_ENDPOINT;

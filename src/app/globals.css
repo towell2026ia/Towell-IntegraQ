@@ -1535,6 +1535,9 @@ button:disabled {
 .organization-modal header small { color: var(--muted); font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .organization-modal header h3 { margin: 5px 0 0; font-size: 16px; }
 .organization-modal header > button { display: grid; width: 30px; height: 30px; place-items: center; color: var(--muted); background: #f3f5f3; border: 0; border-radius: 5px; }
+.organization-parent-preview { display: flex; align-items: center; gap: 9px; padding: 10px; color: var(--blue); background: var(--blue-soft); border-radius: 5px; }
+.organization-parent-preview > span { flex: 0 0 auto; padding: 4px 7px; color: #fff; background: var(--blue); border-radius: 999px; font-size: 8px; font-weight: 800; }
+.organization-parent-preview p { margin: 0; font-size: 9px; line-height: 1.4; }
 .organization-modal label { display: grid; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 700; }
 .organization-modal input, .organization-modal select { width: 100%; height: 38px; padding: 0 10px; color: var(--ink); background: #fff; border: 1px solid var(--line); border-radius: 5px; font-size: 10px; }
 .organization-modal > p { display: flex; align-items: center; gap: 7px; margin: 0; padding: 10px; color: var(--blue); background: var(--blue-soft); border-radius: 5px; font-size: 8px; }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { ProcessRelationship } from "@/lib/organization-data";
+import { normalizePositionName } from "@/lib/organization-position-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -75,16 +76,23 @@ export async function POST(request: Request) {
         continue;
       }
       const actualLevel = parent ? hierarchyLevel(parent, byId) + 1 : 1;
+      if (body.mode !== "process-import" && actualLevel < 5) {
+        return NextResponse.json({ error: "Los nuevos puestos deben agregarse debajo de un puesto de nivel 4 o posterior." }, { status: 400 });
+      }
       const id = `PU-${String(nextNumber).padStart(2, "0")}`;
       nextNumber += 1;
-      const inserted = await admin.from("positions").insert({
+      const positionData = {
         id,
         organization_id: actor.organizationId,
         name: item.name,
-        level: Math.min(actualLevel, 4),
+        level: actualLevel,
         parent_id: parentId ?? null,
         branch: item.branch,
-      }).select("id,name,level,parent_id,branch").single();
+      };
+      let inserted = await admin.from("positions").insert(positionData).select("id,name,level,parent_id,branch").single();
+      if (inserted.error?.code === "23514" && actualLevel > 4) {
+        inserted = await admin.from("positions").insert({ ...positionData, level: 4 }).select("id,name,level,parent_id,branch").single();
+      }
       if (inserted.error) throw inserted.error;
       const row = inserted.data as PositionRow;
       positions.push(row); byId.set(id, row); createdByClientId.set(item.clientId, id);
@@ -118,7 +126,14 @@ export async function PUT(request: Request) {
     if (result.error) throw result.error;
     const rows = (result.data ?? []) as PositionRow[];
     if (createsCycle(body.id, body.parentId ?? undefined, rows)) return NextResponse.json({ error: "La dependencia seleccionada crea un ciclo jerárquico." }, { status: 400 });
-    const updated = await admin.from("positions").update({ name: body.name.trim(), branch: body.branch.trim(), parent_id: body.parentId || null, level: Math.min(body.parentId ? 4 : 1, 4) }).eq("id", body.id).eq("organization_id", actor.organizationId).select("id").maybeSingle();
+    const parent = body.parentId ? rows.find((row) => row.id === body.parentId) : undefined;
+    if (body.parentId && !parent) return NextResponse.json({ error: "No se encontró el puesto superior." }, { status: 400 });
+    const actualLevel = parent ? hierarchyLevel(parent, new Map(rows.map((row) => [row.id, row]))) + 1 : 1;
+    const updateData = { name: normalizePositionName(body.name), branch: body.branch.trim(), parent_id: body.parentId || null, level: actualLevel };
+    let updated = await admin.from("positions").update(updateData).eq("id", body.id).eq("organization_id", actor.organizationId).select("id").maybeSingle();
+    if (updated.error?.code === "23514" && actualLevel > 4) {
+      updated = await admin.from("positions").update({ ...updateData, level: 4 }).eq("id", body.id).eq("organization_id", actor.organizationId).select("id").maybeSingle();
+    }
     if (updated.error) throw updated.error;
     if (!updated.data) return NextResponse.json({ error: "El puesto no existe." }, { status: 404 });
     await admin.from("audit_log").insert({ actor_id: actor.id, action: "organization.position_updated", resource_type: "organization_position", resource_id: body.id, metadata: { parent_id: body.parentId ?? null } });
@@ -159,7 +174,7 @@ function normalizeItems(value: unknown): ImportItem[] {
   return value.flatMap((candidate, index) => {
     if (!candidate || typeof candidate !== "object") return [];
     const item = candidate as Partial<ImportItem>;
-    const name = typeof item.name === "string" ? item.name.trim() : "";
+    const name = typeof item.name === "string" ? normalizePositionName(item.name) : "";
     const branch = typeof item.branch === "string" ? item.branch.trim() : "";
     if (!name || !branch) return [];
     const relationships: ProcessRelationship[] = ["owner", "approver", "participant", "support"];

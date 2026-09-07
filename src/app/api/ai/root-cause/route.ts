@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { authorizeLegacyAiRequest, logLegacyAiRequest } from "@/ai/core/legacy-adapter";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import type {
   AiRootCauseDraft,
   AiRootCauseRequest,
@@ -98,6 +100,10 @@ function normalizeExternalDraft(
 }
 
 export async function POST(request: Request) {
+  const session = await getAuthenticatedSession();
+  if (!session) return NextResponse.json({ error: "Inicia sesión para solicitar el análisis." }, { status: 401 });
+  const access = authorizeLegacyAiRequest(session, "corrective-actions", "ai.generate_draft");
+  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
   const body: unknown = await request.json().catch(() => null);
 
   if (!isRequest(body)) {
@@ -109,6 +115,8 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+
+  await logLegacyAiRequest({ user: session, module: "corrective-actions", capability: "legacy.root_cause", input: { problem: body.problem, source: body.source }, context: body.contextSources ?? {}, recordType: "corrective_action", requiresApproval: true });
 
   const endpoint = process.env.INTEGRAQ_AI_ENDPOINT;
   const apiKey = process.env.INTEGRAQ_AI_API_KEY;
