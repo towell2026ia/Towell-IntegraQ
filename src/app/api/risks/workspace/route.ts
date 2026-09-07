@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 
+import { authorize } from "@/lib/access/authorize";
 import { processCatalog } from "@/lib/configuration-data";
 import { buildInitialRiskWorkspace, type RiskWorkspaceState } from "@/lib/risk-opportunity-data";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
 
 export const maxDuration = 30;
@@ -55,6 +57,10 @@ export async function GET() {
   try {
     const actor = await requireInternalActor();
     if (!actor) return NextResponse.json({ error: "Acceso interno requerido." }, { status: 403 });
+    const session = await getAuthenticatedSession();
+    const representativeProcessId = session?.assignedProcessIds[0];
+    const access = authorize({ user: session, permission: "risks.read", record: { processId: representativeProcessId } });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const record = await ensureWorkspace(actor);
     if (!record) return NextResponse.json({ error: "La matriz base aún no ha sido inicializada por Dirección." }, { status: 404 });
     return NextResponse.json({ state: record.values, updatedAt: record.updated_at, storage: "supabase" });
@@ -68,6 +74,10 @@ export async function PUT(request: Request) {
   try {
     const actor = await requireInternalActor();
     if (!actor) return NextResponse.json({ error: "Acceso interno requerido." }, { status: 403 });
+    const session = await getAuthenticatedSession();
+    const representativeProcessId = session?.assignedProcessIds[0];
+    const access = authorize({ user: session, permission: "risks.edit", record: { processId: representativeProcessId } });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { state?: unknown };
     if (!isWorkspaceState(payload.state)) return NextResponse.json({ error: "La matriz enviada no tiene una estructura válida." }, { status: 400 });
     const record = await ensureWorkspace(actor);
@@ -111,6 +121,8 @@ export async function POST(request: Request) {
   try {
     const actor = await requireInternalActor();
     if (!actor || actor.userType !== "administrator") return NextResponse.json({ error: "Solo Dirección o un administrador puede iniciar el análisis." }, { status: 403 });
+    const access = authorize({ user: await getAuthenticatedSession(), permission: "risks.approve" });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { action?: string };
     if (payload.action !== "start_analysis") return NextResponse.json({ error: "Acción no reconocida." }, { status: 400 });
     const record = await ensureWorkspace(actor);

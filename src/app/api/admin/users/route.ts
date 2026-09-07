@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { authorize } from "@/lib/access/authorize";
 import { processCatalog } from "@/lib/configuration-data";
 import { normalizeModulePermissions } from "@/lib/module-permissions";
 import {
@@ -13,6 +14,7 @@ import type {
 } from "@/lib/session-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import type { UserAccessAccount } from "@/lib/user-access-data";
 
 export const maxDuration = 30;
@@ -84,6 +86,8 @@ async function listAccounts() {
   if (!actor) {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
   }
+  const access = authorize({ user: await getAuthenticatedSession(), permission: "system.admin" });
+  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
 
   const admin = createAdminClient();
   const [
@@ -212,6 +216,8 @@ async function saveAccount(request: Request, create: boolean) {
   if (!actor) {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
   }
+  const access = authorize({ user: await getAuthenticatedSession(), permission: "system.admin" });
+  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
 
   const account = (await request.json()) as UserAccessAccount;
   if (!account.fullName?.trim() || !account.email?.trim()) {

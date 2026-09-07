@@ -30,6 +30,7 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 
 import { AccessModule } from "@/components/modules/access-module";
+import { ActivityLogModule } from "@/components/modules/activity-log-module";
 import { CalibrationsModule } from "@/components/modules/calibrations-module";
 import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
@@ -525,6 +526,7 @@ export function IntegraQWorkspace({
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
+          {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
@@ -537,7 +539,7 @@ export function IntegraQWorkspace({
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
-          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
         </main>
       </div>
 

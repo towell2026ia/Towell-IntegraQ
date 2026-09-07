@@ -24,6 +24,8 @@ Ejecutar siempre en este orden:
    - Trazabilidad común de capacidades inteligentes.
 10. `202609070003_data_integrity_relationships.sql`
    - Áreas maestras, relaciones por ID, tablas puente, backfill y reporte de conflictos.
+11. `202609070004_access_traceability_approvals.sql`
+   - Roles, permisos, scopes, bitácora transversal, aprobaciones, eventos y soft delete.
 
 ## Reglas consolidadas
 

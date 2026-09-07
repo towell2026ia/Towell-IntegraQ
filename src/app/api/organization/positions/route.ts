@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
+import { authorize } from "@/lib/access/authorize";
 import type { ProcessRelationship } from "@/lib/organization-data";
 import { normalizePositionName } from "@/lib/organization-position-data";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -48,6 +50,10 @@ export async function POST(request: Request) {
     } else if (actor.userType !== "administrator") {
       return NextResponse.json({ error: "Sólo una cuenta administradora puede crear puestos manualmente." }, { status: 403 });
     }
+    const session = await getAuthenticatedSession();
+    const permission = body.mode === "process-import" ? "organization.position.create" : "system.organization.administer";
+    const access = authorize({ user: session, permission, record: { organizationId: actor.organizationId, processId: body.processId }, grants: body.mode === "process-import" && body.processId ? [{ permission, scope: "process", processId: body.processId }] : [] });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
 
     const admin = createAdminClient();
     const existingResult = await admin.from("positions").select("id,name,level,parent_id,branch").eq("organization_id", actor.organizationId).order("id");
@@ -118,6 +124,8 @@ export async function PUT(request: Request) {
   try {
     const actor = await getActor();
     if (!actor || actor.userType !== "administrator") return NextResponse.json({ error: "Sólo una cuenta administradora puede editar puestos." }, { status: 403 });
+    const access = authorize({ user: await getAuthenticatedSession(), permission: "system.organization.administer", record: { organizationId: actor.organizationId } });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const body = await request.json() as { id?: string; name?: string; branch?: string; parentId?: string | null };
     if (!body.id || !body.name?.trim() || !body.branch?.trim()) return NextResponse.json({ error: "Completa los datos del puesto." }, { status: 400 });
     if (body.id === body.parentId) return NextResponse.json({ error: "Un puesto no puede reportarse a sí mismo." }, { status: 400 });
@@ -148,6 +156,8 @@ export async function DELETE(request: Request) {
   try {
     const actor = await getActor();
     if (!actor || actor.userType !== "administrator") return NextResponse.json({ error: "Sólo una cuenta administradora puede eliminar puestos." }, { status: 403 });
+    const access = authorize({ user: await getAuthenticatedSession(), permission: "system.organization.administer", record: { organizationId: actor.organizationId } });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const id = new URL(request.url).searchParams.get("id");
     if (!id) return NextResponse.json({ error: "Indica el puesto a eliminar." }, { status: 400 });
     const admin = createAdminClient();

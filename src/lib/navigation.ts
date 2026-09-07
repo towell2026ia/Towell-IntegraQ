@@ -47,7 +47,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   forms: { label: "Formularios y dashboards", breadcrumb: "Configuración", status: "Disponible" },
   "ai-assistant": { label: "IA asistente", breadcrumb: "Plataforma", status: "Pendiente" },
   integrations: { label: "Notificaciones e integraciones", breadcrumb: "Plataforma", status: "Estructura" },
-  "data-traceability": { label: "Datos y trazabilidad", breadcrumb: "Plataforma", status: "Estructura" },
+  "data-traceability": { label: "Datos y trazabilidad", breadcrumb: "Plataforma", status: "Disponible" },
   calibrations: { label: "Calibración y verificación", breadcrumb: "Operación", status: "Disponible" },
 };
 

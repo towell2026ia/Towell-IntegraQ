@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { authorize } from "@/lib/access/authorize";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
 import { ensureMetrologyWorkspace, isMetrologyWorkspace, prepareMetrologyWorkspace, type MetrologyActor } from "@/lib/metrology-workspace-server";
 import type { MetrologyAttachment } from "@/lib/metrology-report-data";
@@ -40,6 +42,10 @@ export async function PUT(request: Request) {
   try {
     const actor = await requireActor(true);
     if (!actor) return NextResponse.json({ error: "No tienes permiso para guardar verificaciones o calibraciones." }, { status: 403 });
+    const session = await getAuthenticatedSession();
+    const permission = "metrology.verification.execute";
+    const access = authorize({ user: session, permission, grants: [{ permission, scope: "global" }] });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { workspace?: unknown };
     if (!isMetrologyWorkspace(payload.workspace)) return NextResponse.json({ error: "El expediente enviado no tiene una estructura válida." }, { status: 400 });
     if (payload.workspace.reports.some((report) => report.signatureDataUrl && report.signatureDataUrl.length > 250_000)) return NextResponse.json({ error: "La firma libre excede el tamaño permitido." }, { status: 413 });
@@ -62,6 +68,10 @@ export async function POST(request: Request) {
   try {
     const actor = await requireActor(true);
     if (!actor) return NextResponse.json({ error: "No tienes permiso para adjuntar certificados de calibración." }, { status: 403 });
+    const session = await getAuthenticatedSession();
+    const permission = "metrology.calibration.record";
+    const access = authorize({ user: session, permission, grants: [{ permission, scope: "global" }] });
+    if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { assetId?: unknown; files?: unknown };
     if (typeof payload.assetId !== "string" || !Array.isArray(payload.files) || !payload.files.length || payload.files.length > 10) {
       return NextResponse.json({ error: "La solicitud de certificados no es válida." }, { status: 400 });

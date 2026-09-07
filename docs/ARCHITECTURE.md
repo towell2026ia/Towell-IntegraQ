@@ -142,6 +142,14 @@ declara expresamente y no atribuye a la documentacion informacion inexistente.
 
 Las relaciones oficiales utilizan claves foráneas. Los nombres son valores de presentación o snapshots históricos, nunca la clave principal de integración. La jerarquía base es `Organization → Area → Process`; documentos y auditorías usan tablas puente para representar varios procesos. Consulta [DATA_RELATIONSHIPS.md](./DATA_RELATIONSHIPS.md) para el modelo y la estrategia de migración.
 
+## Autorización, aprobaciones y trazabilidad
+
+La autorización evoluciona los permisos actuales mediante un gateway central con denegación por defecto. `roles`, `permissions`, `role_permissions` y `user_roles` expresan la acción y el alcance; las validaciones existentes de módulo/proceso se mantienen durante la transición.
+
+`audit_log` continúa como fuente histórica única y se amplía con organización, snapshots, diferencias, motivo, origen y contexto técnico. Las decisiones formales se procesan mediante `approval_requests` y `decide_approval`, que aplican permiso, asignación, segregación y comentario obligatorio de rechazo en backend y base de datos.
+
+Consulta [ACCESS_CONTROL.md](./ACCESS_CONTROL.md), [APPROVAL_WORKFLOWS.md](./APPROVAL_WORKFLOWS.md) y [AUDIT_TRAIL.md](./AUDIT_TRAIL.md) para los contratos completos.
+
 ## Decisiones pendientes
 
 - Contrato y autenticacion de la aplicacion externa de IA.
