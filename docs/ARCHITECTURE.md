@@ -1,8 +1,13 @@
 # Arquitectura inicial de IntegraQ
 
-## Alcance de esta iteracion
+## Alcance actual
 
-La primera iteracion entrega dos modulos operativos:
+IntegraQ conserva sus módulos operativos y añade dos capas transversales:
+
+1. AI Core proveedor-neutral para contexto, permisos, registro, aprobación y trazabilidad.
+2. Relaciones maestras por ID para reconstruir la información de cada proceso.
+
+Los módulos iniciales siguen incluyendo:
 
 1. Acciones correctivas con un punto de integracion server-to-server para una
    aplicacion externa de IA.
@@ -23,7 +28,7 @@ visuales para poder sustituir esa fuente sin reescribir las pantallas.
     |-- Modulo de calibraciones y verificaciones
     |-- API interna /api/ai/root-cause
     |
-    +--> [Supabase Auth + Postgres + Storage] (siguiente iteracion)
+    +--> [Supabase Auth + Postgres + Storage]
     |
     +--> [Aplicacion externa de IA] (contrato pendiente)
 ```
@@ -133,11 +138,14 @@ declara expresamente y no atribuye a la documentacion informacion inexistente.
 - `Process`
 - `AuditEvent`
 
+## Integridad transversal
+
+Las relaciones oficiales utilizan claves foráneas. Los nombres son valores de presentación o snapshots históricos, nunca la clave principal de integración. La jerarquía base es `Organization → Area → Process`; documentos y auditorías usan tablas puente para representar varios procesos. Consulta [DATA_RELATIONSHIPS.md](./DATA_RELATIONSHIPS.md) para el modelo y la estrategia de migración.
+
 ## Decisiones pendientes
 
 - Contrato y autenticacion de la aplicacion externa de IA.
-- Esquema de Supabase y politicas RLS.
-- Catalogos oficiales de areas, procesos, fuentes y severidad.
+- Catálogos finales y responsables oficiales de las áreas detectadas durante la migración.
 - SLA y reglas de excepcion de acciones correctivas.
 - Frecuencias permitidas y reglas de tolerancia para equipos.
 - Evidencia obligatoria por tipo de calibracion o verificacion.

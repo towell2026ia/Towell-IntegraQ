@@ -16,6 +16,14 @@ Ejecutar siempre en este orden:
    - Metrología, mejora continua, revisión por la dirección, IA y notificaciones.
 6. `202608230006_granular_user_permissions.sql`
    - Visor/modificador por proceso, acciones por módulo y participación estricta en Root2Cause.
+7. `202608240001_organization_source.sql` y migraciones funcionales de septiembre.
+   - Fuente del organigrama, Recursos Humanos, SGC y estrategia/riesgos.
+8. `202609070001_expand_organization_levels.sql`
+   - Niveles operativos 5 en adelante.
+9. `202609070002_ai_core_foundations.sql`
+   - Trazabilidad común de capacidades inteligentes.
+10. `202609070003_data_integrity_relationships.sql`
+   - Áreas maestras, relaciones por ID, tablas puente, backfill y reporte de conflictos.
 
 ## Reglas consolidadas
 
