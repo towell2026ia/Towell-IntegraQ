@@ -16,6 +16,7 @@ type ImportItem = {
   parentClientId?: string;
   processId?: string;
   relationship?: ProcessRelationship;
+  requestedLevel?: number;
 };
 type PositionRow = { id: string; name: string; level: number; parent_id: string | null; branch: string };
 type PositionPermissionRow = { position_id: string; process_id: string; relationship: ProcessRelationship };
@@ -125,6 +126,9 @@ export async function POST(request: Request) {
       const actualLevel = parent ? hierarchyLevel(parent, byId) + 1 : 1;
       if (body.mode !== "process-import" && actualLevel < 5) {
         return NextResponse.json({ error: "Los nuevos puestos deben agregarse debajo de un puesto de nivel 4 o posterior." }, { status: 400 });
+      }
+      if (body.mode !== "process-import" && item.requestedLevel && item.requestedLevel !== actualLevel) {
+        return NextResponse.json({ error: `El puesto superior seleccionado corresponde al nivel ${actualLevel}, no al nivel ${item.requestedLevel}.` }, { status: 400 });
       }
       const id = `PU-${String(nextNumber).padStart(2, "0")}`;
       nextNumber += 1;
@@ -240,6 +244,7 @@ function normalizeItems(value: unknown): ImportItem[] {
       ...(typeof item.parentId === "string" && item.parentId ? { parentId: item.parentId } : {}),
       ...(typeof item.parentClientId === "string" && item.parentClientId ? { parentClientId: item.parentClientId } : {}),
       ...(typeof item.processId === "string" && item.processId ? { processId: item.processId } : {}),
+      ...(Number.isInteger(item.requestedLevel) && Number(item.requestedLevel) >= 5 ? { requestedLevel: Number(item.requestedLevel) } : {}),
       relationship: relationships.includes(item.relationship as ProcessRelationship) ? item.relationship : "participant",
     }];
   }).slice(0, 100);
