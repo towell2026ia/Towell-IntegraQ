@@ -19,7 +19,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 
 import {
   accessRuleCatalog,
@@ -27,10 +27,8 @@ import {
   processCatalog,
   userTypeCatalog,
 } from "@/lib/configuration-data";
-import {
-  getPositionParent,
-  organizationPositions,
-} from "@/lib/organization-data";
+import { organizationPositions as fallbackPositions, type OrganizationPosition } from "@/lib/organization-data";
+import { loadOrganizationPositions, positionsChangedEvent } from "@/lib/organization-position-client";
 import { workspaceModuleMeta } from "@/lib/navigation";
 import {
   editableModulePermissionGroups,
@@ -68,10 +66,31 @@ export function AccessModule() {
   const [loadingAccounts, setLoadingAccounts] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
+  const [positions, setPositions] = useState<OrganizationPosition[]>(fallbackPositions);
 
   useEffect(() => {
     void loadAccounts();
   }, []);
+
+  const refreshPositions = useCallback(async () => {
+    try {
+      const loaded = await loadOrganizationPositions();
+      setPositions(loaded);
+    } catch {
+      setPositions((current) => current.length ? current : fallbackPositions);
+    }
+  }, []);
+
+  useEffect(() => {
+    void Promise.resolve().then(refreshPositions);
+    const refresh = () => { void refreshPositions(); };
+    window.addEventListener(positionsChangedEvent, refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener(positionsChangedEvent, refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [refreshPositions]);
 
   async function loadAccounts(preferredUserId?: string) {
     setLoadingAccounts(true);
@@ -162,7 +181,7 @@ export function AccessModule() {
       <section className="metric-grid" aria-label="Resumen de acceso">
         <AccessMetric icon={<Users size={18} />} label="Usuarios configurados" value={String(accounts.length)} tone="neutral" />
         <AccessMetric icon={<CheckCircle2 size={18} />} label="Usuarios activos" value={String(activeAccounts)} tone="success" />
-        <AccessMetric icon={<Building2 size={18} />} label="Puestos disponibles" value={String(organizationPositions.length)} tone="warning" />
+        <AccessMetric icon={<Building2 size={18} />} label="Puestos disponibles" value={String(positions.length)} tone="warning" />
         <AccessMetric icon={<KeyRound size={18} />} label="Permisos definidos" value={String(permissionAreaCatalog.length)} tone="danger" />
       </section>
 
@@ -195,6 +214,7 @@ export function AccessModule() {
                   onSelect={setSelectedUserId}
                   onEdit={(account) => setEditingAccount(account)}
                   onChange={saveAccount}
+                  positions={positions}
                 />
         ) : null}
       </section>
@@ -202,6 +222,7 @@ export function AccessModule() {
       {editingAccount !== undefined ? (
         <UserAccountModal
           account={editingAccount}
+          positions={positions}
           onClose={() => setEditingAccount(undefined)}
           onSave={saveAccount}
         />
@@ -237,6 +258,7 @@ function UserAccountsWorkspace({
   onSelect,
   onEdit,
   onChange,
+  positions,
 }: {
   accounts: UserAccessAccount[];
   allAccounts: UserAccessAccount[];
@@ -244,6 +266,7 @@ function UserAccountsWorkspace({
   onSelect: (id: string) => void;
   onEdit: (account: UserAccessAccount) => void;
   onChange: (account: UserAccessAccount) => Promise<void>;
+  positions: OrganizationPosition[];
 }) {
   const selected = allAccounts.find((account) => account.id === selectedUserId) ?? accounts[0] ?? null;
   return (
@@ -261,7 +284,7 @@ function UserAccountsWorkspace({
         {accounts.length === 0 ? <div className="access-empty compact"><Users size={22} /><p>No hay usuarios que coincidan con la búsqueda.</p></div> : null}
       </div>
       {selected ? (
-        <UserAccessDetail account={selected} onEdit={() => onEdit(selected)} onChange={onChange} />
+        <UserAccessDetail account={selected} positions={positions} onEdit={() => onEdit(selected)} onChange={onChange} />
       ) : (
         <div className="access-empty"><Users size={24} /><h3>Sin usuarios configurados</h3><p>Utiliza Nuevo usuario para iniciar la carga.</p></div>
       )}
@@ -269,9 +292,9 @@ function UserAccountsWorkspace({
   );
 }
 
-function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAccount; onEdit: () => void; onChange: (account: UserAccessAccount) => Promise<void> }) {
-  const position = organizationPositions.find((item) => item.id === account.positionId);
-  const parent = position ? getPositionParent(position) : undefined;
+function UserAccessDetail({ account, positions, onEdit, onChange }: { account: UserAccessAccount; positions: OrganizationPosition[]; onEdit: () => void; onChange: (account: UserAccessAccount) => Promise<void> }) {
+  const position = positions.find((item) => item.id === account.positionId);
+  const parent = position?.parentId ? positions.find((item) => item.id === position.parentId) : undefined;
   return (
     <div className="user-access-detail">
       <header>
@@ -291,7 +314,7 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
       </div>
 
       {account.userType === "Usuario interno" ? (
-        <button className="organization-refresh" type="button" onClick={() => void onChange(refreshAccountFromOrganization(account))}>
+        <button className="organization-refresh" type="button" onClick={() => void onChange(refreshAccountFromOrganization(account, positions))}>
           <RefreshCw size={15} /><span><strong>Restablecer desde organigrama</strong><small>Vuelve a aplicar la propuesta de procesos y permisos del puesto {account.positionId}.</small></span>
         </button>
       ) : null}
@@ -338,7 +361,7 @@ function UserAccessDetail({ account, onEdit, onChange }: { account: UserAccessAc
   );
 }
 
-function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAccount | null; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
+function UserAccountModal({ account, positions, onClose, onSave }: { account: UserAccessAccount | null; positions: OrganizationPosition[]; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
   const [fullName, setFullName] = useState(account?.fullName ?? "");
   const [email, setEmail] = useState(account?.email ?? "");
   const [userType, setUserType] = useState<UserType>(account?.userType ?? "Usuario interno");
@@ -358,7 +381,7 @@ function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAcc
 
   function selectPosition(nextPositionId: string) {
     setPositionId(nextPositionId);
-    const suggested = derivePositionAccess(nextPositionId);
+    const suggested = derivePositionAccess(nextPositionId, positions);
     setDocumentAccess(suggested?.documentAccess ?? []);
     setModuleActionPermissions(suggested?.moduleActionPermissions ?? []);
   }
@@ -426,6 +449,7 @@ function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAcc
       continuousImprovementRole: userType === "Usuario interno" ? continuousImprovementRole : undefined,
       documentAccess: userType === "Usuario interno" ? documentAccess : undefined,
       moduleActionPermissions: userType === "Usuario interno" ? moduleActionPermissions : undefined,
+      positionCatalog: positions,
       createdAt: account?.createdAt ?? new Date().toISOString(),
     });
     if (!built) {
@@ -455,7 +479,7 @@ function UserAccountModal({ account, onClose, onSave }: { account: UserAccessAcc
             <label className="wide">Nombre completo<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
             <label className="wide">Correo de acceso<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
             <label>Tipo de usuario<select value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
-            {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{organizationPositions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
+            {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
             {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label> : null}
           </div>
 

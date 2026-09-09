@@ -62,6 +62,31 @@ describe("organization-driven user access", () => {
     expect(session.documentAccess?.find((item) => item.processId === "P-13")?.role).toBe("modifier");
   });
 
+  it("uses positions loaded from Supabase when creating a user", () => {
+    const positionCatalog = [{
+      id: "PU-29",
+      name: "supervisor de producción",
+      level: 5,
+      parentId: "PU-12",
+      branch: "Operaciones",
+      processLinks: [{ processId: "P-13", relationship: "participant" as const }],
+    }];
+    const account = createUserAccessAccount({
+      id: "USR-SUP-001",
+      fullName: "Usuario supervisor",
+      email: "supervisor@towell.test",
+      userType: "Usuario interno",
+      positionId: "PU-29",
+      positionCatalog,
+      createdAt: "2026-09-09T12:00:00.000Z",
+    });
+    expect(account).toMatchObject({
+      positionId: "PU-29",
+      positionName: "supervisor de producción",
+      assignedProcessIds: ["P-13"],
+    });
+  });
+
   it("assigns the continuous improvement manager role without creating a new user type", () => {
     const account = createUserAccessAccount({
       id: "USR-MC-001",

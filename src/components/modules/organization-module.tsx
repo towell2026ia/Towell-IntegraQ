@@ -5,13 +5,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { processCatalog } from "@/lib/configuration-data";
 import { computeHierarchyLevels } from "@/lib/organization-chart-data";
+import { loadOrganizationPositions, positionsChangedEvent } from "@/lib/organization-position-client";
 import { type OrganizationPosition, organizationPositions as fallbackPositions, processRelationshipLabels, type ProcessRelationship } from "@/lib/organization-data";
 import { normalizePositionName } from "@/lib/organization-position-data";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { createClient } from "@/lib/supabase/client";
 
-type PositionRow = { id: string; name: string; level: number; parent_id: string | null; branch: string };
-type PermissionRow = { position_id: string; process_id: string; relationship: ProcessRelationship };
 type EditorMode = "create" | "edit" | null;
 const source = { name: "F-SGC-33 Organigrama General", version: "0", revisedAt: "22/11/2024" };
 
@@ -32,18 +31,10 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
     setLoading(true);
     try {
       const supabase = createClient();
-      const [positionResult, permissionResult, sourceResult] = await Promise.all([
-        supabase.from("positions").select("id,name,level,parent_id,branch").order("id"),
-        supabase.from("position_process_permissions").select("position_id,process_id,relationship"),
+      const [loaded, sourceResult] = await Promise.all([
+        loadOrganizationPositions(),
         supabase.from("file_objects").select("process_id").eq("resource_type", "process_organization_chart"),
       ]);
-      if (positionResult.error) throw positionResult.error;
-      if (permissionResult.error) throw permissionResult.error;
-      const links = (permissionResult.data as PermissionRow[]).reduce<Record<string, OrganizationPosition["processLinks"]>>((result, row) => {
-        (result[row.position_id] ??= []).push({ processId: row.process_id, relationship: row.relationship });
-        return result;
-      }, {});
-      const loaded = (positionResult.data as PositionRow[]).map((row) => ({ id: row.id, name: row.name, level: row.level, parentId: row.parent_id ?? undefined, branch: row.branch, processLinks: links[row.id] ?? [] }));
       if (loaded.length) setPositions(computeHierarchyLevels(loaded));
       if (!sourceResult.error) setProcessSourceCount(new Set((sourceResult.data ?? []).map((item) => item.process_id).filter(Boolean)).size);
     } catch {
@@ -88,6 +79,7 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
       }
       setEditorMode(null);
       await loadPositions();
+      window.dispatchEvent(new Event(positionsChangedEvent));
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "No fue posible guardar el puesto.");
     } finally { setSaving(false); }
@@ -103,6 +95,7 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
       setSelectedId(selected.parentId ?? "PU-01");
       setFeedback("Puesto eliminado del organigrama.");
       await loadPositions();
+      window.dispatchEvent(new Event(positionsChangedEvent));
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "No fue posible eliminar el puesto.");
     } finally { setSaving(false); }

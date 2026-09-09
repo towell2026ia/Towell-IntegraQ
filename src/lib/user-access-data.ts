@@ -51,6 +51,7 @@ export interface CreateUserAccessInput {
   continuousImprovementRole?: ContinuousImprovementRole;
   documentAccess?: ProcessDocumentAccess[];
   moduleActionPermissions?: ModuleActionPermission[];
+  positionCatalog?: OrganizationPosition[];
   createdAt: string;
 }
 
@@ -89,8 +90,11 @@ export const internalAssignableModuleIds: WorkspaceModuleId[] = [
   "calibrations",
 ];
 
-export function derivePositionAccess(positionId: string) {
-  const position = organizationPositions.find((item) => item.id === positionId);
+export function derivePositionAccess(
+  positionId: string,
+  positionCatalog: OrganizationPosition[] = organizationPositions,
+) {
+  const position = positionCatalog.find((item) => item.id === positionId);
   if (!position) return null;
 
   const documentAccess = position.processLinks.map((link) => ({
@@ -129,7 +133,7 @@ export function createUserAccessAccount(
   if (!shared.fullName || !shared.email) return null;
 
   if (input.userType === "Administrador") {
-    const position = getPosition(input.positionId);
+    const position = getPosition(input.positionId, input.positionCatalog);
     if (!position) return null;
     return {
       ...shared,
@@ -146,7 +150,7 @@ export function createUserAccessAccount(
 
   if (input.userType === "Usuario interno") {
     const inherited = input.positionId
-      ? derivePositionAccess(input.positionId)
+      ? derivePositionAccess(input.positionId, input.positionCatalog)
       : null;
     if (!inherited) return null;
     const documentAccess = input.documentAccess ?? inherited.documentAccess;
@@ -199,11 +203,12 @@ export function createUserAccessAccount(
 
 export function refreshAccountFromOrganization(
   account: UserAccessAccount,
+  positionCatalog: OrganizationPosition[] = organizationPositions,
 ): UserAccessAccount {
   if (account.userType !== "Usuario interno" || !account.positionId) {
     return account;
   }
-  const inherited = derivePositionAccess(account.positionId);
+  const inherited = derivePositionAccess(account.positionId, positionCatalog);
   if (!inherited) return account;
   return {
     ...account,
@@ -291,9 +296,12 @@ export const initialUserAccessAccounts: UserAccessAccount[] = [
   },
 ];
 
-function getPosition(positionId: string | undefined) {
+function getPosition(
+  positionId: string | undefined,
+  positionCatalog: OrganizationPosition[] = organizationPositions,
+) {
   return positionId
-    ? organizationPositions.find((position) => position.id === positionId)
+    ? positionCatalog.find((position) => position.id === positionId)
     : undefined;
 }
 

@@ -18,6 +18,7 @@ type ImportItem = {
   relationship?: ProcessRelationship;
 };
 type PositionRow = { id: string; name: string; level: number; parent_id: string | null; branch: string };
+type PositionPermissionRow = { position_id: string; process_id: string; relationship: ProcessRelationship };
 
 async function getActor(): Promise<Actor | null> {
   const supabase = await createClient();
@@ -34,6 +35,46 @@ async function canImportProcess(actor: Actor, processId: string) {
   const admin = createAdminClient();
   const result = await admin.from("user_process_permissions").select("document_role").eq("user_id", actor.id).eq("process_id", processId).in("document_role", ["modifier", "authorizer"]).limit(1);
   return !result.error && Boolean(result.data?.length);
+}
+
+export async function GET() {
+  try {
+    const actor = await getActor();
+    if (!actor) return NextResponse.json({ error: "Acceso interno requerido." }, { status: 403 });
+    const admin = createAdminClient();
+    const positionsResult = await admin
+      .from("positions")
+      .select("id,name,level,parent_id,branch")
+      .eq("organization_id", actor.organizationId)
+      .order("id");
+    if (positionsResult.error) throw positionsResult.error;
+    const rows = (positionsResult.data ?? []) as PositionRow[];
+    const ids = rows.map((row) => row.id);
+    const permissionsResult = ids.length
+      ? await admin
+          .from("position_process_permissions")
+          .select("position_id,process_id,relationship")
+          .in("position_id", ids)
+      : { data: [] as PositionPermissionRow[], error: null };
+    if (permissionsResult.error) throw permissionsResult.error;
+    const links = ((permissionsResult.data ?? []) as PositionPermissionRow[]).reduce<Record<string, Array<{ processId: string; relationship: ProcessRelationship }>>>((result, row) => {
+      (result[row.position_id] ??= []).push({ processId: row.process_id, relationship: row.relationship });
+      return result;
+    }, {});
+    return NextResponse.json({
+      positions: rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        level: row.level,
+        parentId: row.parent_id ?? undefined,
+        branch: row.branch,
+        processLinks: links[row.id] ?? [],
+      })),
+    });
+  } catch (error) {
+    console.error("No fue posible consultar los puestos.", error);
+    return NextResponse.json({ error: "No fue posible cargar los puestos desde Supabase." }, { status: 500 });
+  }
 }
 
 export async function POST(request: Request) {
@@ -103,8 +144,13 @@ export async function POST(request: Request) {
       const row = inserted.data as PositionRow;
       positions.push(row); byId.set(id, row); createdByClientId.set(item.clientId, id);
       created.push({ id, clientId: item.clientId, name: item.name, level: actualLevel });
-      await copyParentModulePermissions(admin, parentId, id);
-      if (item.processId) await upsertProcessPermission(admin, id, item.processId, item.relationship ?? "participant");
+      try {
+        await copyParentModulePermissions(admin, parentId, id);
+        if (item.processId) await upsertProcessPermission(admin, id, item.processId, item.relationship ?? "participant");
+      } catch (error) {
+        await admin.from("positions").delete().eq("id", id).eq("organization_id", actor.organizationId);
+        throw error;
+      }
     }
 
     await admin.from("audit_log").insert({
