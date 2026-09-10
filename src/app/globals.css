@@ -5961,7 +5961,8 @@ button:disabled {
 .indicator-toolbar { display: grid; min-height: 68px; grid-template-columns: minmax(220px, 1fr) 210px 104px auto; align-items: end; gap: 10px; padding: 12px 14px; background: #f8faf8; border-bottom: 1px solid var(--line); }
 .indicator-toolbar > label:not(.indicator-search) { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .indicator-toolbar > label > span { color: var(--muted); font-size: 8px; font-weight: 800; text-transform: uppercase; }
-.indicator-toolbar select { width: 100%; min-height: 36px; padding: 6px 30px 6px 9px; background: #ffffff; border: 1px solid var(--line-strong); border-radius: 5px; font-size: 10px; }
+.indicator-toolbar select, .indicator-toolbar > label > input { width: 100%; min-height: 36px; padding: 6px 9px; background: #ffffff; border: 1px solid var(--line-strong); border-radius: 5px; font-size: 10px; }
+.indicator-toolbar select { padding-right: 30px; }
 .indicator-search { display: flex; min-height: 36px; align-items: center; gap: 7px; padding: 0 10px; box-shadow: none; }
 .indicator-search input { width: 100%; min-width: 0; background: transparent; border: 0; outline: 0; }
 .indicator-toolbar-extra { min-width: 132px; }

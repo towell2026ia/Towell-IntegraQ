@@ -1,4 +1,4 @@
-import type { ConfiguredIndicator } from "@/lib/indicator-data";
+import { canSubmitIndicator, type ConfiguredIndicator, type Quarter } from "@/lib/indicator-data";
 import {
   canAccessProcess,
   canModifyProcess,
@@ -29,6 +29,17 @@ export function canUpdateIndicatorResult(
     canModifyProcess(session, indicator.processId) &&
     canPerformModuleAction(session, "indicators", "update")
   );
+}
+
+export function canEditIndicatorPeriod(
+  session: ActiveSession,
+  indicator: ConfiguredIndicator,
+  year: number,
+  quarter: Quarter,
+  now = new Date(),
+) {
+  if (!canUpdateIndicatorResult(session, indicator)) return false;
+  return isAdministrator(session) || canSubmitIndicator(indicator, year, quarter, now);
 }
 
 export function getAccessibleIndicators(

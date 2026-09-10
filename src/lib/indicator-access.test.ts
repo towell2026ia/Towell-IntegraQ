@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_INDICATOR_AREAS,
   canManageIndicatorCatalog,
+  canEditIndicatorPeriod,
   canUpdateIndicatorResult,
   canViewIndicator,
   getAccessibleIndicators,
@@ -75,6 +76,18 @@ describe("indicator access policy", () => {
     expect(getDefaultIndicatorArea(admin)).toBe(ALL_INDICATOR_AREAS);
     expect(matchesIndicatorArea(admin, indicators[0], ALL_INDICATOR_AREAS)).toBe(true);
     expect(matchesIndicatorArea(admin, indicators.at(-1)!, ALL_INDICATOR_AREAS)).toBe(true);
+  });
+
+  it("lets administrators edit past, current and future indicator periods", () => {
+    expect(canEditIndicatorPeriod(admin, qualityIndicator, 2025, "Q1", new Date("2026-09-10T12:00:00-06:00"))).toBe(true);
+    expect(canEditIndicatorPeriod(admin, qualityIndicator, 2026, "Q3", new Date("2026-09-10T12:00:00-06:00"))).toBe(true);
+    expect(canEditIndicatorPeriod(admin, qualityIndicator, 2030, "Q4", new Date("2026-09-10T12:00:00-06:00"))).toBe(true);
+  });
+
+  it("keeps the programmed capture window for standard users", () => {
+    expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-09-30T12:00:00-06:00"))).toBe(true);
+    expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-09-10T12:00:00-06:00"))).toBe(false);
+    expect(canEditIndicatorPeriod(user, qualityIndicator, 2030, "Q4", new Date("2026-09-10T12:00:00-06:00"))).toBe(false);
   });
 
   it("keeps standard users inside their assigned area", () => {

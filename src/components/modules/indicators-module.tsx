@@ -27,7 +27,6 @@ import { FormEvent, type ReactNode, useMemo, useState } from "react";
 import {
   buildDefaultEvaluationRules,
   buildQuarterSchedule,
-  canSubmitIndicator,
   evaluateConfiguredIndicator,
   formatIndicatorValue,
   getIndicatorScheduleDate,
@@ -43,13 +42,13 @@ import {
 } from "@/lib/indicator-data";
 import {
   ALL_INDICATOR_AREAS,
+  canEditIndicatorPeriod,
   canManageIndicatorCatalog,
-  canUpdateIndicatorResult,
   getDefaultIndicatorArea,
   getAccessibleIndicators,
   matchesIndicatorArea,
 } from "@/lib/indicator-access";
-import type { ActiveSession } from "@/lib/session-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type IndicatorView = "dashboard" | "sheet" | "pending" | "catalog" | "submission";
 
@@ -59,7 +58,6 @@ interface SubmissionSelection {
   year: number;
 }
 
-const yearOptions = [2025, 2026];
 const quarterLabels: Record<Quarter, string> = {
   Q1: "T1 · Ene–Mar",
   Q2: "T2 · Abr–Jun",
@@ -147,7 +145,7 @@ export function IndicatorsModule({
 
       {view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={setYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
       {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={setYear} query={query} results={results} year={year} /> : null}
-      {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={setYear} query={query} quarter={pendingQuarter} results={results} year={year} /> : null}
+      {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={setYear} query={query} quarter={pendingQuarter} results={results} session={session} year={year} /> : null}
       {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager definitions={definitions} onBack={() => setView("dashboard")} onDefinitionsChange={onDefinitionsChange} onResultsChange={onResultsChange} results={results} year={year} /> : null}
       {view === "submission" && submission && accessibleDefinitions.some((indicator) => indicator.id === submission.indicatorId) ? (
         <IndicatorSubmission
@@ -262,7 +260,7 @@ function IndicatorSheet({ area, areas, indicators, onAreaChange, onOpenSubmissio
   );
 }
 
-function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmission, onQueryChange, onQuarterChange, onYearChange, query, quarter, results, year }: SharedViewProps & { quarter: Quarter; onQuarterChange: (quarter: Quarter) => void; onOpenSubmission: (id: string, year: number, quarter: Quarter) => void }) {
+function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmission, onQueryChange, onQuarterChange, onYearChange, query, quarter, results, session, year }: SharedViewProps & { quarter: Quarter; onQuarterChange: (quarter: Quarter) => void; onOpenSubmission: (id: string, year: number, quarter: Quarter) => void; session: ActiveSession }) {
   return (
     <section className="indicator-workspace-panel">
       <IndicatorToolbar area={area} areas={areas} onAreaChange={onAreaChange} onQueryChange={onQueryChange} onYearChange={onYearChange} query={query} year={year}><select aria-label="Trimestre pendiente" value={quarter} onChange={(event) => onQuarterChange(event.target.value as Quarter)}>{quarters.map((item) => <option key={item} value={item}>{quarterLabels[item]}</option>)}</select></IndicatorToolbar>
@@ -274,12 +272,12 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
             {group.items.map((indicator) => {
               const record = getIndicatorRecord(results, indicator.id, year, quarter);
               const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
-              const available = canSubmitIndicator(indicator, year, quarter);
+              const available = canEditIndicatorPeriod(session, indicator, year, quarter);
               return (
                 <button className="indicator-pending-row" key={indicator.id} type="button" onClick={() => onOpenSubmission(indicator.id, year, quarter)}>
                   <span><strong>{indicator.name}</strong><small>{indicator.id} · {indicator.leader}</small></span>
                   <span><CalendarClock size={15} /><small>Fecha programada</small><strong>{formatScheduleDate(getIndicatorScheduleDate(indicator, year, quarter))}</strong></span>
-                  <span className={`indicator-status indicator-status-${status}`}>{record ? statusLabels[status] : available ? "Disponible hoy" : statusLabels[status]}</span>
+                  <span className={`indicator-status indicator-status-${status}`}>{record ? statusLabels[status] : available ? isAdministrator(session) ? "Captura admin" : "Disponible hoy" : statusLabels[status]}</span>
                   <Eye size={17} />
                 </button>
               );
@@ -297,7 +295,8 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
   const [saved, setSaved] = useState(false);
   const rule = parseIndicatorMetric(indicator.metric);
   const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
-  const editable = canUpdateIndicatorResult(session, indicator) && canSubmitIndicator(indicator, year, quarter);
+  const administrativeOverride = isAdministrator(session);
+  const editable = canEditIndicatorPeriod(session, indicator, year, quarter);
   const scheduledDate = getIndicatorScheduleDate(indicator, year, quarter);
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -327,7 +326,7 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
       </div>
       <section className={`indicator-capture-window ${editable ? "available" : "locked"}`}>
         {editable ? <CheckCircle2 size={19} /> : <LockKeyhole size={19} />}
-        <div><strong>{editable ? "Captura habilitada hoy" : "Captura bloqueada por fecha"}</strong><p>{editable ? "El resultado se registrará manualmente en este expediente." : `Solo se habilitará el ${formatScheduleDate(scheduledDate)}. El administrador puede reprogramarlo desde el catálogo.`}</p></div>
+        <div><strong>{administrativeOverride ? "Edición administrativa habilitada" : editable ? "Captura habilitada hoy" : "Captura bloqueada por fecha"}</strong><p>{administrativeOverride ? "Puedes crear o corregir resultados pasados, presentes y futuros, aunque el periodo esté cerrado o fuera de su fecha programada." : editable ? "El resultado se registrará manualmente en este expediente." : `Solo se habilitará el ${formatScheduleDate(scheduledDate)}. Solicita apoyo a un administrador si se requiere una corrección.`}</p></div>
       </section>
       <form className="indicator-single-form" onSubmit={submit}>
         <label><span>Resultado trimestral</span><div className="indicator-value-input"><input defaultValue={record?.value ?? ""} disabled={!editable} min="0" name="value" required step="any" type="number" /><span>{rule.unit === "percent" ? "%" : rule.unit === "weeks" ? "sem" : "valor"}</span></div><small>Se evaluará contra {indicator.metric}.</small></label>
@@ -423,7 +422,7 @@ function IndicatorEditor({ definitions, indicator, onClose, onSave, year }: { de
 }
 
 function IndicatorToolbar({ area, areas, children, onAreaChange, onQueryChange, onYearChange, query, year }: Omit<SharedViewProps, "indicators" | "results"> & { children: ReactNode }) {
-  return <div className="indicator-toolbar"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar indicador" onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar KPI o responsable" value={query} /></label><label><span>Área o proceso</span><select aria-label="Área o proceso" value={area} onChange={(event) => onAreaChange(event.target.value)}>{areas.map((item) => <option key={item} value={item}>{formatIndicatorArea(item)}</option>)}</select></label><label><span>Año</span><select aria-label="Año" value={year} onChange={(event) => onYearChange(Number(event.target.value))}>{yearOptions.map((item) => <option key={item}>{item}</option>)}</select></label><div className="indicator-toolbar-extra">{children}</div></div>;
+  return <div className="indicator-toolbar"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar indicador" onChange={(event) => onQueryChange(event.target.value)} placeholder="Buscar KPI o responsable" value={query} /></label><label><span>Área o proceso</span><select aria-label="Área o proceso" value={area} onChange={(event) => onAreaChange(event.target.value)}>{areas.map((item) => <option key={item} value={item}>{formatIndicatorArea(item)}</option>)}</select></label><label><span>Año</span><input aria-label="Año" max="2200" min="2020" type="number" value={year} onChange={(event) => { const nextYear = Number(event.target.value); if (nextYear >= 2020 && nextYear <= 2200) onYearChange(nextYear); }} /></label><div className="indicator-toolbar-extra">{children}</div></div>;
 }
 
 function IndicatorGauge({ indicator, rule, status, value }: { indicator: ConfiguredIndicator; rule: ReturnType<typeof parseIndicatorMetric>; status: IndicatorStatus; value: number | undefined }) {
