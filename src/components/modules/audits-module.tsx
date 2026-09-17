@@ -3,9 +3,11 @@
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarRange,
   CalendarDays,
   Check,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   FileText,
@@ -20,7 +22,9 @@ import { useMemo, useState } from "react";
 
 import {
   auditDateLabel,
+  auditOccupiesDate,
   auditOriginLabels,
+  auditScheduleBounds,
   auditStandardOptions,
   auditStatusLabels,
   auditTypeLabels,
@@ -39,7 +43,8 @@ import { canPerformModuleAction } from "@/lib/module-permissions";
 import { customerQualityCatalog } from "@/lib/quality-parties-data";
 import type { ActiveSession } from "@/lib/session-data";
 
-type AuditView = "list" | "create" | "success";
+type AuditView = "calendar" | "registry" | "create" | "success";
+type CalendarMonth = { year: number; month: number };
 
 const customers = [
   { id: "walmart", name: "Walmart" },
@@ -67,10 +72,12 @@ export function AuditsModule({
   onOccurrencesChange: (occurrences: AuditOccurrence[]) => void;
   session: ActiveSession;
 }) {
-  const [view, setView] = useState<AuditView>("list");
+  const [view, setView] = useState<AuditView>("calendar");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<AuditStatus | "all">("all");
   const [created, setCreated] = useState<AuditOccurrence | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState<CalendarMonth>(() => initialAuditMonth(occurrences));
+  const [selectedAudit, setSelectedAudit] = useState<AuditOccurrence | null>(null);
   const canCreate = canPerformModuleAction(session, "audits", "manage") || canPerformModuleAction(session, "audits", "create");
 
   const filtered = useMemo(() => {
@@ -92,11 +99,11 @@ export function AuditsModule({
     const occurrence = createAuditOccurrence(draft, occurrences, session.name, confirmed);
     onOccurrencesChange([occurrence, ...occurrences]);
     setCreated(occurrence);
-    setView(confirmed ? "success" : "list");
+    setView(confirmed ? "success" : "registry");
   };
 
   if (view === "create") {
-    return <AuditCreateForm existing={occurrences} onCancel={() => setView("list")} onSave={save} session={session} />;
+    return <AuditCreateForm existing={occurrences} onCancel={() => setView("calendar")} onSave={save} session={session} />;
   }
 
   if (view === "success" && created) {
@@ -104,7 +111,8 @@ export function AuditsModule({
       <AuditSuccess
         audit={created}
         onCreateAnother={beginCreate}
-        onView={() => { setQuery(created.code); setStatusFilter("all"); setView("list"); }}
+        onCalendar={() => { focusAuditInCalendar(created, setCalendarMonth, setSelectedAudit); setStatusFilter("all"); setView("calendar"); }}
+        onView={() => { setQuery(created.code); setStatusFilter("all"); setView("registry"); }}
       />
     );
   }
@@ -117,9 +125,9 @@ export function AuditsModule({
     <div className="audit-module">
       <section className="module-heading audit-heading">
         <div>
-          <p className="module-kicker">Operación · registro maestro</p>
+          <p className="module-kicker">Operación · programación y control</p>
           <h2>Auditorías</h2>
-          <p>Cada alta crea una ocurrencia independiente, programable y trazable.</p>
+          <p>Visualiza fechas confirmadas, rangos y ventanas de auditoría en el calendario.</p>
         </div>
         {canCreate ? <button className="button button-primary" type="button" onClick={beginCreate}><Plus size={17} /> Nueva auditoría</button> : null}
       </section>
@@ -131,11 +139,14 @@ export function AuditsModule({
         <AuditMetric icon={<FileText size={19} />} label="Borradores" value={drafts} tone="neutral" />
       </section>
 
-      <section className="audit-register-panel">
+      <section className="audit-register-panel audit-workspace-panel">
         <header className="audit-register-toolbar">
           <div>
-            <h3>Registro de ocurrencias</h3>
-            <p>El histórico permanece intacto; una nueva revisión genera un folio nuevo.</p>
+            <div className="audit-view-switch" aria-label="Vista de auditorías">
+              <button aria-pressed={view === "calendar"} className={view === "calendar" ? "active" : ""} type="button" onClick={() => setView("calendar")}><CalendarDays size={15} /> Calendario</button>
+              <button aria-pressed={view === "registry"} className={view === "registry" ? "active" : ""} type="button" onClick={() => setView("registry")}><FileText size={15} /> Registro</button>
+            </div>
+            <p>{view === "calendar" ? "Las franjas muestran la duración real de cada ventana." : "El histórico permanece intacto; cada revisión genera un folio nuevo."}</p>
           </div>
           <div className="audit-register-filters">
             <label className="panel-search"><Search size={16} /><input aria-label="Buscar auditoría" placeholder="Folio, nombre o entidad" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
@@ -145,27 +156,193 @@ export function AuditsModule({
             </select>
           </div>
         </header>
-        <div className="audit-table-wrap">
-          <table className="audit-table">
-            <thead><tr><th>Auditoría</th><th>Tipo y origen</th><th>Entidad</th><th>Programación</th><th>Responsable</th><th>Estado</th></tr></thead>
-            <tbody>
-              {filtered.map((audit) => (
-                <tr key={audit.id}>
-                  <td><code>{audit.code}</code><strong>{audit.title || "Borrador sin nombre"}</strong><small>{audit.processIds.length} procesos · {audit.standards.join(", ") || "Sin norma"}</small></td>
-                  <td><strong>{audit.auditType ? auditTypeLabels[audit.auditType] : "Por definir"}</strong><small>{audit.origin ? auditOriginLabels[audit.origin] : "Origen pendiente"}</small></td>
-                  <td><strong>{audit.customerName || audit.organizationName || (audit.entityKind === "internal" ? "Interna" : "Por definir")}</strong><small>{audit.contactName || "Sin contacto externo"}</small></td>
-                  <td><strong>{auditDateLabel(audit)}</strong><small>{audit.scheduleType === "window" ? "Ventana de auditoría" : audit.scheduleType === "pending" ? "Fecha pendiente" : "Fecha confirmada"}</small></td>
-                  <td><strong>{audit.responsibleName || "Por asignar"}</strong><small>{audit.participantNames.length} participantes</small></td>
-                  <td><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!filtered.length ? <div className="audit-empty"><Search size={22} /><strong>No encontramos auditorías</strong><span>Prueba con otro término o estado.</span></div> : null}
-        </div>
+        {view === "calendar" ? (
+          <AuditCalendar
+            audits={filtered}
+            month={calendarMonth}
+            onMonthChange={setCalendarMonth}
+            onSelect={setSelectedAudit}
+            selected={selectedAudit}
+          />
+        ) : <AuditRegistry audits={filtered} />}
       </section>
     </div>
   );
+}
+
+function AuditRegistry({ audits }: { audits: AuditOccurrence[] }) {
+  return (
+    <div className="audit-table-wrap">
+      <table className="audit-table">
+        <thead><tr><th>Auditoría</th><th>Tipo y origen</th><th>Entidad</th><th>Programación</th><th>Responsable</th><th>Estado</th></tr></thead>
+        <tbody>
+          {audits.map((audit) => (
+            <tr key={audit.id}>
+              <td><code>{audit.code}</code><strong>{audit.title || "Borrador sin nombre"}</strong><small>{audit.processIds.length} procesos · {audit.standards.join(", ") || "Sin norma"}</small></td>
+              <td><strong>{audit.auditType ? auditTypeLabels[audit.auditType] : "Por definir"}</strong><small>{audit.origin ? auditOriginLabels[audit.origin] : "Origen pendiente"}</small></td>
+              <td><strong>{audit.customerName || audit.organizationName || (audit.entityKind === "internal" ? "Interna" : "Por definir")}</strong><small>{audit.contactName || "Sin contacto externo"}</small></td>
+              <td><strong>{auditDateLabel(audit)}</strong><small>{audit.scheduleType === "window" ? "Ventana de auditoría" : audit.scheduleType === "pending" ? "Fecha pendiente" : "Fecha confirmada"}</small></td>
+              <td><strong>{audit.responsibleName || "Por asignar"}</strong><small>{audit.participantNames.length} participantes</small></td>
+              <td><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {!audits.length ? <div className="audit-empty"><Search size={22} /><strong>No encontramos auditorías</strong><span>Prueba con otro término o estado.</span></div> : null}
+    </div>
+  );
+}
+
+function AuditCalendar({
+  audits,
+  month,
+  onMonthChange,
+  onSelect,
+  selected,
+}: {
+  audits: AuditOccurrence[];
+  month: CalendarMonth;
+  onMonthChange: (month: CalendarMonth) => void;
+  onSelect: (audit: AuditOccurrence | null) => void;
+  selected: AuditOccurrence | null;
+}) {
+  const cells = getCalendarCells(month.year, month.month);
+  const windows = audits.filter((audit) => audit.scheduleType === "window" && audit.windowStart && audit.windowEnd);
+  const pending = audits.filter((audit) => audit.scheduleType === "pending");
+  const rawMonthTitle = new Intl.DateTimeFormat("es-MX", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(month.year, month.month, 1)));
+  const monthTitle = rawMonthTitle.charAt(0).toLocaleUpperCase("es") + rawMonthTitle.slice(1);
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div className="audit-calendar-layout">
+      <div className="audit-calendar-main">
+        <header className="audit-calendar-header">
+          <div><span><CalendarRange size={19} /></span><div><small>Programación general</small><h3>{monthTitle}</h3></div></div>
+          <div className="audit-calendar-navigation">
+            <button aria-label="Mes anterior" className="icon-button" title="Mes anterior" type="button" onClick={() => onMonthChange(shiftCalendarMonth(month, -1))}><ChevronLeft size={18} /></button>
+            <button type="button" onClick={() => onMonthChange(todayCalendarMonth())}>Hoy</button>
+            <button aria-label="Mes siguiente" className="icon-button" title="Mes siguiente" type="button" onClick={() => onMonthChange(shiftCalendarMonth(month, 1))}><ChevronRight size={18} /></button>
+          </div>
+        </header>
+        <div className="audit-calendar-legend" aria-label="Leyenda del calendario">
+          <span><i className="window" /> Ventana de auditoría</span>
+          <span><i className="range" /> Rango confirmado</span>
+          <span><i className="exact" /> Fecha exacta</span>
+        </div>
+        <div className="audit-calendar-weekdays" aria-hidden="true">{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}</div>
+        <div className="audit-calendar-grid">
+          {cells.map((cell, index) => {
+            if (!cell) return <div className="audit-calendar-day is-empty" key={`empty-${index}`} />;
+            const dayAudits = audits.filter((audit) => audit.scheduleType !== "window" && audit.scheduleType !== "pending" && auditOccupiesDate(audit, cell.iso));
+            const dayWindows = windows.filter((audit) => auditOccupiesDate(audit, cell.iso));
+            return (
+              <div className={`audit-calendar-day${cell.iso === today ? " is-today" : ""}${dayWindows.length ? " has-window" : ""}`} key={cell.iso}>
+                <time dateTime={cell.iso}>{cell.day}</time>
+                <div className="audit-calendar-day-content">
+                  {dayWindows.slice(0, 2).map((audit) => {
+                    const [start, end] = auditScheduleBounds(audit);
+                    const showLabel = cell.iso === start || cell.day === 1;
+                    return (
+                      <button
+                        aria-label={`${audit.code}, ventana ${auditDateLabel(audit)}`}
+                        className={`audit-calendar-window${cell.iso === start ? " starts" : ""}${cell.iso === end ? " ends" : ""}${selected?.id === audit.id ? " selected" : ""}`}
+                        key={audit.id}
+                        title={`${audit.code} · ${audit.title}`}
+                        type="button"
+                        onClick={() => onSelect(audit)}
+                      >
+                        {showLabel ? <span>{audit.code} · {audit.title}</span> : <span aria-hidden="true">&nbsp;</span>}
+                      </button>
+                    );
+                  })}
+                  {dayAudits.slice(0, 2).map((audit) => (
+                    <button className={`audit-calendar-event event-${audit.scheduleType}${selected?.id === audit.id ? " selected" : ""}`} key={audit.id} title={`${audit.code} · ${audit.title}`} type="button" onClick={() => onSelect(audit)}>
+                      <strong>{audit.code}</strong><span>{audit.title}</span>
+                    </button>
+                  ))}
+                  {dayWindows.length + dayAudits.length > 2 ? <small className="audit-calendar-more">+{dayWindows.length + dayAudits.length - 2}</small> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <aside className="audit-calendar-sidebar">
+        <section className="audit-window-list">
+          <header><span><CalendarRange size={17} /></span><div><small>Periodos flexibles</small><h3>Ventanas de auditoría</h3></div><strong>{windows.length}</strong></header>
+          <div>
+            {windows.map((audit) => (
+              <button className={selected?.id === audit.id ? "selected" : ""} key={audit.id} type="button" onClick={() => focusAuditInCalendar(audit, onMonthChange, onSelect)}>
+                <span className="audit-window-color" />
+                <span><code>{audit.code}</code><strong>{audit.title}</strong><small>{auditDateLabel(audit)}</small></span>
+                <ChevronRight size={15} />
+              </button>
+            ))}
+            {!windows.length ? <p className="audit-calendar-sidebar-empty">No hay ventanas con estos filtros.</p> : null}
+          </div>
+        </section>
+
+        {selected ? <AuditCalendarDetail audit={selected} onClose={() => onSelect(null)} /> : null}
+
+        {pending.length ? <section className="audit-calendar-pending"><header><Clock3 size={16} /><strong>Por programar</strong><span>{pending.length}</span></header>{pending.slice(0, 4).map((audit) => <button key={audit.id} type="button" onClick={() => onSelect(audit)}><code>{audit.code}</code><span>{audit.title || "Borrador sin nombre"}</span></button>)}</section> : null}
+      </aside>
+    </div>
+  );
+}
+
+function AuditCalendarDetail({ audit, onClose }: { audit: AuditOccurrence; onClose: () => void }) {
+  return (
+    <section className="audit-calendar-detail">
+      <header><span>Detalle seleccionado</span><button aria-label="Cerrar detalle" title="Cerrar" type="button" onClick={onClose}><X size={15} /></button></header>
+      <code>{audit.code}</code>
+      <h4>{audit.title || "Borrador sin nombre"}</h4>
+      <p>{auditDateLabel(audit)}</p>
+      <dl>
+        <div><dt>Entidad</dt><dd>{audit.customerName || audit.organizationName || (audit.entityKind === "internal" ? "Interna" : "Por definir")}</dd></div>
+        <div><dt>Responsable</dt><dd>{audit.responsibleName || "Por asignar"}</dd></div>
+      </dl>
+      <span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span>
+    </section>
+  );
+}
+
+function initialAuditMonth(audits: AuditOccurrence[]): CalendarMonth {
+  const today = new Date().toISOString().slice(0, 10);
+  const starts = audits.map((audit) => auditScheduleBounds(audit)[0]).filter(Boolean).sort();
+  const start = starts.find((date) => date >= today.slice(0, 8) + "01") ?? starts.at(-1);
+  return start ? calendarMonthFromIso(start) : todayCalendarMonth();
+}
+
+function focusAuditInCalendar(audit: AuditOccurrence, setMonth: (month: CalendarMonth) => void, select: (audit: AuditOccurrence | null) => void) {
+  const [start] = auditScheduleBounds(audit);
+  if (start) setMonth(calendarMonthFromIso(start));
+  select(audit);
+}
+
+function calendarMonthFromIso(date: string): CalendarMonth {
+  const [year, month] = date.split("-").map(Number);
+  return { year, month: month - 1 };
+}
+
+function todayCalendarMonth(): CalendarMonth {
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() };
+}
+
+function shiftCalendarMonth(value: CalendarMonth, offset: number): CalendarMonth {
+  const date = new Date(Date.UTC(value.year, value.month + offset, 1));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() };
+}
+
+function getCalendarCells(year: number, month: number) {
+  const firstWeekday = (new Date(Date.UTC(year, month, 1)).getUTCDay() + 6) % 7;
+  const totalDays = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = index - firstWeekday + 1;
+    if (day < 1 || day > totalDays) return null;
+    return { day, iso: `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}` };
+  });
 }
 
 function AuditCreateForm({
@@ -352,7 +529,7 @@ function AuditCreateForm({
   );
 }
 
-function AuditSuccess({ audit, onCreateAnother, onView }: { audit: AuditOccurrence; onCreateAnother: () => void; onView: () => void }) {
+function AuditSuccess({ audit, onCalendar, onCreateAnother, onView }: { audit: AuditOccurrence; onCalendar: () => void; onCreateAnother: () => void; onView: () => void }) {
   return (
     <section className="audit-success-page">
       <div className="audit-success-mark"><Check size={34} /></div>
@@ -368,7 +545,7 @@ function AuditSuccess({ audit, onCreateAnother, onView }: { audit: AuditOccurren
         <div><small>Estatus</small><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></div>
       </div>
       <p className="audit-success-note"><History size={16} /> La ocurrencia quedó vinculada a la serie <strong>{audit.seriesId}</strong> y su trazabilidad inició con el usuario creador.</p>
-      <div className="audit-success-actions"><button className="button button-primary" type="button" onClick={onView}>Ver auditoría</button><button className="button button-secondary" type="button" disabled title="El calendario general se implementará en su propio PRD">Ir al calendario</button><button className="button button-secondary" type="button" onClick={onCreateAnother}>Crear otra</button></div>
+      <div className="audit-success-actions"><button className="button button-primary" type="button" onClick={onView}>Ver auditoría</button><button className="button button-secondary" type="button" onClick={onCalendar}><CalendarDays size={16} /> Ir al calendario</button><button className="button button-secondary" type="button" onClick={onCreateAnother}>Crear otra</button></div>
     </section>
   );
 }

@@ -238,14 +238,19 @@ export function createAuditOccurrence(
   };
 }
 
-function scheduleBounds(audit: AuditDraft) {
+export function auditScheduleBounds(audit: AuditDraft) {
   if (audit.scheduleType === "window") return [audit.windowStart, audit.windowEnd] as const;
   if (audit.scheduleType === "pending") return ["", ""] as const;
   return [audit.startDate, audit.scheduleType === "range" ? audit.endDate : audit.startDate] as const;
 }
 
+export function auditOccupiesDate(audit: AuditDraft, date: string) {
+  const [start, end] = auditScheduleBounds(audit);
+  return Boolean(start && end && start <= date && date <= end);
+}
+
 export function findPossibleDuplicates(draft: AuditDraft, existing: AuditOccurrence[]) {
-  const [candidateStart, candidateEnd] = scheduleBounds(draft);
+  const [candidateStart, candidateEnd] = auditScheduleBounds(draft);
   if (!candidateStart) return [];
   return existing.filter((audit) => {
     if (audit.status === "draft" || audit.auditType !== draft.auditType) return false;
@@ -254,7 +259,7 @@ export function findPossibleDuplicates(draft: AuditDraft, existing: AuditOccurre
       : Boolean(draft.organizationName && audit.organizationName === draft.organizationName);
     if (!sameParty && draft.entityKind !== "internal") return false;
     const sameStandard = !draft.standards.length || draft.standards.some((standard) => audit.standards.includes(standard));
-    const [existingStart, existingEnd] = scheduleBounds(audit);
+    const [existingStart, existingEnd] = auditScheduleBounds(audit);
     return sameStandard && Boolean(existingStart) && candidateStart <= existingEnd && existingStart <= candidateEnd;
   });
 }

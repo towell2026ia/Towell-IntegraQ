@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  auditOccupiesDate,
+  auditScheduleBounds,
   createAuditOccurrence,
   determineInitialAuditStatus,
   emptyAuditDraft,
@@ -55,6 +57,14 @@ describe("audit occurrence rules", () => {
       endDate: "2026-11-14",
     };
     expect(findPossibleDuplicates(draft, initialAuditOccurrences).map((audit) => audit.code)).toContain("AUD-2026-0037");
+  });
+
+  it("exposes schedule bounds for calendar ranges and windows", () => {
+    const windowAudit = initialAuditOccurrences.find((audit) => audit.scheduleType === "window");
+    expect(windowAudit).toBeDefined();
+    expect(auditScheduleBounds(windowAudit!)).toEqual(["2026-10-01", "2026-11-30"]);
+    expect(auditOccupiesDate(windowAudit!, "2026-10-18")).toBe(true);
+    expect(auditOccupiesDate(windowAudit!, "2026-12-01")).toBe(false);
   });
 
   it("creates an immutable occurrence snapshot", () => {
