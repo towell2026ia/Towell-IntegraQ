@@ -35,7 +35,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   documents: { label: "Información documentada", breadcrumb: "Operación", status: "Disponible" },
   risks: { label: "Riesgos y oportunidades", breadcrumb: "Operación", status: "Disponible" },
   indicators: { label: "Objetivos e indicadores", breadcrumb: "Operación", status: "Disponible" },
-  audits: { label: "Auditorías", breadcrumb: "Operación", status: "Estructura" },
+  audits: { label: "Auditorías", breadcrumb: "Operación", status: "Disponible" },
   "audit-app": { label: "App de auditorías", breadcrumb: "Operación", status: "Pendiente" },
   "corrective-actions": { label: "Root2Cause, NC y CAPA", breadcrumb: "Operación", status: "Disponible" },
   customers: { label: "Gestión de calidad de clientes", breadcrumb: "Operación", status: "Disponible" },

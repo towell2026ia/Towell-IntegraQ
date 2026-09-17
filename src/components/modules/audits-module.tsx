@@ -1,0 +1,406 @@
+"use client";
+
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  FileText,
+  History,
+  Paperclip,
+  Plus,
+  Search,
+  ShieldCheck,
+  X,
+} from "lucide-react";
+import { useMemo, useState } from "react";
+
+import {
+  auditDateLabel,
+  auditOriginLabels,
+  auditStandardOptions,
+  auditStatusLabels,
+  auditTypeLabels,
+  auditTypeOptions,
+  createAuditOccurrence,
+  emptyAuditDraft,
+  findPossibleDuplicates,
+  normalizeAuditRules,
+  validateAuditDraft,
+  type AuditDraft,
+  type AuditOccurrence,
+  type AuditStatus,
+} from "@/lib/audit-data";
+import { processCatalog } from "@/lib/configuration-data";
+import { canPerformModuleAction } from "@/lib/module-permissions";
+import { customerQualityCatalog } from "@/lib/quality-parties-data";
+import type { ActiveSession } from "@/lib/session-data";
+
+type AuditView = "list" | "create" | "success";
+
+const customers = [
+  { id: "walmart", name: "Walmart" },
+  { id: "target", name: "Target" },
+  { id: "costco", name: "Costco" },
+  { id: "amazon", name: "Amazon" },
+  { id: "liverpool", name: "Liverpool" },
+  ...customerQualityCatalog.map((customer) => ({ id: customer.id, name: customer.name })),
+];
+
+const auditUsers = [
+  { id: "team-quality", name: "Coordinación de Calidad" },
+  { id: "team-production", name: "Responsable de Producción" },
+  { id: "team-hr", name: "Responsable de Recursos Humanos" },
+  { id: "team-maintenance", name: "Responsable de Mantenimiento" },
+  { id: "team-safety", name: "Responsable de Seguridad" },
+];
+
+export function AuditsModule({
+  occurrences,
+  onOccurrencesChange,
+  session,
+}: {
+  occurrences: AuditOccurrence[];
+  onOccurrencesChange: (occurrences: AuditOccurrence[]) => void;
+  session: ActiveSession;
+}) {
+  const [view, setView] = useState<AuditView>("list");
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<AuditStatus | "all">("all");
+  const [created, setCreated] = useState<AuditOccurrence | null>(null);
+  const canCreate = canPerformModuleAction(session, "audits", "manage") || canPerformModuleAction(session, "audits", "create");
+
+  const filtered = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase("es");
+    return occurrences.filter((audit) => {
+      const matchesStatus = statusFilter === "all" || audit.status === statusFilter;
+      const matchesText = !normalized || [audit.code, audit.title, audit.customerName, audit.organizationName, audit.responsibleName]
+        .some((value) => value.toLocaleLowerCase("es").includes(normalized));
+      return matchesStatus && matchesText;
+    });
+  }, [occurrences, query, statusFilter]);
+
+  const beginCreate = () => {
+    setCreated(null);
+    setView("create");
+  };
+
+  const save = (draft: AuditDraft, confirmed: boolean) => {
+    const occurrence = createAuditOccurrence(draft, occurrences, session.name, confirmed);
+    onOccurrencesChange([occurrence, ...occurrences]);
+    setCreated(occurrence);
+    setView(confirmed ? "success" : "list");
+  };
+
+  if (view === "create") {
+    return <AuditCreateForm existing={occurrences} onCancel={() => setView("list")} onSave={save} session={session} />;
+  }
+
+  if (view === "success" && created) {
+    return (
+      <AuditSuccess
+        audit={created}
+        onCreateAnother={beginCreate}
+        onView={() => { setQuery(created.code); setStatusFilter("all"); setView("list"); }}
+      />
+    );
+  }
+
+  const scheduled = occurrences.filter((audit) => audit.status === "scheduled" || audit.status === "window_open").length;
+  const pending = occurrences.filter((audit) => audit.status === "pending_schedule").length;
+  const drafts = occurrences.filter((audit) => audit.status === "draft").length;
+
+  return (
+    <div className="audit-module">
+      <section className="module-heading audit-heading">
+        <div>
+          <p className="module-kicker">Operación · registro maestro</p>
+          <h2>Auditorías</h2>
+          <p>Cada alta crea una ocurrencia independiente, programable y trazable.</p>
+        </div>
+        {canCreate ? <button className="button button-primary" type="button" onClick={beginCreate}><Plus size={17} /> Nueva auditoría</button> : null}
+      </section>
+
+      <section className="audit-metrics" aria-label="Resumen de auditorías">
+        <AuditMetric icon={<ShieldCheck size={19} />} label="Ocurrencias" value={occurrences.length} tone="blue" />
+        <AuditMetric icon={<CalendarDays size={19} />} label="Programadas" value={scheduled} tone="green" />
+        <AuditMetric icon={<Clock3 size={19} />} label="Por programar" value={pending} tone="amber" />
+        <AuditMetric icon={<FileText size={19} />} label="Borradores" value={drafts} tone="neutral" />
+      </section>
+
+      <section className="audit-register-panel">
+        <header className="audit-register-toolbar">
+          <div>
+            <h3>Registro de ocurrencias</h3>
+            <p>El histórico permanece intacto; una nueva revisión genera un folio nuevo.</p>
+          </div>
+          <div className="audit-register-filters">
+            <label className="panel-search"><Search size={16} /><input aria-label="Buscar auditoría" placeholder="Folio, nombre o entidad" value={query} onChange={(event) => setQuery(event.target.value)} /></label>
+            <select aria-label="Filtrar por estado" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as AuditStatus | "all")}>
+              <option value="all">Todos los estados</option>
+              {Object.entries(auditStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+        </header>
+        <div className="audit-table-wrap">
+          <table className="audit-table">
+            <thead><tr><th>Auditoría</th><th>Tipo y origen</th><th>Entidad</th><th>Programación</th><th>Responsable</th><th>Estado</th></tr></thead>
+            <tbody>
+              {filtered.map((audit) => (
+                <tr key={audit.id}>
+                  <td><code>{audit.code}</code><strong>{audit.title || "Borrador sin nombre"}</strong><small>{audit.processIds.length} procesos · {audit.standards.join(", ") || "Sin norma"}</small></td>
+                  <td><strong>{audit.auditType ? auditTypeLabels[audit.auditType] : "Por definir"}</strong><small>{audit.origin ? auditOriginLabels[audit.origin] : "Origen pendiente"}</small></td>
+                  <td><strong>{audit.customerName || audit.organizationName || (audit.entityKind === "internal" ? "Interna" : "Por definir")}</strong><small>{audit.contactName || "Sin contacto externo"}</small></td>
+                  <td><strong>{auditDateLabel(audit)}</strong><small>{audit.scheduleType === "window" ? "Ventana de auditoría" : audit.scheduleType === "pending" ? "Fecha pendiente" : "Fecha confirmada"}</small></td>
+                  <td><strong>{audit.responsibleName || "Por asignar"}</strong><small>{audit.participantNames.length} participantes</small></td>
+                  <td><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!filtered.length ? <div className="audit-empty"><Search size={22} /><strong>No encontramos auditorías</strong><span>Prueba con otro término o estado.</span></div> : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AuditCreateForm({
+  existing,
+  onCancel,
+  onSave,
+  session,
+}: {
+  existing: AuditOccurrence[];
+  onCancel: () => void;
+  onSave: (draft: AuditDraft, confirmed: boolean) => void;
+  session: ActiveSession;
+}) {
+  const [draft, setDraft] = useState<AuditDraft>(emptyAuditDraft);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [duplicates, setDuplicates] = useState<AuditOccurrence[]>([]);
+  const [showDuplicates, setShowDuplicates] = useState(false);
+  const [activeSection, setActiveSection] = useState("identity");
+  const allUsers = useMemo(() => [{ id: session.userId, name: session.name }, ...auditUsers.filter((user) => user.name !== session.name)], [session]);
+
+  const update = <K extends keyof AuditDraft>(key: K, value: AuditDraft[K]) => {
+    const next = normalizeAuditRules({ ...draft, [key]: value });
+    setDraft(next);
+    if (errors[key]) setErrors((current) => { const copy = { ...current }; delete copy[key]; return copy; });
+  };
+
+  const toggle = (key: "processIds" | "standards" | "participantIds", value: string) => {
+    const current = draft[key];
+    const selected = current.includes(value) ? current.filter((item) => item !== value) : [...current, value];
+    if (key === "participantIds") {
+      const names = selected.map((id) => allUsers.find((user) => user.id === id)?.name).filter((name): name is string => Boolean(name));
+      setDraft({ ...draft, participantIds: selected, participantNames: names });
+    } else update(key, selected);
+  };
+
+  const saveDraft = () => onSave(draft, false);
+  const confirm = (ignoreDuplicates = false) => {
+    const normalized = normalizeAuditRules(draft);
+    const validation = validateAuditDraft(normalized, true);
+    setDraft(normalized);
+    setErrors(validation);
+    if (Object.keys(validation).length) {
+      document.querySelector(".audit-form-error")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    const matches = findPossibleDuplicates(normalized, existing);
+    if (matches.length && !ignoreDuplicates) {
+      setDuplicates(matches);
+      setShowDuplicates(true);
+      return;
+    }
+    onSave(normalized, true);
+  };
+
+  const addFiles = (files: FileList | null) => {
+    if (!files) return;
+    const attachments = [...draft.attachments, ...Array.from(files).map((file) => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      size: file.size,
+      uploadedAt: new Date().toISOString(),
+      uploadedBy: session.name,
+      version: "1",
+    }))];
+    update("attachments", attachments);
+  };
+
+  const steps = [
+    ["identity", "01", "Tipo y origen"],
+    ["entity", "02", "Entidad relacionada"],
+    ["scope", "03", "Alcance y normas"],
+    ["schedule", "04", "Programación"],
+    ["team", "05", "Responsables"],
+    ["documents", "06", "Documentación"],
+  ];
+
+  return (
+    <div className="audit-create-page">
+      <section className="audit-create-heading">
+        <button className="icon-button" type="button" title="Volver" onClick={onCancel}><ArrowLeft size={19} /></button>
+        <div><p className="module-kicker">AUD-PRD-01</p><h2>Nueva auditoría</h2><p>Registra una ocurrencia real. Los campos con * son obligatorios al confirmar.</p></div>
+        <span className="audit-draft-indicator"><span /> Borrador sin guardar</span>
+      </section>
+
+      <div className="audit-create-layout">
+        <aside className="audit-stepper" aria-label="Secciones del formulario">
+          {steps.map(([id, number, label]) => (
+            <a className={activeSection === id ? "active" : ""} href={`#audit-${id}`} key={id} onClick={() => setActiveSection(id)}><span>{number}</span><strong>{label}</strong><ChevronRight size={15} /></a>
+          ))}
+          <div className="audit-stepper-note"><History size={17} /><span><strong>Histórico protegido</strong><small>Esta alta nunca sobrescribe ocurrencias anteriores.</small></span></div>
+        </aside>
+
+        <div className="audit-form-stack">
+          {Object.keys(errors).length ? <div className="audit-form-error"><AlertTriangle size={18} /><div><strong>Falta información para crear la auditoría</strong><span>Revisa los campos marcados en rojo. Puedes guardarla como borrador si aún no tienes los datos.</span></div></div> : null}
+
+          <AuditSection id="identity" number="01" title="Tipo, origen e información general" subtitle="Define qué auditoría es y cómo nace la ocurrencia.">
+            <div className="audit-field wide"><span className="audit-label">Tipo de auditoría *</span><div className="audit-card-options audit-type-options">
+              {auditTypeOptions.map(([value, label]) => <ChoiceCard key={value} checked={draft.auditType === value} label={label} onClick={() => update("auditType", value)} />)}
+            </div>{errors.auditType ? <FieldError text={errors.auditType} /> : null}</div>
+            <div className="audit-field wide"><span className="audit-label">¿Cómo se genera esta auditoría? *</span><div className="audit-card-options three">
+              <ChoiceCard checked={draft.origin === "annual_plan"} label="Plan anual" description="Auditorías internas y de proceso" onClick={() => update("origin", "annual_plan")} />
+              <ChoiceCard checked={draft.origin === "recurrence"} label="Programación / recurrencia" description="Seguimiento o revisión conocida" onClick={() => update("origin", "recurrence")} />
+              <ChoiceCard checked={draft.origin === "notice"} disabled={draft.auditType === "customer"} label="Por aviso" description="Solo existe cuando un tercero avisa" onClick={() => update("origin", "notice")} />
+            </div>{draft.auditType === "customer" ? <p className="audit-rule-note"><ShieldCheck size={15} /> Las auditorías de cliente siempre son por aviso y no generan recurrencia automática.</p> : null}{errors.origin ? <FieldError text={errors.origin} /> : null}</div>
+            <Field label="Nombre de auditoría *" error={errors.title} wide><input value={draft.title} onChange={(event) => update("title", event.target.value)} placeholder="Ej. Auditoría Walmart FCCA 2026" /></Field>
+            <Field label="Descripción" wide><textarea rows={3} value={draft.description} onChange={(event) => update("description", event.target.value)} placeholder="Contexto y propósito de la auditoría" /></Field>
+          </AuditSection>
+
+          <AuditSection id="entity" number="02" title="Entidad relacionada" subtitle="Identifica quién realiza o solicita la auditoría.">
+            <div className="audit-field wide"><span className="audit-label">¿Quién realiza o solicita la auditoría? *</span><div className="audit-pill-options">
+              {(["customer", "certifier", "auditor", "internal", "authority", "other"] as const).map((value) => {
+                const labels = { customer: "Cliente", certifier: "Organismo certificador", auditor: "Organismo auditor", internal: "Interna", authority: "Autoridad", other: "Otro" };
+                return <button className={draft.entityKind === value ? "selected" : ""} disabled={draft.auditType === "customer" && value !== "customer"} key={value} type="button" onClick={() => update("entityKind", value)}><span>{draft.entityKind === value ? <Check size={13} /> : null}</span>{labels[value]}</button>;
+              })}
+            </div>{errors.entityKind ? <FieldError text={errors.entityKind} /> : null}</div>
+            {draft.entityKind === "customer" ? <>
+              <Field label="Cliente *" error={errors.customerId}><select value={draft.customerId} onChange={(event) => { const customer = customers.find((item) => item.id === event.target.value); setDraft({ ...draft, customerId: event.target.value, customerName: customer?.name ?? "" }); }}><option value="">Seleccionar cliente</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></Field>
+              <Field label="Fecha de aviso *" error={errors.noticeDate}><input type="date" value={draft.noticeDate} onChange={(event) => update("noticeDate", event.target.value)} /></Field>
+              <Field label="Medio de aviso"><select value={draft.noticeMedium} onChange={(event) => update("noticeMedium", event.target.value)}><option value="">Seleccionar</option>{["Correo electrónico", "Portal del cliente", "Carta", "Llamada", "Reunión", "Otro"].map((option) => <option key={option}>{option}</option>)}</select></Field>
+            </> : draft.entityKind && draft.entityKind !== "internal" ? <>
+              <Field label="Nombre del organismo"><input value={draft.organizationName} onChange={(event) => update("organizationName", event.target.value)} placeholder="Ej. SGS, Intertek" /></Field>
+              <Field label="Auditor asignado"><input value={draft.externalAuditor} onChange={(event) => update("externalAuditor", event.target.value)} placeholder="Opcional al crear" /></Field>
+            </> : null}
+            {draft.entityKind && draft.entityKind !== "internal" ? <>
+              <Field label="Nombre del contacto"><input value={draft.contactName} onChange={(event) => update("contactName", event.target.value)} /></Field>
+              <Field label="Cargo"><input value={draft.contactRole} onChange={(event) => update("contactRole", event.target.value)} /></Field>
+              <Field label="Correo"><input type="email" value={draft.contactEmail} onChange={(event) => update("contactEmail", event.target.value)} /></Field>
+              <Field label="Teléfono"><input value={draft.contactPhone} onChange={(event) => update("contactPhone", event.target.value)} /></Field>
+            </> : null}
+          </AuditSection>
+
+          <AuditSection id="scope" number="03" title="Alcance, procesos y requisitos" subtitle="Relaciona la ocurrencia con el mapa de procesos y el marco aplicable.">
+            <Field label="Alcance de auditoría *" error={errors.scope} wide><textarea rows={4} value={draft.scope} onChange={(event) => update("scope", event.target.value)} placeholder="Describe sedes, procesos, productos y límites de la revisión" /></Field>
+            <div className="audit-field wide"><span className="audit-label">Procesos involucrados *</span><div className="audit-check-grid">
+              {processCatalog.filter((process) => process.level === "process").map((process) => <CheckboxChip key={process.id} checked={draft.processIds.includes(process.id)} label={process.name} onClick={() => toggle("processIds", process.id)} />)}
+            </div>{errors.processIds ? <FieldError text={errors.processIds} /> : null}</div>
+            <div className="audit-field wide"><span className="audit-label">Norma, estándar o requisito *</span><div className="audit-check-grid standards">
+              {auditStandardOptions.map((standard) => <CheckboxChip key={standard} checked={draft.standards.includes(standard)} label={standard} onClick={() => toggle("standards", standard)} />)}
+            </div>{errors.standards ? <FieldError text={errors.standards} /> : null}</div>
+          </AuditSection>
+
+          <AuditSection id="schedule" number="04" title="Programación y recurrencia" subtitle="Selecciona una fecha, rango, ventana o deja la fecha pendiente.">
+            <div className="audit-field wide"><span className="audit-label">Tipo de programación *</span><div className="audit-card-options four">
+              {([['exact', 'Fecha exacta'], ['range', 'Rango de fechas'], ['window', 'Ventana de auditoría'], ['pending', 'Fecha por confirmar']] as const).map(([value, label]) => <ChoiceCard checked={draft.scheduleType === value} key={value} label={label} onClick={() => update("scheduleType", value)} />)}
+            </div></div>
+            {draft.scheduleType === "exact" || draft.scheduleType === "range" ? <>
+              <Field label={draft.scheduleType === "range" ? "Fecha de inicio *" : "Fecha *"} error={errors.startDate}><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} /></Field>
+              {draft.scheduleType === "range" ? <Field label="Fecha de término *" error={errors.endDate}><input type="date" value={draft.endDate} onChange={(event) => update("endDate", event.target.value)} /></Field> : null}
+              <Field label="Hora de inicio"><input type="time" value={draft.startTime} onChange={(event) => update("startTime", event.target.value)} /></Field>
+              <Field label="Hora de término"><input type="time" value={draft.endTime} onChange={(event) => update("endTime", event.target.value)} /></Field>
+            </> : null}
+            {draft.scheduleType === "window" ? <>
+              <Field label="Inicio de ventana *" error={errors.windowStart}><input type="date" value={draft.windowStart} onChange={(event) => update("windowStart", event.target.value)} /></Field>
+              <Field label="Fin de ventana *" error={errors.windowEnd}><input type="date" value={draft.windowEnd} onChange={(event) => update("windowEnd", event.target.value)} /></Field>
+            </> : null}
+            {draft.scheduleType === "pending" ? <div className="audit-pending-banner wide"><Clock3 size={19} /><div><strong>La auditoría quedará pendiente de programación</strong><span>Podrás asignar la fecha posteriormente sin perder el registro.</span></div></div> : null}
+            <div className="audit-field wide"><span className="audit-label">¿Tendrá una próxima revisión programable?</span><div className="audit-pill-options">
+              {[['yes', 'Sí'], ['no', 'No'], ['after_result', 'Se definirá después del resultado']].map(([value, label]) => <button className={draft.recurrence === value ? "selected" : ""} disabled={draft.origin === "notice"} key={value} type="button" onClick={() => update("recurrence", value as AuditDraft["recurrence"])}><span>{draft.recurrence === value ? <Check size={13} /> : null}</span>{label}</button>)}
+            </div>{draft.origin === "notice" ? <p className="audit-rule-note"><ShieldCheck size={15} /> La recurrencia automática está desactivada para auditorías por aviso.</p> : null}</div>
+          </AuditSection>
+
+          <AuditSection id="team" number="05" title="Responsable y participantes" subtitle="Los usuarios asignados recibirán las notificaciones iniciales.">
+            <Field label="Responsable de auditoría *" error={errors.responsibleUserId} wide><select value={draft.responsibleUserId} onChange={(event) => { const user = allUsers.find((item) => item.id === event.target.value); setDraft({ ...draft, responsibleUserId: event.target.value, responsibleName: user?.name ?? "" }); }}><option value="">Seleccionar responsable</option>{allUsers.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}</select></Field>
+            <div className="audit-field wide"><span className="audit-label">Participantes</span><div className="audit-team-grid">
+              {allUsers.map((user) => <button className={draft.participantIds.includes(user.id) ? "selected" : ""} key={user.id} type="button" onClick={() => toggle("participantIds", user.id)}><span className="audit-avatar">{user.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join("")}</span><span><strong>{user.name}</strong><small>{user.id === session.userId ? session.position : "Participante interno"}</small></span>{draft.participantIds.includes(user.id) ? <CheckCircle2 size={17} /> : null}</button>)}
+            </div></div>
+          </AuditSection>
+
+          <AuditSection id="documents" number="06" title="Documentación inicial" subtitle="Adjunta cartas, correos, agendas, protocolos o requisitos disponibles.">
+            <label className="audit-dropzone wide"><Paperclip size={25} /><strong>Seleccionar documentos</strong><span>PDF, imágenes y archivos de oficina. Los documentos no son obligatorios para confirmar.</span><input multiple type="file" onChange={(event) => addFiles(event.target.files)} /></label>
+            {draft.attachments.length ? <div className="audit-attachment-list wide">{draft.attachments.map((attachment) => <div key={attachment.id}><FileText size={17} /><span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)} · Versión {attachment.version}</small></span><button className="icon-button" type="button" title="Quitar archivo" onClick={() => update("attachments", draft.attachments.filter((item) => item.id !== attachment.id))}><X size={15} /></button></div>)}</div> : null}
+          </AuditSection>
+
+          <div className="audit-form-footer">
+            <button className="button button-secondary" type="button" onClick={onCancel}>Cancelar</button>
+            <div><button className="button button-secondary" type="button" onClick={saveDraft}>Guardar borrador</button><button className="button button-primary" type="button" onClick={() => confirm()}><ShieldCheck size={17} /> Crear auditoría</button></div>
+          </div>
+        </div>
+      </div>
+
+      {showDuplicates ? <DuplicateDialog duplicates={duplicates} onCancel={() => setShowDuplicates(false)} onCreate={() => confirm(true)} onView={() => { setShowDuplicates(false); onCancel(); }} /> : null}
+    </div>
+  );
+}
+
+function AuditSuccess({ audit, onCreateAnother, onView }: { audit: AuditOccurrence; onCreateAnother: () => void; onView: () => void }) {
+  return (
+    <section className="audit-success-page">
+      <div className="audit-success-mark"><Check size={34} /></div>
+      <p className="module-kicker">Ocurrencia creada</p>
+      <h2>Auditoría creada correctamente</h2>
+      <code>{audit.code}</code>
+      <div className="audit-success-summary">
+        <div><small>Nombre</small><strong>{audit.title}</strong></div>
+        <div><small>Entidad</small><strong>{audit.customerName || audit.organizationName || "Interna"}</strong></div>
+        <div><small>Tipo</small><strong>{auditTypeLabels[audit.auditType as keyof typeof auditTypeLabels]}</strong></div>
+        <div><small>Fecha</small><strong>{auditDateLabel(audit)}</strong></div>
+        <div><small>Responsable</small><strong>{audit.responsibleName}</strong></div>
+        <div><small>Estatus</small><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></div>
+      </div>
+      <p className="audit-success-note"><History size={16} /> La ocurrencia quedó vinculada a la serie <strong>{audit.seriesId}</strong> y su trazabilidad inició con el usuario creador.</p>
+      <div className="audit-success-actions"><button className="button button-primary" type="button" onClick={onView}>Ver auditoría</button><button className="button button-secondary" type="button" disabled title="El calendario general se implementará en su propio PRD">Ir al calendario</button><button className="button button-secondary" type="button" onClick={onCreateAnother}>Crear otra</button></div>
+    </section>
+  );
+}
+
+function DuplicateDialog({ duplicates, onCancel, onCreate, onView }: { duplicates: AuditOccurrence[]; onCancel: () => void; onCreate: () => void; onView: () => void }) {
+  return <div className="modal-backdrop" role="presentation"><div className="modal audit-duplicate-modal" role="dialog" aria-modal="true" aria-labelledby="duplicate-title"><div className="audit-duplicate-icon"><AlertTriangle size={25} /></div><h3 id="duplicate-title">Existe una auditoría similar registrada</h3><p>Coincide la entidad, tipo, norma y periodo. Revisa el registro antes de crear una nueva ocurrencia.</p><div className="audit-duplicate-list">{duplicates.map((audit) => <div key={audit.id}><span><code>{audit.code}</code><strong>{audit.title}</strong></span><small>{auditDateLabel(audit)}</small></div>)}</div><div className="modal-footer"><button className="button button-secondary" type="button" onClick={onCancel}>Cancelar</button><button className="button button-secondary" type="button" onClick={onView}>Ver auditoría</button><button className="button button-primary" type="button" onClick={onCreate}>Crear de todos modos</button></div></div></div>;
+}
+
+function AuditSection({ id, number, title, subtitle, children }: { id: string; number: string; title: string; subtitle: string; children: React.ReactNode }) {
+  return <section className="audit-form-section" id={`audit-${id}`}><header><span>{number}</span><div><h3>{title}</h3><p>{subtitle}</p></div></header><div className="audit-form-grid">{children}</div></section>;
+}
+
+function Field({ label, error, wide, children }: { label: string; error?: string; wide?: boolean; children: React.ReactNode }) {
+  return <label className={`audit-field${wide ? " wide" : ""}${error ? " invalid" : ""}`}><span className="audit-label">{label}</span>{children}{error ? <FieldError text={error} /> : null}</label>;
+}
+
+function FieldError({ text }: { text: string }) { return <small className="field-error">{text}</small>; }
+
+function ChoiceCard({ checked, disabled, label, description, onClick }: { checked: boolean; disabled?: boolean; label: string; description?: string; onClick: () => void }) {
+  return <button className={checked ? "selected" : ""} disabled={disabled} type="button" onClick={onClick}><span className="choice-radio">{checked ? <span /> : null}</span><span><strong>{label}</strong>{description ? <small>{description}</small> : null}</span></button>;
+}
+
+function CheckboxChip({ checked, label, onClick }: { checked: boolean; label: string; onClick: () => void }) {
+  return <button className={checked ? "selected" : ""} type="button" onClick={onClick}><span>{checked ? <Check size={12} /> : null}</span>{label}</button>;
+}
+
+function AuditMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: string }) {
+  return <div className={`audit-metric audit-metric-${tone}`}><span>{icon}</span><div><strong>{value}</strong><small>{label}</small></div></div>;
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}

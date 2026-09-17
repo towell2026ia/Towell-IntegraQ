@@ -31,6 +31,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AccessModule } from "@/components/modules/access-module";
 import { ActivityLogModule } from "@/components/modules/activity-log-module";
+import { AuditsModule } from "@/components/modules/audits-module";
 import { CalibrationsModule } from "@/components/modules/calibrations-module";
 import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
@@ -114,6 +115,10 @@ import {
   normalizeRiskWorkspace,
   type RiskWorkspaceState,
 } from "@/lib/risk-opportunity-data";
+import {
+  initialAuditOccurrences,
+  type AuditOccurrence,
+} from "@/lib/audit-data";
 
 const navigationGroups = [
   {
@@ -199,6 +204,9 @@ export function IntegraQWorkspace({
   const [improvementProjects, setImprovementProjects] = useState<ImprovementProject[]>(
     buildInitialImprovementProjects,
   );
+  const [auditOccurrences, setAuditOccurrences] = useState<AuditOccurrence[]>(
+    initialAuditOccurrences,
+  );
   const [storageReady, setStorageReady] = useState(false);
   const [riskServerReady, setRiskServerReady] = useState(false);
 
@@ -234,6 +242,7 @@ export function IntegraQWorkspace({
         const savedManagementReviews = window.localStorage.getItem("integraq.managementReviews.v2");
         const savedManagementReview = window.localStorage.getItem("integraq.managementReview.v1");
         const savedImprovementProjects = window.localStorage.getItem("integraq.improvementProjects.v2") ?? window.localStorage.getItem("integraq.improvementProjects.v1");
+        const savedAudits = window.localStorage.getItem("integraq.auditOccurrences.v1");
         if (savedActions) {
           setActions(
             enrichSavedCorrectiveActions(
@@ -266,6 +275,9 @@ export function IntegraQWorkspace({
         }
         if (savedImprovementProjects) {
           setImprovementProjects(normalizeImprovementProjects(JSON.parse(savedImprovementProjects) as ImprovementProject[]));
+        }
+        if (savedAudits) {
+          setAuditOccurrences(JSON.parse(savedAudits) as AuditOccurrence[]);
         }
       } catch {
         // Demo data remains available when browser storage is unavailable.
@@ -360,6 +372,11 @@ export function IntegraQWorkspace({
     if (!storageReady) return;
     window.localStorage.setItem("integraq.improvementProjects.v2", JSON.stringify(improvementProjects));
   }, [improvementProjects, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady) return;
+    window.localStorage.setItem("integraq.auditOccurrences.v1", JSON.stringify(auditOccurrences));
+  }, [auditOccurrences, storageReady]);
 
   const currentManagementReview = useMemo(
     () =>
@@ -531,6 +548,7 @@ export function IntegraQWorkspace({
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
           {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
+          {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
@@ -539,7 +557,7 @@ export function IntegraQWorkspace({
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
-          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
         </main>
       </div>
 
