@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   auditOccupiesDate,
+  auditOccursInPeriod,
+  auditPeriodicLabel,
   auditScheduleBounds,
   createAuditOccurrence,
   determineInitialAuditStatus,
@@ -40,6 +42,30 @@ describe("audit occurrence rules", () => {
     expect(determineInitialAuditStatus({ ...emptyAuditDraft(), scheduleType: "pending" }, true)).toBe("pending_schedule");
     expect(determineInitialAuditStatus({ ...emptyAuditDraft(), scheduleType: "window", windowStart: "2026-09-01", windowEnd: "2026-09-30" }, true, "2026-09-14")).toBe("window_open");
     expect(determineInitialAuditStatus(emptyAuditDraft(), false)).toBe("draft");
+  });
+
+  it("models recurring audits by month-based periods", () => {
+    const periodic = normalizeAuditRules({
+      ...emptyAuditDraft(),
+      origin: "annual_plan",
+      scheduleType: "periodic",
+      periodicFrequency: "quarterly",
+      periodicStart: "2026-09",
+      periodicEndMode: "count",
+      periodicCount: 4,
+    });
+    expect(periodic.recurrence).toBe("yes");
+    expect(auditOccursInPeriod(periodic, "2026-09")).toBe(true);
+    expect(auditOccursInPeriod(periodic, "2026-10")).toBe(false);
+    expect(auditOccursInPeriod(periodic, "2027-06")).toBe(true);
+    expect(auditOccursInPeriod(periodic, "2027-09")).toBe(false);
+    expect(auditPeriodicLabel(periodic)).toContain("Trimestral");
+  });
+
+  it("does not allow periodic scheduling for notice audits", () => {
+    const notice = normalizeAuditRules({ ...emptyAuditDraft(), origin: "notice", scheduleType: "periodic" });
+    expect(notice.scheduleType).toBe("exact");
+    expect(notice.recurrence).toBe("no");
   });
 
   it("generates a unique yearly audit code", () => {

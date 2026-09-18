@@ -7167,7 +7167,7 @@ button:disabled {
 .audit-calendar-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .audit-calendar-legend i { width: 18px; height: 5px; border-radius: 99px; }
 .audit-calendar-legend i.window { background: #6ba9d1; }
-.audit-calendar-legend i.range { background: #67a88f; }
+.audit-calendar-legend i.periodic { background: #8069b1; }
 .audit-calendar-legend i.exact { width: 7px; height: 7px; background: #d89936; border-radius: 50%; }
 .audit-calendar-weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); color: var(--muted); background: #f6f8f7; border-bottom: 1px solid var(--line); }
 .audit-calendar-weekdays span { padding: 8px; border-right: 1px solid var(--line); font-size: 8px; font-weight: 850; text-align: center; text-transform: uppercase; }
@@ -7188,6 +7188,7 @@ button:disabled {
 .audit-calendar-window span { display: block; overflow: hidden; text-overflow: ellipsis; }
 .audit-calendar-event { display: flex; min-width: 0; align-items: center; gap: 4px; padding: 4px 5px; color: #28564a; background: #e2f0ea; border: 0; border-left: 3px solid #4f967e; border-radius: 3px; text-align: left; }
 .audit-calendar-event.event-exact { color: #745013; background: #fff4d8; border-left-color: #d89936; }
+.audit-calendar-event.event-periodic { color: #514070; background: #eee8f8; border-left-color: #8069b1; }
 .audit-calendar-event.selected { box-shadow: inset 0 0 0 1px currentColor; }
 .audit-calendar-event strong { flex: 0 0 auto; font-size: 6px; }
 .audit-calendar-event span { overflow: hidden; min-width: 0; font-size: 7px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
@@ -7287,7 +7288,7 @@ button:disabled {
 .audit-card-options > button { display: flex; min-height: 54px; align-items: flex-start; gap: 8px; padding: 10px; background: #fff; border: 1px solid var(--line); border-radius: 7px; text-align: left; }
 .audit-card-options > button:hover { border-color: #a7bfd1; }
 .audit-card-options > button.selected { background: #f4f9fd; border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary); }
-.audit-card-options > button:disabled { opacity: 1; }
+.audit-card-options > button:disabled { color: #9ca5a0; background: #f7f8f7; cursor: not-allowed; opacity: .72; }
 .choice-radio { display: grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; border: 1px solid #9fa9a2; border-radius: 50%; }
 .selected .choice-radio { border-color: var(--primary); }
 .choice-radio > span { width: 7px; height: 7px; background: var(--primary); border-radius: 50%; }
@@ -7300,6 +7301,28 @@ button:disabled {
 .audit-pill-options button.selected { color: var(--primary-strong); background: var(--primary-soft); border-color: #a7c9df; }
 .audit-pill-options button.selected > span { color: #fff; background: var(--primary); }
 .audit-rule-note { display: flex; align-items: center; gap: 7px; margin: 2px 0 0; padding: 8px 10px; color: var(--primary-strong); background: var(--primary-soft); border-radius: 5px; font-size: 8px; line-height: 1.4; }
+.audit-periodic-builder { display: grid; gap: 14px; padding: 15px; background: #faf9fd; border: 1px solid #d9d0ea; border-radius: 8px; }
+.audit-periodic-builder > header { display: flex; align-items: center; gap: 10px; padding-bottom: 11px; border-bottom: 1px solid #e5def0; }
+.audit-periodic-builder > header > svg { color: #6b5598; }
+.audit-periodic-builder > header > div { display: flex; flex-direction: column; }
+.audit-periodic-builder > header strong { font-size: 11px; }
+.audit-periodic-builder > header span { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.audit-period-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.audit-period-options > button { display: grid; min-height: 58px; grid-template-columns: 16px minmax(0, 1fr); align-content: center; align-items: center; gap: 2px 6px; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: 6px; text-align: left; }
+.audit-period-options > button > span { display: grid; width: 15px; height: 15px; grid-row: 1 / 3; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; }
+.audit-period-options > button strong { font-size: 9px; }
+.audit-period-options > button small { color: var(--muted); font-size: 7px; }
+.audit-period-options > button.selected { color: #5f478a; background: #f1edf8; border-color: #8c75ba; box-shadow: inset 0 0 0 1px #8c75ba; }
+.audit-period-options > button.selected > span { color: #fff; background: #8069b1; border-color: #8069b1; }
+.audit-periodic-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.audit-periodic-readonly { display: flex; justify-content: center; flex-direction: column; gap: 5px; padding: 8px 11px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.audit-periodic-readonly span { color: var(--muted); font-size: 8px; font-weight: 750; }
+.audit-periodic-readonly strong { font-size: 10px; }
+.audit-period-end { display: grid; gap: 7px; }
+.audit-periodic-builder > .audit-field { max-width: 360px; }
+.audit-periodic-summary { display: flex; align-items: center; gap: 9px; margin: 0; padding: 10px 11px; color: #5f478a; background: #eee8f8; border-radius: 6px; font-size: 8px; }
+.audit-periodic-summary > span { display: flex; flex-direction: column; gap: 2px; }
+.audit-periodic-summary strong { color: #3f315b; font-size: 8px; }
 .audit-check-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .audit-check-grid button { display: flex; min-height: 34px; align-items: center; gap: 7px; padding: 7px 9px; background: #fff; border: 1px solid var(--line); border-radius: 5px; font-size: 9px; text-align: left; }
 .audit-check-grid button > span { display: grid; width: 15px; height: 15px; flex: 0 0 15px; place-items: center; border: 1px solid var(--line-strong); border-radius: 3px; }
@@ -7355,7 +7378,7 @@ button:disabled {
 .audit-duplicate-list small { color: var(--muted); font-size: 9px; }
 
 @media (max-width: 1100px) {
-  .audit-card-options, .audit-card-options.four, .audit-check-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .audit-card-options, .audit-card-options.four, .audit-check-grid, .audit-period-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .audit-register-toolbar { align-items: stretch; flex-direction: column; }
   .audit-calendar-layout { grid-template-columns: 1fr; }
   .audit-calendar-main { border-right: 0; }
@@ -7369,7 +7392,7 @@ button:disabled {
   .audit-stepper { position: static; display: flex; overflow-x: auto; }
   .audit-stepper > a { min-width: 140px; border-right: 1px solid var(--line); }
   .audit-stepper-note { display: none; }
-  .audit-form-grid, .audit-team-grid { grid-template-columns: 1fr; }
+  .audit-form-grid, .audit-team-grid, .audit-periodic-fields { grid-template-columns: 1fr; }
   .audit-field.wide, .wide { grid-column: 1; }
   .audit-register-filters { flex-direction: column; }
   .audit-register-filters .panel-search, .audit-register-filters select { width: 100%; min-height: 40px; }
@@ -7384,7 +7407,7 @@ button:disabled {
 }
 
 @media (max-width: 520px) {
-  .audit-metrics, .audit-card-options, .audit-card-options.three, .audit-card-options.four, .audit-check-grid { grid-template-columns: 1fr; }
+  .audit-metrics, .audit-card-options, .audit-card-options.three, .audit-card-options.four, .audit-check-grid, .audit-period-options { grid-template-columns: 1fr; }
   .audit-view-switch { width: 100%; }
   .audit-view-switch button { flex: 1; justify-content: center; }
   .audit-create-heading { align-items: flex-start; }

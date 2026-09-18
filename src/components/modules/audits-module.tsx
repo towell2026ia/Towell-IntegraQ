@@ -24,6 +24,9 @@ import {
   auditDateLabel,
   auditOccupiesDate,
   auditOriginLabels,
+  auditPeriodOptions,
+  auditPeriodicLabel,
+  auditOccursInPeriod,
   auditScheduleBounds,
   auditStandardOptions,
   auditStatusLabels,
@@ -181,7 +184,7 @@ function AuditRegistry({ audits }: { audits: AuditOccurrence[] }) {
               <td><code>{audit.code}</code><strong>{audit.title || "Borrador sin nombre"}</strong><small>{audit.processIds.length} procesos · {audit.standards.join(", ") || "Sin norma"}</small></td>
               <td><strong>{audit.auditType ? auditTypeLabels[audit.auditType] : "Por definir"}</strong><small>{audit.origin ? auditOriginLabels[audit.origin] : "Origen pendiente"}</small></td>
               <td><strong>{audit.customerName || audit.organizationName || (audit.entityKind === "internal" ? "Interna" : "Por definir")}</strong><small>{audit.contactName || "Sin contacto externo"}</small></td>
-              <td><strong>{auditDateLabel(audit)}</strong><small>{audit.scheduleType === "window" ? "Ventana de auditoría" : audit.scheduleType === "pending" ? "Fecha pendiente" : "Fecha confirmada"}</small></td>
+              <td><strong>{auditDateLabel(audit)}</strong><small>{audit.scheduleType === "window" ? "Ventana de auditoría" : audit.scheduleType === "periodic" ? "Auditoría periódica" : audit.scheduleType === "pending" ? "Fecha pendiente" : "Fecha confirmada"}</small></td>
               <td><strong>{audit.responsibleName || "Por asignar"}</strong><small>{audit.participantNames.length} participantes</small></td>
               <td><span className={`audit-status audit-status-${audit.status}`}>{auditStatusLabels[audit.status]}</span></td>
             </tr>
@@ -226,14 +229,18 @@ function AuditCalendar({
         </header>
         <div className="audit-calendar-legend" aria-label="Leyenda del calendario">
           <span><i className="window" /> Ventana de auditoría</span>
-          <span><i className="range" /> Rango confirmado</span>
+          <span><i className="periodic" /> Auditoría periódica</span>
           <span><i className="exact" /> Fecha exacta</span>
         </div>
         <div className="audit-calendar-weekdays" aria-hidden="true">{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}</div>
         <div className="audit-calendar-grid">
           {cells.map((cell, index) => {
             if (!cell) return <div className="audit-calendar-day is-empty" key={`empty-${index}`} />;
-            const dayAudits = audits.filter((audit) => audit.scheduleType !== "window" && audit.scheduleType !== "pending" && auditOccupiesDate(audit, cell.iso));
+            const dayAudits = audits.filter((audit) => {
+              if (audit.scheduleType === "window" || audit.scheduleType === "pending") return false;
+              if (audit.scheduleType === "periodic") return cell.day === 1 && auditOccursInPeriod(audit, cell.iso.slice(0, 7));
+              return auditOccupiesDate(audit, cell.iso);
+            });
             const dayWindows = windows.filter((audit) => auditOccupiesDate(audit, cell.iso));
             return (
               <div className={`audit-calendar-day${cell.iso === today ? " is-today" : ""}${dayWindows.length ? " has-window" : ""}`} key={cell.iso}>
@@ -485,24 +492,45 @@ function AuditCreateForm({
             </div>{errors.standards ? <FieldError text={errors.standards} /> : null}</div>
           </AuditSection>
 
-          <AuditSection id="schedule" number="04" title="Programación y recurrencia" subtitle="Selecciona una fecha, rango, ventana o deja la fecha pendiente.">
+          <AuditSection id="schedule" number="04" title="Programación y recurrencia" subtitle="Selecciona una fecha exacta, define una periodicidad, abre una ventana o deja la fecha pendiente.">
             <div className="audit-field wide"><span className="audit-label">Tipo de programación *</span><div className="audit-card-options four">
-              {([['exact', 'Fecha exacta'], ['range', 'Rango de fechas'], ['window', 'Ventana de auditoría'], ['pending', 'Fecha por confirmar']] as const).map(([value, label]) => <ChoiceCard checked={draft.scheduleType === value} key={value} label={label} onClick={() => update("scheduleType", value)} />)}
+              <ChoiceCard checked={draft.scheduleType === "exact"} label="Fecha exacta" description="Un día confirmado" onClick={() => update("scheduleType", "exact")} />
+              <ChoiceCard checked={draft.scheduleType === "periodic"} disabled={draft.origin === "notice"} label="Auditoría periódica" description="Repetición por periodos" onClick={() => update("scheduleType", "periodic")} />
+              <ChoiceCard checked={draft.scheduleType === "window"} label="Ventana de auditoría" description="Intervalo flexible" onClick={() => update("scheduleType", "window")} />
+              <ChoiceCard checked={draft.scheduleType === "pending"} label="Fecha por confirmar" description="Programación posterior" onClick={() => update("scheduleType", "pending")} />
             </div></div>
-            {draft.scheduleType === "exact" || draft.scheduleType === "range" ? <>
-              <Field label={draft.scheduleType === "range" ? "Fecha de inicio *" : "Fecha *"} error={errors.startDate}><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} /></Field>
-              {draft.scheduleType === "range" ? <Field label="Fecha de término *" error={errors.endDate}><input type="date" value={draft.endDate} onChange={(event) => update("endDate", event.target.value)} /></Field> : null}
+            {draft.scheduleType === "exact" ? <>
+              <Field label="Fecha *" error={errors.startDate}><input type="date" value={draft.startDate} onChange={(event) => update("startDate", event.target.value)} /></Field>
               <Field label="Hora de inicio"><input type="time" value={draft.startTime} onChange={(event) => update("startTime", event.target.value)} /></Field>
               <Field label="Hora de término"><input type="time" value={draft.endTime} onChange={(event) => update("endTime", event.target.value)} /></Field>
             </> : null}
+            {draft.scheduleType === "periodic" ? <div className="audit-periodic-builder wide">
+              <header><CalendarRange size={19} /><div><strong>Patrón de periodicidad</strong><span>Configura la serie por meses y años, sin depender de días de la semana.</span></div></header>
+              <div className="audit-period-options" aria-label="Frecuencia de la auditoría">
+                {auditPeriodOptions.map(([value, label, months]) => <button className={draft.periodicFrequency === value ? "selected" : ""} key={value} type="button" onClick={() => setDraft(normalizeAuditRules({ ...draft, periodicFrequency: value, periodicIntervalMonths: months || draft.periodicIntervalMonths, recurrence: "yes" }))}><span>{draft.periodicFrequency === value ? <Check size={12} /> : null}</span><strong>{label}</strong>{months ? <small>Cada {months} {months === 1 ? "mes" : "meses"}</small> : <small>Define el intervalo</small>}</button>)}
+              </div>
+              <div className="audit-periodic-fields">
+                <Field label="Periodo inicial (mes y año) *" error={errors.periodicStart}><input type="month" value={draft.periodicStart} onChange={(event) => update("periodicStart", event.target.value)} /></Field>
+                {draft.periodicFrequency === "custom" ? <Field label="Repetir cada (meses) *" error={errors.periodicIntervalMonths}><input max="60" min="1" type="number" value={draft.periodicIntervalMonths} onChange={(event) => update("periodicIntervalMonths", Number(event.target.value))} /></Field> : <div className="audit-periodic-readonly"><span>Intervalo</span><strong>{auditPeriodOptions.find(([value]) => value === draft.periodicFrequency)?.[1]}</strong></div>}
+              </div>
+              <div className="audit-period-end">
+                <span className="audit-label">Finalización de la serie</span>
+                <div className="audit-pill-options">
+                  {([['none', 'Sin fecha de finalización'], ['until', 'Finalizar en un periodo'], ['count', 'Finalizar después de']] as const).map(([value, label]) => <button className={draft.periodicEndMode === value ? "selected" : ""} key={value} type="button" onClick={() => update("periodicEndMode", value)}><span>{draft.periodicEndMode === value ? <Check size={13} /> : null}</span>{label}</button>)}
+                </div>
+              </div>
+              {draft.periodicEndMode === "until" ? <Field label="Periodo final (mes y año) *" error={errors.periodicUntil}><input type="month" value={draft.periodicUntil} onChange={(event) => update("periodicUntil", event.target.value)} /></Field> : null}
+              {draft.periodicEndMode === "count" ? <Field label="Número de periodos *" error={errors.periodicCount}><input max="120" min="2" type="number" value={draft.periodicCount} onChange={(event) => update("periodicCount", Number(event.target.value))} /></Field> : null}
+              <p className="audit-periodic-summary"><CalendarDays size={16} /><span><strong>Vista previa</strong>{auditPeriodicLabel(draft)}</span></p>
+            </div> : null}
             {draft.scheduleType === "window" ? <>
               <Field label="Inicio de ventana *" error={errors.windowStart}><input type="date" value={draft.windowStart} onChange={(event) => update("windowStart", event.target.value)} /></Field>
               <Field label="Fin de ventana *" error={errors.windowEnd}><input type="date" value={draft.windowEnd} onChange={(event) => update("windowEnd", event.target.value)} /></Field>
             </> : null}
             {draft.scheduleType === "pending" ? <div className="audit-pending-banner wide"><Clock3 size={19} /><div><strong>La auditoría quedará pendiente de programación</strong><span>Podrás asignar la fecha posteriormente sin perder el registro.</span></div></div> : null}
-            <div className="audit-field wide"><span className="audit-label">¿Tendrá una próxima revisión programable?</span><div className="audit-pill-options">
+            {draft.scheduleType !== "periodic" ? <div className="audit-field wide"><span className="audit-label">¿Tendrá una próxima revisión programable?</span><div className="audit-pill-options">
               {[['yes', 'Sí'], ['no', 'No'], ['after_result', 'Se definirá después del resultado']].map(([value, label]) => <button className={draft.recurrence === value ? "selected" : ""} disabled={draft.origin === "notice"} key={value} type="button" onClick={() => update("recurrence", value as AuditDraft["recurrence"])}><span>{draft.recurrence === value ? <Check size={13} /> : null}</span>{label}</button>)}
-            </div>{draft.origin === "notice" ? <p className="audit-rule-note"><ShieldCheck size={15} /> La recurrencia automática está desactivada para auditorías por aviso.</p> : null}</div>
+            </div>{draft.origin === "notice" ? <p className="audit-rule-note"><ShieldCheck size={15} /> La recurrencia automática está desactivada para auditorías por aviso.</p> : null}</div> : null}
           </AuditSection>
 
           <AuditSection id="team" number="05" title="Responsable y participantes" subtitle="Los usuarios asignados recibirán las notificaciones iniciales.">

@@ -8,6 +8,11 @@ const migration = readFileSync(
   "utf8",
 );
 
+const periodicMigration = readFileSync(
+  join(process.cwd(), "supabase", "migrations", "202609180001_audit_periodic_schedule.sql"),
+  "utf8",
+);
+
 describe("AUD-PRD-01 migration contract", () => {
   it("separates historical series from real occurrences", () => {
     expect(migration).toContain("create table public.audit_series");
@@ -17,6 +22,9 @@ describe("AUD-PRD-01 migration contract", () => {
 
   it("supports all schedule modes and notice-only recurrence rules", () => {
     expect(migration).toContain("schedule_type in ('exact', 'range', 'window', 'pending')");
+    expect(periodicMigration).toContain("schedule_type in ('exact', 'range', 'periodic', 'window', 'pending')");
+    expect(periodicMigration).toContain("periodic_frequency in ('monthly', 'bimonthly', 'quarterly', 'four_monthly', 'semiannual', 'annual', 'custom')");
+    expect(periodicMigration).toContain("periodic_end_mode in ('none', 'until', 'count')");
     expect(migration).toContain("origin_type <> 'notice' or recurrence_mode = 'no'");
     expect(migration).toContain("audit_type <> 'customer' or origin_type = 'notice'");
   });
@@ -26,5 +34,6 @@ describe("AUD-PRD-01 migration contract", () => {
     expect(migration).toContain("public.trace_audit_occurrence_change");
     expect(migration).toContain("revoke delete on public.audits from authenticated");
     expect(migration).not.toMatch(/\b(drop table|truncate|delete from public\.audits)\b/i);
+    expect(periodicMigration).not.toMatch(/\b(drop table|truncate|delete from public\.audits)\b/i);
   });
 });

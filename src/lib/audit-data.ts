@@ -18,8 +18,19 @@ export type AuditEntityKind =
   | "internal"
   | "authority"
   | "other";
-export type AuditScheduleType = "exact" | "range" | "window" | "pending";
+export type AuditScheduleType = "exact" | "periodic" | "window" | "pending" | "range";
 export type AuditRecurrence = "yes" | "no" | "after_result";
+export const auditPeriodOptions = [
+  ["monthly", "Mensual", 1],
+  ["bimonthly", "Bimestral", 2],
+  ["quarterly", "Trimestral", 3],
+  ["four_monthly", "Cuatrimestral", 4],
+  ["semiannual", "Semestral", 6],
+  ["annual", "Anual", 12],
+  ["custom", "Personalizada", 0],
+] as const;
+export type AuditPeriodFrequency = (typeof auditPeriodOptions)[number][0];
+export type AuditPeriodEndMode = "none" | "until" | "count";
 export type AuditStatus =
   | "draft"
   | "scheduled"
@@ -63,6 +74,12 @@ export interface AuditDraft {
   endTime: string;
   windowStart: string;
   windowEnd: string;
+  periodicFrequency: AuditPeriodFrequency;
+  periodicIntervalMonths: number;
+  periodicStart: string;
+  periodicEndMode: AuditPeriodEndMode;
+  periodicUntil: string;
+  periodicCount: number;
   recurrence: AuditRecurrence;
   responsibleUserId: string;
   responsibleName: string;
@@ -95,6 +112,10 @@ export const auditStatusLabels: Record<AuditStatus, string> = {
   window_open: "Ventana abierta",
   pending_schedule: "Pendiente de programación",
 };
+
+export const auditPeriodLabels = Object.fromEntries(
+  auditPeriodOptions.map(([value, label]) => [value, label]),
+) as Record<AuditPeriodFrequency, string>;
 
 export const auditStandardOptions = [
   "ISO 9001",
@@ -136,6 +157,12 @@ export function emptyAuditDraft(): AuditDraft {
     endTime: "",
     windowStart: "",
     windowEnd: "",
+    periodicFrequency: "quarterly",
+    periodicIntervalMonths: 3,
+    periodicStart: "",
+    periodicEndMode: "none",
+    periodicUntil: "",
+    periodicCount: 4,
     recurrence: "no",
     responsibleUserId: "",
     responsibleName: "",
@@ -148,10 +175,12 @@ export function emptyAuditDraft(): AuditDraft {
 export function normalizeAuditRules(draft: AuditDraft): AuditDraft {
   const customerAudit = draft.auditType === "customer";
   const origin = customerAudit ? "notice" : draft.origin;
-  const recurrence = origin === "notice" ? "no" : draft.recurrence;
+  const scheduleType = origin === "notice" && draft.scheduleType === "periodic" ? "exact" : draft.scheduleType;
+  const recurrence = origin === "notice" ? "no" : scheduleType === "periodic" ? "yes" : draft.recurrence;
   return {
     ...draft,
     origin,
+    scheduleType,
     recurrence,
     entityKind: customerAudit ? "customer" : draft.entityKind,
   };
@@ -176,6 +205,19 @@ export function validateAuditDraft(draft: AuditDraft, confirm: boolean) {
     if (!value.startDate) errors.startDate = "Captura la fecha inicial.";
     if (!value.endDate) errors.endDate = "Captura la fecha final.";
     if (value.startDate && value.endDate && value.endDate < value.startDate) errors.endDate = "La fecha final no puede ser anterior.";
+  }
+  if (value.scheduleType === "periodic") {
+    if (!value.periodicStart) errors.periodicStart = "Selecciona el mes y año de inicio.";
+    if (value.periodicFrequency === "custom" && (value.periodicIntervalMonths < 1 || value.periodicIntervalMonths > 60)) {
+      errors.periodicIntervalMonths = "El intervalo debe ser de 1 a 60 meses.";
+    }
+    if (value.periodicEndMode === "until") {
+      if (!value.periodicUntil) errors.periodicUntil = "Selecciona el periodo final.";
+      if (value.periodicStart && value.periodicUntil && value.periodicUntil < value.periodicStart) errors.periodicUntil = "El periodo final no puede ser anterior al inicial.";
+    }
+    if (value.periodicEndMode === "count" && (value.periodicCount < 2 || value.periodicCount > 120)) {
+      errors.periodicCount = "Captura entre 2 y 120 periodos.";
+    }
   }
   if (value.scheduleType === "window") {
     if (!value.windowStart) errors.windowStart = "Captura el inicio de la ventana.";
@@ -241,12 +283,38 @@ export function createAuditOccurrence(
 export function auditScheduleBounds(audit: AuditDraft) {
   if (audit.scheduleType === "window") return [audit.windowStart, audit.windowEnd] as const;
   if (audit.scheduleType === "pending") return ["", ""] as const;
+  if (audit.scheduleType === "periodic") {
+    const start = audit.periodicStart ? `${audit.periodicStart}-01` : "";
+    if (!start) return ["", ""] as const;
+    if (audit.periodicEndMode === "until" && audit.periodicUntil) return [start, endOfMonth(audit.periodicUntil)] as const;
+    if (audit.periodicEndMode === "count") {
+      const count = Math.max(1, audit.periodicCount || 1);
+      return [start, `${addMonths(audit.periodicStart, auditPeriodicIntervalMonths(audit) * (count - 1))}-01`] as const;
+    }
+    return [start, "9999-12-31"] as const;
+  }
   return [audit.startDate, audit.scheduleType === "range" ? audit.endDate : audit.startDate] as const;
 }
 
 export function auditOccupiesDate(audit: AuditDraft, date: string) {
+  if (audit.scheduleType === "periodic") return date.endsWith("-01") && auditOccursInPeriod(audit, date.slice(0, 7));
   const [start, end] = auditScheduleBounds(audit);
   return Boolean(start && end && start <= date && date <= end);
+}
+
+export function auditPeriodicIntervalMonths(audit: AuditDraft) {
+  if (audit.periodicFrequency === "custom") return Math.max(1, audit.periodicIntervalMonths || 1);
+  return auditPeriodOptions.find(([value]) => value === audit.periodicFrequency)?.[2] ?? 1;
+}
+
+export function auditOccursInPeriod(audit: AuditDraft, period: string) {
+  if (audit.scheduleType !== "periodic" || !audit.periodicStart || period < audit.periodicStart) return false;
+  const distance = monthDistance(audit.periodicStart, period);
+  const interval = auditPeriodicIntervalMonths(audit);
+  if (distance % interval !== 0) return false;
+  if (audit.periodicEndMode === "until" && audit.periodicUntil && period > audit.periodicUntil) return false;
+  if (audit.periodicEndMode === "count" && distance / interval >= Math.max(1, audit.periodicCount || 1)) return false;
+  return true;
 }
 
 export function findPossibleDuplicates(draft: AuditDraft, existing: AuditOccurrence[]) {
@@ -269,9 +337,43 @@ export function auditDateLabel(audit: AuditDraft) {
     ? new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`))
     : "Sin fecha";
   if (audit.scheduleType === "pending") return "Por confirmar";
+  if (audit.scheduleType === "periodic") return auditPeriodicLabel(audit);
   if (audit.scheduleType === "window") return `${format(audit.windowStart)} — ${format(audit.windowEnd)}`;
   if (audit.scheduleType === "range") return `${format(audit.startDate)} — ${format(audit.endDate)}`;
   return format(audit.startDate);
+}
+
+export function auditPeriodicLabel(audit: AuditDraft) {
+  const formatMonth = (value: string) => value
+    ? new Intl.DateTimeFormat("es-MX", { month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}-01T00:00:00Z`))
+    : "sin inicio";
+  const frequency = audit.periodicFrequency === "custom"
+    ? `Cada ${auditPeriodicIntervalMonths(audit)} meses`
+    : auditPeriodLabels[audit.periodicFrequency] ?? "Periódica";
+  const ending = audit.periodicEndMode === "until" && audit.periodicUntil
+    ? ` · hasta ${formatMonth(audit.periodicUntil)}`
+    : audit.periodicEndMode === "count"
+      ? ` · ${audit.periodicCount || 1} periodos`
+      : " · sin fecha final";
+  return `${frequency} · desde ${formatMonth(audit.periodicStart)}${ending}`;
+}
+
+function monthDistance(start: string, end: string) {
+  const [startYear, startMonth] = start.split("-").map(Number);
+  const [endYear, endMonth] = end.split("-").map(Number);
+  return (endYear - startYear) * 12 + endMonth - startMonth;
+}
+
+function addMonths(period: string, months: number) {
+  const [year, month] = period.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + months, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function endOfMonth(period: string) {
+  const [year, month] = period.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month, 0));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
 }
 
 export const initialAuditOccurrences: AuditOccurrence[] = [
