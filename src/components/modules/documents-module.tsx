@@ -13,6 +13,7 @@ import {
   Files,
   FileText,
   Images,
+  History,
   LayoutDashboard,
   ListChecks,
   Search,
@@ -23,7 +24,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
 import {
@@ -32,6 +33,10 @@ import {
 } from "@/lib/configuration-data";
 import {
   getDocumentPermissions,
+  getWorkingVersion,
+  isOperationalDocument,
+  restoreControlledDocument,
+  documentAdvancedActionsEnabled,
   type ControlledDocument,
 } from "@/lib/document-control-data";
 import {
@@ -47,6 +52,8 @@ import {
   type AppFormValue,
 } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
+import { isAdministrator } from "@/lib/session-data";
+import { restoreStoredDocument } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -70,7 +77,7 @@ const dateFormatter = new Intl.DateTimeFormat("es-MX", {
   timeZone: "UTC",
 });
 
-type DocumentsView = "process" | "type" | "form";
+type DocumentsView = "process" | "type" | "form" | "master";
 type FormView = "dashboard" | "data";
 
 interface DocumentsModuleProps {
@@ -105,6 +112,13 @@ export function DocumentsModule({
     catch { setOrganizationSources([]); }
   }, []);
   useEffect(() => { void Promise.resolve().then(loadOrganizationSources); }, [loadOrganizationSources]);
+  const operationalDocuments = useMemo(
+    () => controlledDocuments.filter(isOperationalDocument),
+    [controlledDocuments],
+  );
+  const canViewMasterList = documentAdvancedActionsEnabled && processCatalog.some(
+    (process) => getDocumentPermissions(session, process.id).masterList,
+  );
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
     return processCatalog.filter(
@@ -127,7 +141,7 @@ export function DocumentsModule({
     documentTypeCatalog[0];
   const selectedPermissions = getDocumentPermissions(session, selected.id);
   const selectedDocumentProcessIds = getDocumentProcessIds(selected.id);
-  const typeDocuments = controlledDocuments.filter(
+  const typeDocuments = operationalDocuments.filter(
     (document) =>
       selectedDocumentProcessIds.includes(document.processId) &&
       document.documentTypeId === selectedType.id,
@@ -170,6 +184,16 @@ export function DocumentsModule({
           <h2>Información documentada</h2>
           <p>Organigrama, documentos y registros organizados por proceso.</p>
         </div>
+        {canViewMasterList ? (
+          <button
+            className="button button-secondary"
+            type="button"
+            onClick={() => setDocumentsView(documentsView === "master" ? "process" : "master")}
+          >
+            {documentsView === "master" ? <ArrowLeft size={16} /> : <TableProperties size={16} />}
+            {documentsView === "master" ? "Volver" : "Lista Maestra"}
+          </button>
+        ) : null}
       </section>
 
       <section className="metric-grid" aria-label="Resumen documental">
@@ -179,6 +203,13 @@ export function DocumentsModule({
         <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={forms.filter((form) => form.status === "Activo").length} tone="danger" />
       </section>
 
+      {documentsView === "master" ? (
+        <MasterDocumentList
+          documents={controlledDocuments}
+          session={session}
+          onChangeDocument={changeDocument}
+        />
+      ) : (
       <section className={`documents-layout ${documentsView === "process" ? "" : "documents-layout-focus"}`}>
         <div className="documents-process-panel">
           <div className="configuration-toolbar document-toolbar">
@@ -196,7 +227,7 @@ export function DocumentsModule({
           <div className="document-process-list">
             {filtered.map((process) => {
               const processIds = getDocumentProcessIds(process.id);
-              const documentCount = controlledDocuments.filter(
+              const documentCount = operationalDocuments.filter(
                 (document) => processIds.includes(document.processId),
               ).length;
               return (
@@ -225,7 +256,7 @@ export function DocumentsModule({
           {documentsView === "process" ? (
             <ProcessDocumentHome
               process={selected}
-              documents={controlledDocuments.filter(
+              documents={operationalDocuments.filter(
                 (document) => selectedDocumentProcessIds.includes(document.processId),
               )}
               permissions={selectedPermissions}
@@ -262,6 +293,7 @@ export function DocumentsModule({
           ) : null}
         </div>
       </section>
+      )}
     </>
   );
 }
@@ -333,6 +365,96 @@ function ProcessDocumentHome({
         </span>
       </div>
     </>
+  );
+}
+
+type MasterStatusFilter = "current" | "review" | "obsolete" | "all" | "deleted";
+
+function MasterDocumentList({
+  documents,
+  session,
+  onChangeDocument,
+}: {
+  documents: ControlledDocument[];
+  session: ActiveSession;
+  onChangeDocument: (document: ControlledDocument) => void;
+}) {
+  const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [processFilter, setProcessFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<MasterStatusFilter>("current");
+  const [versionFilter, setVersionFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const authorizedProcesses = processCatalog.filter(
+    (process) => !isGroupedDocumentProcess(process.id) && getDocumentPermissions(session, process.id).masterList,
+  );
+  const authorizedProcessIds = new Set(authorizedProcesses.flatMap((process) => getDocumentProcessIds(process.id)));
+  const scopedDocuments = documents.filter((document) => authorizedProcessIds.has(document.processId));
+  const owners = [...new Set(scopedDocuments.map((document) => document.owner))].sort((a, b) => a.localeCompare(b, "es"));
+  const history = documents.find((document) => document.id === historyId) ?? null;
+
+  function matchesStatus(document: ControlledDocument) {
+    if (statusFilter === "deleted") return Boolean(document.lifecycle?.isDeleted);
+    if (document.lifecycle?.isDeleted) return false;
+    if (statusFilter === "all") return true;
+    if (statusFilter === "obsolete") return document.lifecycle?.status === "obsolete" || document.versions.some((version) => version.status === "obsolete") && !document.versions.some((version) => version.status === "current");
+    if (statusFilter === "review") return document.versions.some((version) => ["draft", "pending", "rejected"].includes(version.status));
+    return document.lifecycle?.status !== "obsolete" && document.versions.some((version) => version.status === "current");
+  }
+
+  const filteredDocuments = scopedDocuments.filter((document) => {
+    const primaryProcessId = getPrimaryDocumentProcessId(document.processId);
+    const process = processCatalog.find((item) => item.id === primaryProcessId);
+    const working = getWorkingVersion(document);
+    const normalized = query.trim().toLocaleLowerCase("es");
+    return (!selectedProcessId || primaryProcessId === selectedProcessId)
+      && (!processFilter || primaryProcessId === processFilter)
+      && (!typeFilter || document.documentTypeId === typeFilter)
+      && (!ownerFilter || document.owner === ownerFilter)
+      && (!versionFilter || String(working?.revision ?? "") === versionFilter)
+      && matchesStatus(document)
+      && (!normalized || [document.code, document.name, document.description ?? "", process?.name ?? ""].some((value) => value.toLocaleLowerCase("es").includes(normalized)));
+  });
+
+  if (!selectedProcessId) {
+    return (
+      <section className="master-list-panel">
+        <header className="master-list-header"><div><span className="detail-eyebrow"><TableProperties size={14} /> Información Documentada</span><h3>Lista Maestra</h3><p>Documentos vigentes agrupados por proceso y calculados desde la fuente documental.</p></div></header>
+        <label className="panel-search master-list-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar proceso" aria-label="Buscar proceso en Lista Maestra" /></label>
+        <div className="master-process-grid">
+          {authorizedProcesses.filter((process) => !query.trim() || process.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))).map((process) => {
+            const processIds = getDocumentProcessIds(process.id);
+            const count = scopedDocuments.filter((document) => processIds.includes(document.processId) && !document.lifecycle?.isDeleted && document.lifecycle?.status !== "obsolete" && document.versions.some((version) => version.status === "current")).length;
+            return <button key={process.id} type="button" onClick={() => { setSelectedProcessId(process.id); setProcessFilter(process.id); setQuery(""); }}><span><strong>{process.name}</strong><small>{process.id}</small></span><span>{count} documentos <ChevronRight size={15} /></span></button>;
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  const selectedProcess = processCatalog.find((process) => process.id === selectedProcessId);
+  return (
+    <section className="master-list-panel">
+      <header className="master-list-header master-list-detail-header">
+        <button className="icon-button" type="button" onClick={() => { setSelectedProcessId(null); setProcessFilter(""); setQuery(""); }} title="Volver a procesos" aria-label="Volver a procesos"><ArrowLeft size={17} /></button>
+        <div><span className="detail-eyebrow"><TableProperties size={14} /> Lista Maestra</span><h3>{selectedProcess?.name ?? "Documentos"}</h3><p>{filteredDocuments.length} documentos encontrados</p></div>
+      </header>
+      <div className="master-list-filters">
+        <label className="panel-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar código, nombre, descripción o proceso" /></label>
+        <select aria-label="Proceso" value={processFilter} onChange={(event) => { setProcessFilter(event.target.value); setSelectedProcessId(event.target.value || null); }}><option value="">Proceso</option>{authorizedProcesses.map((process) => <option key={process.id} value={process.id}>{process.name}</option>)}</select>
+        <select aria-label="Tipo" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}><option value="">Tipo</option>{documentTypeCatalog.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}</select>
+        <select aria-label="Estado" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as MasterStatusFilter)}><option value="current">Vigentes</option><option value="review">En revisión</option><option value="obsolete">Obsoletos</option><option value="all">Todos</option>{isAdministrator(session) ? <option value="deleted">Eliminados</option> : null}</select>
+        <input aria-label="Versión" min={0} type="number" value={versionFilter} onChange={(event) => setVersionFilter(event.target.value)} placeholder="Versión" />
+        <select aria-label="Responsable" value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="">Responsable</option>{owners.map((owner) => <option key={owner}>{owner}</option>)}</select>
+      </div>
+      <div className="document-control-table-wrap master-list-table-wrap"><table className="document-control-table master-list-table"><thead><tr><th>Código</th><th>Documento</th><th>Tipo</th><th>Versión</th><th>Fecha</th><th>Estado</th><th>Responsable</th><th>Historial</th></tr></thead><tbody>
+        {filteredDocuments.map((document) => { const version = getWorkingVersion(document); const type = documentTypeCatalog.find((item) => item.id === document.documentTypeId); const status = document.lifecycle?.isDeleted ? "Eliminado" : document.lifecycle?.status === "obsolete" ? "Obsoleto" : version?.status === "current" ? "Vigente" : "En revisión"; return <tr key={document.id}><td><span className="document-code-chip">{document.code}</span></td><td><strong>{document.name}</strong></td><td>{type?.name ?? document.documentTypeId}</td><td>Rev. {version?.revision ?? "—"}</td><td>{version ? formatDate(version.modifiedAt) : "—"}</td><td><span className={`document-status document-status-${document.lifecycle?.isDeleted ? "rejected" : version?.status ?? "draft"}`}>{status}</span></td><td>{document.owner}</td><td><button className="document-icon-action" type="button" onClick={() => setHistoryId(document.id)} title="Historial" aria-label={`Historial de ${document.name}`}><History size={15} /></button></td></tr>; })}
+        {!filteredDocuments.length ? <tr className="document-empty-row"><td colSpan={8}><FileText size={22} /><strong>Sin documentos para estos filtros</strong><span>Ajusta el estado, proceso o búsqueda.</span></td></tr> : null}
+      </tbody></table></div>
+      {history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, new Date().toISOString())); setHistoryId(null); }} /> : null}
+    </section>
   );
 }
 

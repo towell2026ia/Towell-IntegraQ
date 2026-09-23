@@ -6,7 +6,10 @@ import {
   buildInitialControlledDocuments,
   createDocumentRevision,
   getDocumentPermissions,
+  obsoleteControlledDocument,
   rejectDocumentVersion,
+  restoreControlledDocument,
+  softDeleteControlledDocument,
   synchronizeAppFormDocuments,
   submitDocumentVersion,
   type DocumentPermissionAssignment,
@@ -40,6 +43,11 @@ describe("document control permissions", () => {
       validate: true,
       download: true,
       history: true,
+      version: true,
+      obsolete: true,
+      delete: true,
+      restore: true,
+      masterList: true,
     });
   });
 
@@ -90,7 +98,7 @@ describe("document control permissions", () => {
     expect(permissions.view).toBe(true);
     expect(permissions.validate).toBe(true);
     expect(permissions.edit).toBe(false);
-    expect(permissions.history).toBe(false);
+    expect(permissions.history).toBe(true);
   });
 });
 
@@ -138,5 +146,23 @@ describe("document revision workflow", () => {
     expect(document.versions[0].revision).toBe(form.version + 1);
     expect(document.versions[0].status).toBe("current");
     expect(document.versions.some((version) => version.status === "obsolete")).toBe(true);
+  });
+
+  it("obsoletes, soft deletes and restores without removing versions", () => {
+    const source = buildInitialControlledDocuments().find((item) =>
+      item.versions.some((version) => version.status === "current"),
+    )!;
+    const versionIds = source.versions.map((version) => version.id);
+    const obsolete = obsoleteControlledDocument(source, "Administrador", "Sustituido", "2026-09-22T12:00:00.000Z");
+    const deleted = softDeleteControlledDocument(obsolete, "Administrador", "Carga duplicada", "2026-09-22T13:00:00.000Z");
+    const restored = restoreControlledDocument(deleted, "Administrador", "2026-09-22T14:00:00.000Z");
+
+    expect(obsolete.lifecycle?.status).toBe("obsolete");
+    expect(deleted.lifecycle?.isDeleted).toBe(true);
+    expect(restored.lifecycle).toMatchObject({ status: "obsolete", isDeleted: false });
+    expect(restored.versions.map((version) => version.id)).toEqual(versionIds);
+    expect(restored.activity?.map((event) => event.eventType)).toEqual([
+      "DOCUMENT_RESTORED", "DOCUMENT_DELETED", "DOCUMENT_OBSOLETED",
+    ]);
   });
 });

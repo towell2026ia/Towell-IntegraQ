@@ -8,6 +8,9 @@ import {
 } from "@/lib/session-data";
 import { getPositionDocumentAccess } from "@/lib/user-access-data";
 
+export const documentAdvancedActionsEnabled =
+  process.env.NEXT_PUBLIC_DOCUMENT_ADVANCED_ACTIONS !== "false";
+
 export type ControlledDocumentStatus =
   | "draft"
   | "pending"
@@ -24,6 +27,8 @@ export interface ControlledDocumentVersion {
   validator: string;
   modifiedAt: string;
   changeReason: string;
+  changeSummary?: string;
+  comments?: string;
   authorizedBy?: string;
   authorizedAt?: string;
   rejectionReason?: string;
@@ -36,15 +41,58 @@ export interface ControlledDocumentVersion {
   sha256?: string;
 }
 
+export type DocumentLifecycleStatus = "active" | "obsolete" | "deleted";
+
+export type DocumentAuditEventType =
+  | "DOCUMENT_CREATED"
+  | "DOCUMENT_EDITED"
+  | "VERSION_CREATED"
+  | "VERSION_SUBMITTED"
+  | "VERSION_APPROVED"
+  | "VERSION_REJECTED"
+  | "DOCUMENT_OBSOLETED"
+  | "DOCUMENT_DELETED"
+  | "DOCUMENT_RESTORED"
+  | "DOCUMENT_VIEWED"
+  | "FILE_REPLACED";
+
+export interface DocumentAuditEvent {
+  id: string;
+  eventType: DocumentAuditEventType;
+  performedBy: string;
+  performedAt: string;
+  reason?: string;
+  versionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DocumentLifecycle {
+  status: DocumentLifecycleStatus;
+  isDeleted: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
+  deleteReason?: string;
+  obsoletedAt?: string;
+  obsoletedBy?: string;
+  obsoleteReason?: string;
+  replacementDocumentId?: string;
+  restoredAt?: string;
+  restoredBy?: string;
+}
+
 export interface ControlledDocument {
   id: string;
   processId: string;
   documentTypeId: string;
   code: string;
   name: string;
+  description?: string;
   owner: string;
+  ownerId?: string;
   appFormId?: string;
   versions: ControlledDocumentVersion[];
+  lifecycle?: DocumentLifecycle;
+  activity?: DocumentAuditEvent[];
 }
 
 export interface DocumentPermissions {
@@ -55,12 +103,17 @@ export interface DocumentPermissions {
   validate: boolean;
   download: boolean;
   history: boolean;
+  version: boolean;
+  obsolete: boolean;
+  delete: boolean;
+  restore: boolean;
+  masterList: boolean;
 }
 
 export interface DocumentPermissionAssignment {
   userId: string;
   processId: string;
-  permissions: Omit<DocumentPermissions, "history">;
+  permissions: Pick<DocumentPermissions, "view" | "upload" | "edit" | "submit" | "validate" | "download">;
 }
 
 const noPermissions: DocumentPermissions = {
@@ -71,6 +124,11 @@ const noPermissions: DocumentPermissions = {
   validate: false,
   download: false,
   history: false,
+  version: false,
+  obsolete: false,
+  delete: false,
+  restore: false,
+  masterList: false,
 };
 
 const administratorPermissions: DocumentPermissions = {
@@ -81,6 +139,11 @@ const administratorPermissions: DocumentPermissions = {
   validate: true,
   download: true,
   history: true,
+  version: true,
+  obsolete: true,
+  delete: true,
+  restore: true,
+  masterList: true,
 };
 
 export const documentPermissionAssignments: DocumentPermissionAssignment[] = [
@@ -121,7 +184,15 @@ export function getDocumentPermissions(
   const assignment = assignments.find(
     (item) => item.userId === session.userId && item.processId === processId,
   );
-  if (assignment) return { ...assignment.permissions, history: false };
+  if (assignment) return {
+    ...assignment.permissions,
+    history: assignment.permissions.edit || assignment.permissions.validate,
+    version: assignment.permissions.edit,
+    obsolete: false,
+    delete: false,
+    restore: false,
+    masterList: assignment.permissions.view,
+  };
 
   const inheritedAccess =
     session.documentAccess?.find((item) => item.processId === processId) ??
@@ -142,7 +213,12 @@ export function getDocumentPermissionsForRole(
       submit: true,
       validate: false,
       download: true,
-      history: false,
+      history: true,
+      version: true,
+      obsolete: false,
+      delete: false,
+      restore: false,
+      masterList: true,
     };
   }
   if (role === "authorizer") {
@@ -153,7 +229,12 @@ export function getDocumentPermissionsForRole(
       submit: false,
       validate: true,
       download: true,
-      history: false,
+      history: true,
+      version: false,
+      obsolete: false,
+      delete: false,
+      restore: false,
+      masterList: true,
     };
   }
   return {
@@ -164,7 +245,106 @@ export function getDocumentPermissionsForRole(
     validate: false,
     download: true,
     history: false,
+    version: false,
+    obsolete: false,
+    delete: false,
+    restore: false,
+    masterList: true,
   };
+}
+
+export function isOperationalDocument(document: ControlledDocument) {
+  return !document.lifecycle?.isDeleted;
+}
+
+export function obsoleteControlledDocument(
+  document: ControlledDocument,
+  actor: string,
+  reason: string,
+  performedAt: string,
+  replacementDocumentId?: string,
+): ControlledDocument {
+  const current = document.versions.find((version) => version.status === "current");
+  return {
+    ...document,
+    lifecycle: {
+      ...document.lifecycle,
+      status: "obsolete",
+      isDeleted: false,
+      obsoletedAt: performedAt,
+      obsoletedBy: actor,
+      obsoleteReason: reason.trim(),
+      replacementDocumentId,
+    },
+    versions: document.versions.map((version) =>
+      version.id === current?.id ? { ...version, status: "obsolete" } : version,
+    ),
+    activity: prependActivity(document, {
+      eventType: "DOCUMENT_OBSOLETED",
+      performedBy: actor,
+      performedAt,
+      reason: reason.trim(),
+      versionId: current?.id,
+    }),
+  };
+}
+
+export function softDeleteControlledDocument(
+  document: ControlledDocument,
+  actor: string,
+  reason: string,
+  performedAt: string,
+): ControlledDocument {
+  return {
+    ...document,
+    lifecycle: {
+      ...document.lifecycle,
+      status: "deleted",
+      isDeleted: true,
+      deletedAt: performedAt,
+      deletedBy: actor,
+      deleteReason: reason.trim(),
+    },
+    activity: prependActivity(document, {
+      eventType: "DOCUMENT_DELETED",
+      performedBy: actor,
+      performedAt,
+      reason: reason.trim(),
+    }),
+  };
+}
+
+export function restoreControlledDocument(
+  document: ControlledDocument,
+  actor: string,
+  performedAt: string,
+): ControlledDocument {
+  const wasObsolete = Boolean(document.lifecycle?.obsoletedAt);
+  return {
+    ...document,
+    lifecycle: {
+      ...document.lifecycle,
+      status: wasObsolete ? "obsolete" : "active",
+      isDeleted: false,
+      deletedAt: undefined,
+      deletedBy: undefined,
+      deleteReason: undefined,
+      restoredAt: performedAt,
+      restoredBy: actor,
+    },
+    activity: prependActivity(document, {
+      eventType: "DOCUMENT_RESTORED",
+      performedBy: actor,
+      performedAt,
+    }),
+  };
+}
+
+function prependActivity(
+  document: ControlledDocument,
+  event: Omit<DocumentAuditEvent, "id">,
+) {
+  return [{ ...event, id: `${document.id}-${event.eventType}-${event.performedAt}` }, ...(document.activity ?? [])];
 }
 
 export function getWorkingVersion(document: ControlledDocument) {

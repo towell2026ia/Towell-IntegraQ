@@ -1,6 +1,11 @@
 "use client";
 
-import type { ControlledDocument, ControlledDocumentVersion } from "@/lib/document-control-data";
+import type {
+  ControlledDocument,
+  ControlledDocumentVersion,
+  DocumentAuditEvent,
+  DocumentLifecycle,
+} from "@/lib/document-control-data";
 import {
   clientDocumentTypeIds,
   databaseDocumentTypeIds,
@@ -22,6 +27,28 @@ export interface ManualDocumentUploadInput {
   session: ActiveSession;
 }
 
+export interface NewDocumentVersionInput {
+  document: ControlledDocument;
+  revision: number;
+  file: File;
+  changeReason: string;
+  changeSummary: string;
+  comments?: string;
+  session: ActiveSession;
+}
+
+export interface EditDocumentMetadataInput {
+  documentId: string;
+  name: string;
+  description?: string;
+  processId: string;
+  documentTypeId: string;
+  ownerId?: string;
+  code: string;
+}
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function safeObjectName(fileName: string) {
   return fileName
     .normalize("NFKD")
@@ -40,10 +67,20 @@ async function sha256For(file: File) {
 }
 
 function errorMessage(error: unknown) {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === "object" && "message" in error) {
-    return String(error.message);
+  const message = error instanceof Error
+    ? error.message
+    : error && typeof error === "object" && "message" in error
+      ? String(error.message)
+      : "";
+  if (message.includes("FORBIDDEN") || message.includes("permission")) {
+    return "No cuentas con permisos para realizar esta acción.";
   }
+  if (message.includes("VERSION_ALREADY_EXISTS") || message.includes("duplicate key")) {
+    return "Esta versión ya existe. Ingresa una versión diferente.";
+  }
+  if (message.includes("REASON_REQUIRED")) return "El motivo es obligatorio.";
+  if (message.includes("SUMMARY_REQUIRED")) return "El resumen de cambios es obligatorio.";
+  if (message) return message;
   return "No fue posible almacenar el documento.";
 }
 
@@ -199,6 +236,163 @@ export async function uploadPendingControlledDocument(
   };
 }
 
+export async function uploadNewControlledDocumentVersion(
+  input: NewDocumentVersionInput,
+): Promise<ControlledDocumentVersion> {
+  if (input.file.size > maximumDocumentSizeBytes) {
+    throw new Error("El archivo supera el límite de 50 MB.");
+  }
+  if (!input.changeReason.trim() || !input.changeSummary.trim()) {
+    throw new Error("El motivo y el resumen de cambios son obligatorios.");
+  }
+  if (!uuidPattern.test(input.document.id)) {
+    return buildLocalVersion(input);
+  }
+
+  const supabase = createClient();
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) {
+    throw new Error("La sesión expiró. Inicia sesión nuevamente.");
+  }
+  const versionId = crypto.randomUUID();
+  const sha256 = await sha256For(input.file);
+  const storageObjectPath = [
+    userData.user.id,
+    "documents",
+    input.document.id,
+    versionId,
+    safeObjectName(input.file.name),
+  ].join("/");
+  const { error: storageError } = await supabase.storage
+    .from(privateBucket)
+    .upload(storageObjectPath, input.file, {
+      cacheControl: "3600",
+      contentType: input.file.type || "application/octet-stream",
+      upsert: false,
+    });
+  if (storageError) throw new Error(errorMessage(storageError));
+
+  const { data: fileObject, error: fileObjectError } = await supabase
+    .from("file_objects")
+    .insert({
+      bucket_id: privateBucket,
+      object_path: storageObjectPath,
+      original_name: input.file.name,
+      mime_type: input.file.type || "application/octet-stream",
+      size_bytes: input.file.size,
+      sha256,
+      process_id: input.document.processId,
+      module_id: "documents",
+      audience: "internal",
+      resource_type: "controlled_document",
+      resource_id: input.document.id,
+      category: databaseDocumentTypeIds[input.document.documentTypeId] ?? input.document.documentTypeId,
+      uploaded_by: userData.user.id,
+    })
+    .select("id")
+    .single();
+  if (fileObjectError || !fileObject) {
+    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
+    throw new Error(errorMessage(fileObjectError));
+  }
+
+  const { error: versionError } = await supabase.rpc("create_document_version", {
+    p_document_id: input.document.id,
+    p_revision: input.revision,
+    p_file_id: fileObject.id,
+    p_file_name: input.file.name,
+    p_change_reason: input.changeReason.trim(),
+    p_change_summary: input.changeSummary.trim(),
+    p_comments: input.comments?.trim() || null,
+    p_version_id: versionId,
+  });
+  if (versionError) {
+    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
+    if (String(versionError.message).includes("VERSION_ALREADY_EXISTS")) {
+      throw new Error("Esta versión ya existe. Ingresa una versión diferente.");
+    }
+    throw new Error(errorMessage(versionError));
+  }
+  return {
+    id: versionId,
+    revision: input.revision,
+    status: "draft",
+    fileName: input.file.name,
+    uploadedBy: input.session.name,
+    validator: documentValidatorByProcess[input.document.processId]?.name ?? "Jefatura del área",
+    modifiedAt: new Date().toISOString(),
+    changeReason: input.changeReason.trim(),
+    changeSummary: input.changeSummary.trim(),
+    comments: input.comments?.trim() || undefined,
+    fileObjectId: fileObject.id,
+    storageBucket: privateBucket,
+    storageObjectPath,
+    mimeType: input.file.type || "application/octet-stream",
+    sizeBytes: input.file.size,
+    sha256,
+  };
+}
+
+function buildLocalVersion(input: NewDocumentVersionInput): ControlledDocumentVersion {
+  if (input.document.versions.some((version) => version.revision === input.revision)) {
+    throw new Error("Esta versión ya existe. Ingresa una versión diferente.");
+  }
+  return {
+    id: `${input.document.id}-R${input.revision}-${Date.now()}`,
+    revision: input.revision,
+    status: "draft",
+    fileName: input.file.name,
+    uploadedBy: input.session.name,
+    validator: documentValidatorByProcess[input.document.processId]?.name ?? "Jefatura del área",
+    modifiedAt: new Date().toISOString(),
+    changeReason: input.changeReason.trim(),
+    changeSummary: input.changeSummary.trim(),
+    comments: input.comments?.trim() || undefined,
+    mimeType: input.file.type || "application/octet-stream",
+    sizeBytes: input.file.size,
+  };
+}
+
+export async function editStoredDocumentMetadata(input: EditDocumentMetadataInput) {
+  if (!uuidPattern.test(input.documentId)) return false;
+  const supabase = createClient();
+  const { error } = await supabase.rpc("edit_document_metadata", {
+    p_document_id: input.documentId,
+    p_title: input.name.trim(),
+    p_description: input.description?.trim() || null,
+    p_process_id: input.processId,
+    p_document_type_id: databaseDocumentTypeIds[input.documentTypeId] ?? input.documentTypeId,
+    p_owner_id: input.ownerId || null,
+    p_code: input.code.trim(),
+  });
+  if (error) throw new Error(errorMessage(error));
+  return true;
+}
+
+export async function obsoleteStoredDocument(documentId: string, reason: string, replacementDocumentId?: string) {
+  return callLifecycleRpc(documentId, "obsolete_document", {
+    p_document_id: documentId,
+    p_reason: reason.trim(),
+    p_replacement_document_id: replacementDocumentId && uuidPattern.test(replacementDocumentId) ? replacementDocumentId : null,
+  });
+}
+
+export async function softDeleteStoredDocument(documentId: string, reason: string) {
+  return callLifecycleRpc(documentId, "soft_delete_document", { p_document_id: documentId, p_reason: reason.trim() });
+}
+
+export async function restoreStoredDocument(documentId: string) {
+  return callLifecycleRpc(documentId, "restore_document", { p_document_id: documentId });
+}
+
+async function callLifecycleRpc(documentId: string, name: string, parameters: Record<string, unknown>) {
+  if (!uuidPattern.test(documentId)) return false;
+  const supabase = createClient();
+  const { error } = await supabase.rpc(name, parameters);
+  if (error) throw new Error(errorMessage(error));
+  return true;
+}
+
 export async function getControlledDocumentDownloadUrl(
   version: ControlledDocumentVersion,
 ) {
@@ -216,7 +410,7 @@ export async function reviewStoredDocumentVersion(
   decision: "approve" | "reject",
   comment?: string,
 ) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(versionId)) {
+  if (!uuidPattern.test(versionId)) {
     return false;
   }
   const supabase = createClient();
@@ -224,6 +418,16 @@ export async function reviewStoredDocumentVersion(
     requested_version_id: versionId,
     decision,
     review_comment: comment?.trim() || null,
+  });
+  if (error) throw new Error(errorMessage(error));
+  return true;
+}
+
+export async function submitStoredDocumentVersion(versionId: string) {
+  if (!uuidPattern.test(versionId)) return false;
+  const supabase = createClient();
+  const { error } = await supabase.rpc("submit_document_version", {
+    requested_version_id: versionId,
   });
   if (error) throw new Error(errorMessage(error));
   return true;
@@ -252,13 +456,39 @@ type StoredDocumentRow = {
   document_type_id: string;
   code: string;
   title: string;
+  description: string | null;
+  owner_id: string | null;
   owner: RelatedProfile;
+  lifecycle: Array<{
+    lifecycle_status: DocumentLifecycle["status"];
+    is_deleted: boolean;
+    deleted_at: string | null;
+    delete_reason: string | null;
+    obsoleted_at: string | null;
+    obsolete_reason: string | null;
+    replacement_document_id: string | null;
+    restored_at: string | null;
+    deleter: RelatedProfile;
+    obsoleter: RelatedProfile;
+    restorer: RelatedProfile;
+  }>;
+  activity: Array<{
+    id: string;
+    event_type: DocumentAuditEvent["eventType"];
+    performed_at: string;
+    reason: string | null;
+    document_version_id: string | null;
+    metadata: Record<string, unknown>;
+    performer: RelatedProfile;
+  }>;
   versions: Array<{
     id: string;
     revision: number;
     status: ControlledDocumentVersion["status"];
     file_name: string;
     change_reason: string;
+    change_summary: string | null;
+    comments: string | null;
     updated_at: string;
     authorized_at: string | null;
     rejection_reason: string | null;
@@ -282,13 +512,39 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
       document_type_id,
       code,
       title,
+      description,
+      owner_id,
       owner:profiles!controlled_documents_owner_id_fkey(full_name),
+      lifecycle:document_lifecycle(
+        lifecycle_status,
+        is_deleted,
+        deleted_at,
+        delete_reason,
+        obsoleted_at,
+        obsolete_reason,
+        replacement_document_id,
+        restored_at,
+        deleter:profiles!document_lifecycle_deleted_by_fkey(full_name),
+        obsoleter:profiles!document_lifecycle_obsoleted_by_fkey(full_name),
+        restorer:profiles!document_lifecycle_restored_by_fkey(full_name)
+      ),
+      activity:document_audit_log(
+        id,
+        event_type,
+        performed_at,
+        reason,
+        document_version_id,
+        metadata,
+        performer:profiles!document_audit_log_performed_by_fkey(full_name)
+      ),
       versions:controlled_document_versions(
         id,
         revision,
         status,
         file_name,
         change_reason,
+        change_summary,
+        comments,
         updated_at,
         authorized_at,
         rejection_reason,
@@ -310,13 +566,38 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
     const documentTypeId = clientDocumentTypeIds[row.document_type_id];
     if (!documentTypeId) return [];
     const defaultValidator = documentValidatorByProcess[row.process_id]?.name ?? "Jefatura del área";
+    const lifecycle = row.lifecycle[0];
     return [{
       id: row.id,
       processId: row.process_id,
       documentTypeId,
       code: row.code,
       name: row.title,
+      description: row.description ?? undefined,
       owner: firstRelation(row.owner)?.full_name ?? defaultValidator,
+      ownerId: row.owner_id ?? undefined,
+      lifecycle: lifecycle ? {
+        status: lifecycle.lifecycle_status,
+        isDeleted: lifecycle.is_deleted,
+        deletedAt: lifecycle.deleted_at ?? undefined,
+        deletedBy: firstRelation(lifecycle.deleter)?.full_name,
+        deleteReason: lifecycle.delete_reason ?? undefined,
+        obsoletedAt: lifecycle.obsoleted_at ?? undefined,
+        obsoletedBy: firstRelation(lifecycle.obsoleter)?.full_name,
+        obsoleteReason: lifecycle.obsolete_reason ?? undefined,
+        replacementDocumentId: lifecycle.replacement_document_id ?? undefined,
+        restoredAt: lifecycle.restored_at ?? undefined,
+        restoredBy: firstRelation(lifecycle.restorer)?.full_name,
+      } : { status: "active", isDeleted: false },
+      activity: row.activity.map((event) => ({
+        id: event.id,
+        eventType: event.event_type,
+        performedBy: firstRelation(event.performer)?.full_name ?? "Sistema",
+        performedAt: event.performed_at,
+        reason: event.reason ?? undefined,
+        versionId: event.document_version_id ?? undefined,
+        metadata: event.metadata,
+      })).sort((left, right) => right.performedAt.localeCompare(left.performedAt)),
       versions: row.versions
         .map((version) => {
           const file = firstRelation(version.file);
@@ -330,6 +611,8 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
             validator: validatorName,
             modifiedAt: version.updated_at,
             changeReason: version.change_reason,
+            changeSummary: version.change_summary ?? undefined,
+            comments: version.comments ?? undefined,
             ...(version.authorized_at
               ? { authorizedBy: validatorName, authorizedAt: version.authorized_at }
               : {}),
