@@ -68,6 +68,9 @@ export async function POST(request: Request) {
   try {
     const actor = await requireActor(true);
     if (!actor) return NextResponse.json({ error: "No tienes permiso para adjuntar certificados de calibración." }, { status: 403 });
+    if (actor.userType !== "administrator") {
+      return NextResponse.json({ error: "Solo el administrador puede adjuntar certificados de calibración." }, { status: 403 });
+    }
     const session = await getAuthenticatedSession();
     const permission = "metrology.calibration.record";
     const access = authorize({ user: session, permission, grants: [{ permission, scope: "global" }] });

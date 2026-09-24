@@ -336,7 +336,7 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
         <EvidenceManager
           moduleId="indicators"
           onChange={setEvidence}
-          permissions={{ read: true, add: editable, replace: editable, delete: administrativeOverride, history: administrativeOverride }}
+          permissions={{ read: true, add: administrativeOverride, replace: administrativeOverride, delete: administrativeOverride, history: administrativeOverride }}
           processId={indicator.processId}
           resourceKey={`${indicator.id}:${year}:${quarter}`}
           resourceType="indicator_result"

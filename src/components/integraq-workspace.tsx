@@ -42,6 +42,7 @@ import { HomeModule } from "@/components/modules/home-module";
 import { HomeSettingsModule } from "@/components/modules/home-settings-module";
 import { IndicatorsModule } from "@/components/modules/indicators-module";
 import { ManagementReviewModule } from "@/components/modules/management-review-module";
+import { ModuleDocumentsPanel } from "@/components/module-documents-panel";
 import { ModulePlaceholder } from "@/components/modules/module-placeholder";
 import { OrganizationModule } from "@/components/modules/organization-module";
 import { ProcessesModule } from "@/components/modules/processes-module";
@@ -548,19 +549,20 @@ export function IntegraQWorkspace({
           {activeModule === "home-settings" ? <HomeSettingsModule /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
-          {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}
+          {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
           {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
-          {activeModule === "suppliers" ? <SuppliersModule /> : null}
+          {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
           {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          <ModuleDocumentsPanel moduleId={activeModule} session={session} />
         </main>
       </div>
 

@@ -42,7 +42,7 @@ import {
 } from "@/lib/continuous-improvement-data";
 import { processCatalog } from "@/lib/configuration-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import type { ActiveSession } from "@/lib/session-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type MainView = "register" | "portfolio";
 type IntakeMode = "idea" | "project";
@@ -74,6 +74,7 @@ export function ContinuousImprovementModule({ projects, onProjectsChange, sessio
   const canCreate = canPerformModuleAction(session, "continuous-improvement", "create");
   const canFollowUp = canPerformModuleAction(session, "continuous-improvement", "update");
   const manager = canPerformModuleAction(session, "continuous-improvement", "manage");
+  const documentAdministrator = isAdministrator(session);
   const scopedProjects = getImprovementProjectsForSession(projects, session);
   const activeProjects = scopedProjects.filter((project) => ["Kick off", "En proceso", "Tarde"].includes(project.status)).length;
   const closedProjects = scopedProjects.filter((project) => project.status === "Terminado").length;
@@ -107,7 +108,7 @@ export function ContinuousImprovementModule({ projects, onProjectsChange, sessio
 
       {activeView === "register" && canCreate
         ? <ProjectRegistration session={session} sequence={projects.length + 1} onCreate={addProject} />
-        : <ProjectPortfolio canFollowUp={canFollowUp} manager={manager} projects={projects} scopedProjects={scopedProjects} selectedProjectId={selectedProjectId} onSelect={setSelectedProjectId} onProjectsChange={onProjectsChange} />}
+        : <ProjectPortfolio canFollowUp={canFollowUp} documentAdministrator={documentAdministrator} manager={manager} projects={projects} scopedProjects={scopedProjects} selectedProjectId={selectedProjectId} onSelect={setSelectedProjectId} onProjectsChange={onProjectsChange} />}
     </div>
   );
 }
@@ -203,7 +204,7 @@ function ProjectRegistration({ session, sequence, onCreate }: { session: ActiveS
           {mode === "project" ? <><label>Patrocinador<input required value={sponsor} onChange={(event) => setSponsor(event.target.value)} placeholder="Puesto que respalda el proyecto" /></label><label>Líder<input required value={leader} onChange={(event) => setLeader(event.target.value)} /></label><label className="span-2">Cliente interno o externo<input required value={customer} onChange={(event) => setCustomer(event.target.value)} placeholder="Área, proceso o cliente impactado" /></label></> : null}
           <label className="span-2">{mode === "idea" ? "Oportunidad o problema observado" : "Definición del problema"}<textarea required value={problem} onChange={(event) => setProblem(event.target.value)} placeholder="Qué ocurre, dónde y cuál es su impacto" /></label>
           <label className="span-2">{mode === "idea" ? "Mejora sugerida y resultado esperado" : "Objetivo SMART"}<textarea required value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Qué cambio propone y qué resultado espera" /></label>
-          {mode === "project" ? <><label className="span-2">Alcance<textarea required value={scope} onChange={(event) => setScope(event.target.value)} placeholder="Procesos, productos, líneas o ubicaciones incluidas y excluidas" /></label><label className="span-2">Equipo multidisciplinario<input value={team} onChange={(event) => setTeam(event.target.value)} placeholder="Nombres o puestos separados por comas" /></label></> : <label className="span-2 continuous-file-field"><span>Evidencia inicial</span><span className="continuous-file-control"><Upload size={15} />{ideaEvidence || "Adjuntar fotografía o archivo"}</span><input type="file" onChange={(event) => setIdeaEvidence(event.target.files?.[0]?.name ?? "")} /></label>}
+          {mode === "project" ? <><label className="span-2">Alcance<textarea required value={scope} onChange={(event) => setScope(event.target.value)} placeholder="Procesos, productos, líneas o ubicaciones incluidas y excluidas" /></label><label className="span-2">Equipo multidisciplinario<input value={team} onChange={(event) => setTeam(event.target.value)} placeholder="Nombres o puestos separados por comas" /></label></> : isAdministrator(session) ? <label className="span-2 continuous-file-field"><span>Evidencia inicial</span><span className="continuous-file-control"><Upload size={15} />{ideaEvidence || "Adjuntar fotografía o archivo"}</span><input type="file" onChange={(event) => setIdeaEvidence(event.target.files?.[0]?.name ?? "")} /></label> : <div className="span-2 audit-pending-banner"><FileCheck2 size={19} /><div><strong>Evidencia en modo consulta</strong><span>Solo el administrador puede adjuntar archivos.</span></div></div>}
         </div>
       </div>
 
@@ -228,7 +229,7 @@ function ProjectRegistration({ session, sequence, onCreate }: { session: ActiveS
   );
 }
 
-function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, canFollowUp, manager, onSelect, onProjectsChange }: { projects: ImprovementProject[]; scopedProjects: ImprovementProject[]; selectedProjectId: string; canFollowUp: boolean; manager: boolean; onSelect: (id: string) => void; onProjectsChange: (projects: ImprovementProject[]) => void }) {
+function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, canFollowUp, documentAdministrator, manager, onSelect, onProjectsChange }: { projects: ImprovementProject[]; scopedProjects: ImprovementProject[]; selectedProjectId: string; canFollowUp: boolean; documentAdministrator: boolean; manager: boolean; onSelect: (id: string) => void; onProjectsChange: (projects: ImprovementProject[]) => void }) {
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | ImprovementProjectType>("all");
   const [categoryFilter, setCategoryFilter] = useState<"all" | ImprovementProjectCategory>("all");
@@ -270,12 +271,12 @@ function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, canFoll
           })}
         </tbody></table>{visibleProjects.length === 0 ? <div className="continuous-no-results"><Search size={22} /><strong>Sin proyectos</strong><span>Ajusta los filtros para ampliar la búsqueda.</span></div> : null}</div>
       </section>
-      {selectedProject ? <ProjectDetail key={selectedProject.id} canFollowUp={canFollowUp} manager={manager} project={selectedProject} onChange={updateProject} /> : null}
+      {selectedProject ? <ProjectDetail key={selectedProject.id} canFollowUp={canFollowUp} documentAdministrator={documentAdministrator} manager={manager} project={selectedProject} onChange={updateProject} /> : null}
     </div>
   );
 }
 
-function ProjectDetail({ project, canFollowUp, manager, onChange }: { project: ImprovementProject; canFollowUp: boolean; manager: boolean; onChange: (project: ImprovementProject) => void }) {
+function ProjectDetail({ project, canFollowUp, documentAdministrator, manager, onChange }: { project: ImprovementProject; canFollowUp: boolean; documentAdministrator: boolean; manager: boolean; onChange: (project: ImprovementProject) => void }) {
   const [detailView, setDetailView] = useState<DetailView>("charter");
   const [newAction, setNewAction] = useState("");
   const [newOwner, setNewOwner] = useState("");
@@ -324,15 +325,15 @@ function ProjectDetail({ project, canFollowUp, manager, onChange }: { project: I
         <button className={detailView === "plan" ? "active" : ""} type="button" onClick={() => setDetailView("plan")}><ListChecks size={15} /> Plan y evidencias</button>
         <button className={detailView === "scorecard" ? "active" : ""} type="button" onClick={() => setDetailView("scorecard")}><Gauge size={15} /> Ponderación</button>
       </nav>
-      {detailView === "charter" ? (project.type === "kaizen" ? <KaizenReportView manager={canFollowUp} project={project} onChange={onChange} /> : <ProjectCharter project={project} />) : null}
+      {detailView === "charter" ? (project.type === "kaizen" ? <KaizenReportView manager={canFollowUp} documentAdministrator={documentAdministrator} project={project} onChange={onChange} /> : <ProjectCharter project={project} />) : null}
       {detailView === "route" ? <ProjectRoute project={project} canFollowUp={canFollowUp} manager={manager} onToggleTool={toggleTool} onAdvance={advancePhase} /> : null}
-      {detailView === "plan" ? <ProjectPlan project={project} manager={canFollowUp} newAction={newAction} newOwner={newOwner} newDueDate={newDueDate} onNewAction={setNewAction} onNewOwner={setNewOwner} onNewDueDate={setNewDueDate} onAddAction={addAction} onUpdateAction={(actionId, status) => onChange({ ...project, actions: project.actions.map((action) => action.id === actionId ? { ...action, status } : action) })} onUploadEvidence={uploadEvidence} /> : null}
+      {detailView === "plan" ? <ProjectPlan project={project} documentAdministrator={documentAdministrator} manager={canFollowUp} newAction={newAction} newOwner={newOwner} newDueDate={newDueDate} onNewAction={setNewAction} onNewOwner={setNewOwner} onNewDueDate={setNewDueDate} onAddAction={addAction} onUpdateAction={(actionId, status) => onChange({ ...project, actions: project.actions.map((action) => action.id === actionId ? { ...action, status } : action) })} onUploadEvidence={uploadEvidence} /> : null}
       {detailView === "scorecard" ? <ProjectScorecard manager={manager} project={project} onChange={onChange} /> : null}
     </section>
   );
 }
 
-function KaizenReportView({ project, manager, onChange }: { project: ImprovementProject; manager: boolean; onChange: (project: ImprovementProject) => void }) {
+function KaizenReportView({ project, documentAdministrator, manager, onChange }: { project: ImprovementProject; documentAdministrator: boolean; manager: boolean; onChange: (project: ImprovementProject) => void }) {
   const report = project.rapidImprovement ?? { kind: "Proceso" as const, beforeDescription: project.problem, improvementDescription: "Por documentar", releasedBy: "Gerente de Mejora Continua", approvedBy: "Dirección de Planta" };
   const update = (patch: Partial<typeof report>) => onChange({ ...project, rapidImprovement: { ...report, ...patch } });
   const evidenceField = (side: "before" | "improvement", label: string, fileName?: string) => (
@@ -340,7 +341,7 @@ function KaizenReportView({ project, manager, onChange }: { project: Improvement
       <ImageIcon size={24} />
       <strong>{label}</strong>
       <span>{fileName || "Adjuntar fotografía o evidencia"}</span>
-      {manager ? <input type="file" onChange={(event) => update(side === "before" ? { beforeEvidenceName: event.target.files?.[0]?.name } : { improvementEvidenceName: event.target.files?.[0]?.name })} /> : null}
+      {documentAdministrator ? <input type="file" onChange={(event) => update(side === "before" ? { beforeEvidenceName: event.target.files?.[0]?.name } : { improvementEvidenceName: event.target.files?.[0]?.name })} /> : null}
     </label>
   );
   return <div className="rapid-report">
@@ -384,9 +385,9 @@ function ProjectRoute({ project, canFollowUp, manager, onToggleTool, onAdvance }
   </div>;
 }
 
-function ProjectPlan({ project, manager, newAction, newOwner, newDueDate, onNewAction, onNewOwner, onNewDueDate, onAddAction, onUpdateAction, onUploadEvidence }: { project: ImprovementProject; manager: boolean; newAction: string; newOwner: string; newDueDate: string; onNewAction: (value: string) => void; onNewOwner: (value: string) => void; onNewDueDate: (value: string) => void; onAddAction: (event: FormEvent<HTMLFormElement>) => void; onUpdateAction: (actionId: string, status: ImprovementAction["status"]) => void; onUploadEvidence: (file: File | undefined) => void }) {
+function ProjectPlan({ project, documentAdministrator, manager, newAction, newOwner, newDueDate, onNewAction, onNewOwner, onNewDueDate, onAddAction, onUpdateAction, onUploadEvidence }: { project: ImprovementProject; documentAdministrator: boolean; manager: boolean; newAction: string; newOwner: string; newDueDate: string; onNewAction: (value: string) => void; onNewOwner: (value: string) => void; onNewDueDate: (value: string) => void; onAddAction: (event: FormEvent<HTMLFormElement>) => void; onUpdateAction: (actionId: string, status: ImprovementAction["status"]) => void; onUploadEvidence: (file: File | undefined) => void }) {
   return <div className="continuous-plan-view"><section className="continuous-milestone-plan"><header><div><span>Hitos del proyecto</span><h4>Plan maestro</h4></div><small>{formatDate(project.startDate)} - {formatDate(project.targetDate)}</small></header><div>{project.phases.map((phase) => <article key={phase.id}><span className={phase.status}>{phase.status === "completed" ? <Check size={13} /> : null}</span><div><strong>{phase.name}</strong><small>{phase.tools.map((tool) => tool.name).join(" · ")}</small></div><time>{formatDate(phase.targetDate)}</time></article>)}</div></section>
-    <section className="continuous-actions-plan"><header><div><span>Seguimiento</span><h4>Acciones y evidencias</h4></div><label className="continuous-evidence-upload"><Upload size={15} /><span>Adjuntar evidencia</span><input type="file" onChange={(event) => onUploadEvidence(event.target.files?.[0])} /></label></header>
+    <section className="continuous-actions-plan"><header><div><span>Seguimiento</span><h4>Acciones y evidencias</h4></div>{documentAdministrator ? <label className="continuous-evidence-upload"><Upload size={15} /><span>Adjuntar evidencia</span><input type="file" onChange={(event) => onUploadEvidence(event.target.files?.[0])} /></label> : <span className="module-documents-access readonly">Solo lectura</span>}</header>
       <div className="continuous-action-table-wrap"><table className="continuous-action-table"><thead><tr><th>Acción</th><th>Responsable</th><th>Fecha</th><th>Estado</th><th>Evidencia</th></tr></thead><tbody>{project.actions.map((action) => <tr key={action.id}><td>{action.description}</td><td>{action.owner}</td><td>{formatDate(action.dueDate)}</td><td>{manager ? <select value={action.status} onChange={(event) => onUpdateAction(action.id, event.target.value as ImprovementAction["status"])}><option>Pendiente</option><option>En curso</option><option>Completada</option></select> : action.status}</td><td>{action.evidenceName ?? "Pendiente"}</td></tr>)}</tbody></table>{project.actions.length === 0 ? <div className="continuous-action-empty">Aún no se han registrado acciones.</div> : null}</div>
       {manager ? <form className="continuous-action-entry" onSubmit={onAddAction}><input required value={newAction} onChange={(event) => onNewAction(event.target.value)} placeholder="Nueva acción" /><input required value={newOwner} onChange={(event) => onNewOwner(event.target.value)} placeholder="Responsable" /><input required type="date" value={newDueDate} onChange={(event) => onNewDueDate(event.target.value)} /><button className="button button-secondary" type="submit"><Plus size={15} /> Agregar</button></form> : null}
       <div className="continuous-evidence-list"><strong>Evidencias ({project.evidence.length})</strong>{project.evidence.map((evidence) => <span key={evidence.id}><FileCheck2 size={14} /><span><b>{evidence.name}</b><small>{evidence.uploadedBy} · {formatDateTime(evidence.uploadedAt)}</small></span></span>)}</div>

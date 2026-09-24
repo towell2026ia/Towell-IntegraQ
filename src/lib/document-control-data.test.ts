@@ -51,18 +51,21 @@ describe("document control permissions", () => {
     });
   });
 
-  it("keeps validation separate from upload and edit permissions", () => {
+  it("reserves upload and edit for administrators even when legacy assignments allow them", () => {
     const user = { ...baseSession, userId: "USR-001", userType: "Usuario interno" as const, assignedProcessIds: ["P-08"] };
     const assignments: DocumentPermissionAssignment[] = [{
       userId: user.userId,
       processId: "P-08",
       permissions: { view: true, upload: true, edit: true, submit: true, validate: false, download: true },
     }];
+    expect(getDocumentPermissions(user, "P-08", assignments).upload).toBe(false);
+    expect(getDocumentPermissions(user, "P-08", assignments).edit).toBe(false);
+    expect(getDocumentPermissions(user, "P-08", assignments).version).toBe(false);
     expect(getDocumentPermissions(user, "P-08", assignments).validate).toBe(false);
     expect(getDocumentPermissions(user, "P-13", assignments).view).toBe(false);
   });
 
-  it("inherits modifier permissions from a responsible organigram position", () => {
+  it("keeps inherited document access read-only for non-administrators", () => {
     const account = createUserAccessAccount({
       id: "USR-TEJ-001",
       fullName: "Jefatura de Tejido",
@@ -76,7 +79,10 @@ describe("document control permissions", () => {
       "P-13",
       [],
     );
-    expect(permissions.edit).toBe(true);
+    expect(permissions.upload).toBe(false);
+    expect(permissions.edit).toBe(false);
+    expect(permissions.version).toBe(false);
+    expect(permissions.delete).toBe(false);
     expect(permissions.submit).toBe(true);
     expect(permissions.validate).toBe(false);
   });

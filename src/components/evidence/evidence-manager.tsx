@@ -48,6 +48,9 @@ export function EvidenceManager({
   resourceKey,
   processId,
   permissions,
+  title = "Evidencias",
+  description = "Consulta y carga son acciones independientes",
+  addLabel = "Agregar evidencia",
   onChange,
 }: {
   moduleId: WorkspaceModuleId;
@@ -55,6 +58,9 @@ export function EvidenceManager({
   resourceKey: string;
   processId?: string;
   permissions: EvidencePermissions;
+  title?: string;
+  description?: string;
+  addLabel?: string;
   onChange?: (attachments: AttachmentRecord[]) => void;
 }) {
   const [attachments, setAttachments] = useState<AttachmentRecord[]>([]);
@@ -86,6 +92,10 @@ export function EvidenceManager({
 
   async function upload(file: File | undefined, replace?: AttachmentRecord) {
     if (!file) return;
+    if ((replace && !permissions.replace) || (!replace && !permissions.add)) {
+      setError("Solo el administrador puede cargar o editar documentos.");
+      return;
+    }
     setBusy(replace?.id ?? "add"); setError("");
     try {
       await uploadAttachment(scope, file, replace);
@@ -96,6 +106,10 @@ export function EvidenceManager({
   }
 
   async function remove(attachment: AttachmentRecord) {
+    if (!permissions.delete) {
+      setError("Solo el administrador puede eliminar documentos.");
+      return;
+    }
     if (!window.confirm(`¿Deseas eliminar ${attachment.originalName}? El registro se conservará en el histórico.`)) return;
     setBusy(attachment.id); setError("");
     try {
@@ -110,10 +124,10 @@ export function EvidenceManager({
   return (
     <section className="evidence-manager">
       <header>
-        <div><Paperclip size={17} /><span><strong>Evidencias ({attachments.length})</strong><small>Consulta y carga son acciones independientes</small></span></div>
+        <div><Paperclip size={17} /><span><strong>{title} ({attachments.length})</strong><small>{description}</small></span></div>
         <div>
           {permissions.history ? <button className="button button-secondary" type="button" onClick={() => setHistoryVisible((visible) => !visible)}><History size={15} /> Histórico</button> : null}
-          {permissions.add ? <label className={`button button-primary file-button ${busy === "add" ? "disabled" : ""}`}><Plus size={15} /> {busy === "add" ? "Cargando…" : "Agregar evidencia"}<input disabled={Boolean(busy)} type="file" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label> : null}
+          {permissions.add ? <label className={`button button-primary file-button ${busy === "add" ? "disabled" : ""}`}><Plus size={15} /> {busy === "add" ? "Cargando…" : addLabel}<input disabled={Boolean(busy)} type="file" onChange={(event) => { void upload(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label> : null}
         </div>
       </header>
       {error ? <div className="evidence-error" role="alert">{error}<button type="button" onClick={() => void refresh()}><RefreshCw size={14} /> Reintentar</button></div> : null}
@@ -121,7 +135,7 @@ export function EvidenceManager({
         {attachments.map((attachment) => (
           <EvidenceCard attachment={attachment} busy={busy === attachment.id} key={attachment.id} onDelete={() => void remove(attachment)} onPreview={() => setPreviewing(attachment)} onReplace={(file) => void upload(file, attachment)} permissions={permissions} />
         ))}
-        {!attachments.length && !error ? <div className="evidence-empty"><Paperclip size={20} /><span><strong>No hay evidencias cargadas</strong><small>El archivo original seguirá disponible aunque falle su preview.</small></span></div> : null}
+        {!attachments.length && !error ? <div className="evidence-empty"><Paperclip size={20} /><span><strong>No hay archivos cargados</strong><small>El archivo original seguirá disponible aunque falle su preview.</small></span></div> : null}
       </div>
       {historyVisible && permissions.history ? <EvidenceHistory attachments={history} /> : null}
       {previewing ? <EvidencePreview attachment={previewing} onClose={() => setPreviewing(null)} /> : null}
@@ -142,7 +156,7 @@ function EvidenceCard({ attachment, busy, onDelete, onPreview, onReplace, permis
     <span className="evidence-card-actions">
       <button className="button button-secondary" type="button" onClick={onPreview}><Eye size={15} /> Ver</button>
       <button className="button button-secondary" type="button" onClick={() => void download()}><Download size={15} /> Descargar</button>
-      {permissions.replace ? <label className={`button button-secondary file-button ${busy ? "disabled" : ""}`}><Upload size={15} /> {busy ? "Reemplazando…" : "Reemplazar"}<input disabled={busy} type="file" onChange={(event) => { onReplace(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label> : null}
+      {permissions.replace ? <label className={`button button-secondary file-button ${busy ? "disabled" : ""}`}><Upload size={15} /> {busy ? "Editando…" : "Editar / reemplazar"}<input disabled={busy} type="file" onChange={(event) => { onReplace(event.target.files?.[0]); event.currentTarget.value = ""; }} /></label> : null}
       {permissions.delete ? <button className="icon-button danger" disabled={busy} title="Eliminar" type="button" onClick={onDelete}><Trash2 size={16} /></button> : null}
     </span>
   </article>;

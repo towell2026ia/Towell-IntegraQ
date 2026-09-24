@@ -9,7 +9,6 @@ import {
   LockKeyhole,
   Send,
   ShieldCheck,
-  Upload,
   UserRoundCheck,
 } from "lucide-react";
 import { FormEvent, useState } from "react";
@@ -86,7 +85,6 @@ function CustomerPortal({
 function SupplierPortal({ company }: { company: { companyId: string; companyName: string } }) {
   const [view, setView] = useState<"rncp" | "audits" | "plans">("rncp");
   const [submitted, setSubmitted] = useState(false);
-  const [evidenceName, setEvidenceName] = useState("");
   const portalData = getSupplierPortalData(company.companyId);
   const nextPlan = portalData.plans[0];
   const auditResult = portalData.audits[0];
@@ -111,7 +109,7 @@ function SupplierPortal({ company }: { company: { companyId: string; companyName
         <section className="supplier-portal-audit"><header><div><h3>Resultado de auditoría</h3><p>Checklist procesado por Calidad de proveedores.</p></div><FileCheck2 size={19} /></header>{auditResult ? <><div className="portal-score"><strong>{auditResult.score}%</strong><span>Resultado global</span></div><div className="audit-result-summary"><div><small>Hallazgos</small><strong>{auditResult.findings}</strong></div><div><small>Conformes</small><strong>{auditResult.compliant}</strong></div><div><small>No conformes</small><strong>{auditResult.nonCompliant}</strong></div><div><small>Estado</small><strong>{auditResult.status}</strong></div></div></> : <PortalEmpty message="No hay resultados de auditoría autorizados para esta empresa." />}</section>
       ) : null}
       {view === "plans" ? (
-        <section className="portal-action-form"><header><div><h3>Respuesta del proveedor</h3><p>Las acciones se capturan manualmente y las evidencias se anexan al mismo hallazgo.</p></div><ShieldCheck size={19} /></header>{nextPlan ? <form onSubmit={submitPlan}><div className="rncp-form-grid"><label className="wide"><span>Acción propuesta</span><textarea rows={4} required placeholder="Describa la acción, responsable y alcance" /></label><label><span>Responsable</span><input required /></label><label><span>Fecha compromiso</span><input type="date" defaultValue={nextPlan.dueDate} required /></label><label className="wide evidence-upload"><span>Evidencia</span><span className="button button-secondary"><Upload size={16} /> {evidenceName || "Seleccionar archivo"}</span><input type="file" onChange={(event) => setEvidenceName(event.target.files?.[0]?.name ?? "")} /></label></div>{submitted ? <div className="form-success"><CheckCircle2 size={17} /> Respuesta registrada en esta vista; la notificación se activará con el servicio de datos.</div> : null}<div className="configuration-actions"><button className="button button-primary" type="submit"><Send size={16} /> Enviar respuesta</button></div></form> : <PortalEmpty message="No hay planes de acción asignados a esta empresa." />}</section>
+        <section className="portal-action-form"><header><div><h3>Respuesta del proveedor</h3><p>Las acciones se capturan manualmente; los archivos son administrados exclusivamente por un administrador.</p></div><ShieldCheck size={19} /></header>{nextPlan ? <form onSubmit={submitPlan}><div className="rncp-form-grid"><label className="wide"><span>Acción propuesta</span><textarea rows={4} required placeholder="Describa la acción, responsable y alcance" /></label><label><span>Responsable</span><input required /></label><label><span>Fecha compromiso</span><input type="date" defaultValue={nextPlan.dueDate} required /></label><div className="wide audit-pending-banner"><ShieldCheck size={19} /><div><strong>Documentos en modo consulta</strong><span>Solo el administrador puede cargar, editar o eliminar evidencias.</span></div></div></div>{submitted ? <div className="form-success"><CheckCircle2 size={17} /> Respuesta registrada en esta vista; la notificación se activará con el servicio de datos.</div> : null}<div className="configuration-actions"><button className="button button-primary" type="submit"><Send size={16} /> Enviar respuesta</button></div></form> : <PortalEmpty message="No hay planes de acción asignados a esta empresa." />}</section>
       ) : null}
     </>
   );

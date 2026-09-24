@@ -44,7 +44,7 @@ import {
 import { processCatalog } from "@/lib/configuration-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { customerQualityCatalog } from "@/lib/quality-parties-data";
-import type { ActiveSession } from "@/lib/session-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type AuditView = "calendar" | "registry" | "create" | "success";
 type CalendarMonth = { year: number; month: number };
@@ -541,7 +541,7 @@ function AuditCreateForm({
           </AuditSection>
 
           <AuditSection id="documents" number="06" title="Documentación inicial" subtitle="Adjunta cartas, correos, agendas, protocolos o requisitos disponibles.">
-            <label className="audit-dropzone wide"><Paperclip size={25} /><strong>Seleccionar documentos</strong><span>PDF, imágenes y archivos de oficina. Los documentos no son obligatorios para confirmar.</span><input multiple type="file" onChange={(event) => addFiles(event.target.files)} /></label>
+            {isAdministrator(session) ? <label className="audit-dropzone wide"><Paperclip size={25} /><strong>Seleccionar documentos</strong><span>PDF, imágenes y archivos de oficina. Los documentos no son obligatorios para confirmar.</span><input multiple type="file" onChange={(event) => addFiles(event.target.files)} /></label> : <div className="audit-pending-banner wide"><ShieldCheck size={19} /><div><strong>Documentación en modo consulta</strong><span>Solo el administrador puede cargar, editar o eliminar archivos.</span></div></div>}
             {draft.attachments.length ? <div className="audit-attachment-list wide">{draft.attachments.map((attachment) => <div key={attachment.id}><FileText size={17} /><span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)} · Versión {attachment.version}</small></span><button className="icon-button" type="button" title="Quitar archivo" onClick={() => update("attachments", draft.attachments.filter((item) => item.id !== attachment.id))}><X size={15} /></button></div>)}</div> : null}
           </AuditSection>
 

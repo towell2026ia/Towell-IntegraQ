@@ -26,10 +26,11 @@ import {
   supplierQualityCatalog,
   type SupplierAuditCalendarEvent,
 } from "@/lib/quality-parties-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type SupplierView = "directory" | "audits" | "dashboard" | "rncp" | "results";
 
-export function SuppliersModule() {
+export function SuppliersModule({ session }: { session: ActiveSession }) {
   const [view, setView] = useState<SupplierView>("directory");
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(supplierQualityCatalog[0].id);
@@ -124,7 +125,7 @@ export function SuppliersModule() {
       {view === "dashboard" ? <RncpDashboard /> : null}
       {view === "rncp" ? <RncpForm /> : null}
       {view === "results" ? (
-        <AuditResults checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
+        <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
       ) : null}
     </>
   );
@@ -450,13 +451,13 @@ const auditFindings = [
   },
 ];
 
-function AuditResults({ checklistName, onChecklist }: { checklistName: string; onChecklist: (name: string) => void }) {
+function AuditResults({ administrator, checklistName, onChecklist }: { administrator: boolean; checklistName: string; onChecklist: (name: string) => void }) {
   const [evidenceFindingId, setEvidenceFindingId] = useState<string | null>(null);
   const selectedFinding = auditFindings.find((finding) => finding.id === evidenceFindingId) ?? null;
   const evidenceCount = auditFindings.reduce((total, finding) => total + finding.evidence.length, 0);
   return (
     <section className="audit-results-panel">
-      <header><div><p className="module-kicker">Auditoría a proveedores</p><h3>Resultados, planes y evidencias</h3></div><label className="button button-secondary file-button"><Upload size={16} /> Cargar checklist XLSX<input type="file" accept=".xlsx,.xlsm" onChange={(event) => onChecklist(event.target.files?.[0]?.name ?? "")} /></label></header>
+      <header><div><p className="module-kicker">Auditoría a proveedores</p><h3>Resultados, planes y evidencias</h3></div>{administrator ? <label className="button button-secondary file-button"><Upload size={16} /> Cargar checklist XLSX<input type="file" accept=".xlsx,.xlsm" onChange={(event) => onChecklist(event.target.files?.[0]?.name ?? "")} /></label> : <span className="module-documents-access readonly">Solo lectura</span>}</header>
       <div className="checklist-status">
         <FileSpreadsheet size={24} />
         <div><strong>{checklistName || "F-CO-05 · Resultado de auditoría"}</strong><p>{checklistName ? "Checklist recibido y listo para transformar en resultados." : "Resultado vinculado al proveedor y replicado en su portal."}</p></div>

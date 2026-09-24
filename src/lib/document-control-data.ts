@@ -188,22 +188,40 @@ export function getDocumentPermissions(
   const assignment = assignments.find(
     (item) => item.userId === session.userId && item.processId === processId,
   );
-  if (assignment) return {
-    ...assignment.permissions,
-    history: assignment.permissions.edit || assignment.permissions.validate,
-    version: assignment.permissions.edit,
-    obsolete: false,
-    delete: false,
-    restore: false,
-    masterList: assignment.permissions.view,
-  };
+  if (assignment) {
+    return restrictDocumentMutationsToAdministrator({
+      ...assignment.permissions,
+      history: assignment.permissions.edit || assignment.permissions.validate,
+      version: assignment.permissions.edit,
+      obsolete: false,
+      delete: false,
+      restore: false,
+      masterList: assignment.permissions.view,
+    });
+  }
 
   const inheritedAccess =
     session.documentAccess?.find((item) => item.processId === processId) ??
     getPositionDocumentAccess(session.positionId, processId);
   return inheritedAccess
-    ? getDocumentPermissionsForRole(inheritedAccess.role)
+    ? restrictDocumentMutationsToAdministrator(
+        getDocumentPermissionsForRole(inheritedAccess.role),
+      )
     : noPermissions;
+}
+
+function restrictDocumentMutationsToAdministrator(
+  permissions: DocumentPermissions,
+): DocumentPermissions {
+  return {
+    ...permissions,
+    upload: false,
+    edit: false,
+    version: false,
+    obsolete: false,
+    delete: false,
+    restore: false,
+  };
 }
 
 export function getDocumentPermissionsForRole(

@@ -105,6 +105,7 @@ export async function uploadPendingControlledDocument(
   if (userError || !userData.user) {
     throw new Error("La sesión expiró. Inicia sesión nuevamente para cargar el archivo.");
   }
+  await assertDocumentAdministrator(supabase, userData.user.id);
   const normalizedCode = input.code.trim().toLocaleUpperCase("es-MX");
   const { data: existingDocument, error: existingDocumentError } = await supabase
     .from("controlled_documents")
@@ -254,6 +255,7 @@ export async function uploadNewControlledDocumentVersion(
   if (userError || !userData.user) {
     throw new Error("La sesión expiró. Inicia sesión nuevamente.");
   }
+  await assertDocumentAdministrator(supabase, userData.user.id);
   const versionId = crypto.randomUUID();
   const sha256 = await sha256For(input.file);
   const storageObjectPath = [
@@ -334,6 +336,9 @@ export async function uploadNewControlledDocumentVersion(
 }
 
 function buildLocalVersion(input: NewDocumentVersionInput): ControlledDocumentVersion {
+  if (input.session.userType !== "Administrador") {
+    throw new Error("Solo el administrador puede crear nuevas versiones documentales.");
+  }
   if (input.document.versions.some((version) => version.revision === input.revision)) {
     throw new Error("Esta versión ya existe. Ingresa una versión diferente.");
   }
@@ -351,6 +356,20 @@ function buildLocalVersion(input: NewDocumentVersionInput): ControlledDocumentVe
     mimeType: input.file.type || "application/octet-stream",
     sizeBytes: input.file.size,
   };
+}
+
+async function assertDocumentAdministrator(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("user_type,status")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error || data?.status !== "active" || data.user_type !== "administrator") {
+    throw new Error("Solo el administrador puede cargar o editar documentos.");
+  }
 }
 
 export async function editStoredDocumentMetadata(input: EditDocumentMetadataInput) {

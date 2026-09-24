@@ -4,7 +4,6 @@ import {
   AlertOctagon,
   ArrowRight,
   BellRing,
-  BookOpenCheck,
   CalendarClock,
   CalendarDays,
   ChartNoAxesCombined,
@@ -31,6 +30,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
@@ -93,12 +93,38 @@ const moduleIcons: Partial<Record<WorkspaceModuleId, LucideIcon>> = {
   organization: UserRound,
 };
 
+const homePolicyPosters = [
+  {
+    id: "quality-policy",
+    title: "Política de Calidad",
+    src: "/home/politica-calidad.png",
+  },
+  {
+    id: "environmental-policy",
+    title: "Política Ambiental",
+    src: "/home/politica-ambiental.png",
+  },
+  {
+    id: "safety-policy",
+    title: "Política de Seguridad e Higiene",
+    src: "/home/politica-seguridad-higiene.png",
+  },
+  {
+    id: "quality-objectives",
+    title: "Objetivos de Calidad",
+    src: "/home/objetivos-calidad.png",
+  },
+] as const;
+
+type HomePolicyPoster = (typeof homePolicyPosters)[number];
+
 export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleProps) {
   const [asOf] = useState(() => new Date());
   const [filters, setFilters] = useState<HomeDashboardFilters>(emptyHomeDashboardFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [selectedPoster, setSelectedPoster] = useState<HomePolicyPoster | null>(null);
   const [sectionConfigurations, setSectionConfigurations] = useState<
     HomeSectionConfiguration[] | undefined
   >(sources.sectionConfigurations);
@@ -115,6 +141,20 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!selectedPoster) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedPoster(null);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [selectedPoster]);
 
   const dashboard = useMemo(
     () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
@@ -220,14 +260,23 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
       ) : null}
 
       {visibleSections.has("quality-policy") ? (
-        <section className="home-quality-policy" aria-labelledby="home-quality-policy-title">
-          <span><BookOpenCheck size={21} /></span>
-          <div>
-            <small>Sistema de Gestión de Calidad</small>
-            <h3 id="home-quality-policy-title">{dashboard.qualityPolicy.title}</h3>
-            <p>{dashboard.qualityPolicy.statement}</p>
-          </div>
-          <em>{dashboard.processScope.label}</em>
+        <section className="home-policy-gallery" aria-label="Políticas y objetivos de calidad">
+          {homePolicyPosters.map((poster) => (
+            <button
+              key={poster.id}
+              type="button"
+              aria-label={`Ampliar ${poster.title}`}
+              onClick={() => setSelectedPoster(poster)}
+            >
+              <Image
+                src={poster.src}
+                alt={poster.title}
+                fill
+                sizes="(max-width: 680px) 50vw, 25vw"
+              />
+              <span>{poster.title}</span>
+            </button>
+          ))}
         </section>
       ) : null}
 
@@ -392,6 +441,26 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
           <button type="button" onClick={() => onNavigate(dashboard.pendingTasks[0]?.module ?? "documents")}><Plus size={16} /> Abrir siguiente pendiente</button>
         )}
       </section> : null}
+
+      {selectedPoster ? (
+        <div
+          className="home-policy-viewer"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSelectedPoster(null);
+          }}
+        >
+          <div role="dialog" aria-modal="true" aria-labelledby="home-policy-viewer-title">
+            <header>
+              <h2 id="home-policy-viewer-title">{selectedPoster.title}</h2>
+              <button type="button" autoFocus aria-label="Cerrar imagen" title="Cerrar" onClick={() => setSelectedPoster(null)}>
+                <X size={20} />
+              </button>
+            </header>
+            <Image src={selectedPoster.src} alt={selectedPoster.title} width={2000} height={1500} sizes="94vw" />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

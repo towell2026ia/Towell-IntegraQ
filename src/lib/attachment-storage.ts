@@ -64,6 +64,7 @@ export async function uploadAttachment(
   const supabase = createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
+  await assertAdministrator(supabase, userData.user.id);
 
   const attachmentId = crypto.randomUUID();
   const objectPath = [
@@ -131,6 +132,7 @@ export async function softDeleteAttachment(attachment: AttachmentRecord) {
   const supabase = createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
+  await assertAdministrator(supabase, userData.user.id);
   const { error } = await supabase.from("file_objects").update({
     deleted_at: new Date().toISOString(),
     deleted_by: userData.user.id,
@@ -187,4 +189,18 @@ function safeName(value: string) {
 async function fileSha256(file: File) {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function assertAdministrator(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("user_type,status")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error || data?.status !== "active" || data.user_type !== "administrator") {
+    throw new Error("Solo el administrador puede cargar, editar o eliminar documentos.");
+  }
 }

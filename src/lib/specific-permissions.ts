@@ -39,9 +39,6 @@ export const editableSpecificPermissionGroups = [
     label: "Organigrama",
     permissions: [
       ["organigrama.ver", "Ver organigramas"],
-      ["organigrama.crear", "Crear organigramas"],
-      ["organigrama.editar", "Actualizar organigramas"],
-      ["organigrama.eliminar", "Eliminar organigramas"],
     ],
   },
   {
@@ -49,10 +46,6 @@ export const editableSpecificPermissionGroups = [
     label: "Evidencias",
     permissions: [
       ["evidencias.ver", "Ver y descargar"],
-      ["evidencias.agregar", "Agregar"],
-      ["evidencias.reemplazar", "Reemplazar"],
-      ["evidencias.eliminar", "Eliminar"],
-      ["evidencias.historial", "Ver histórico"],
     ],
   },
 ] as const;

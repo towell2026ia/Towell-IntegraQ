@@ -34,6 +34,7 @@ import {
   type AppFormValue,
 } from "@/lib/form-data";
 import type { FormImportDraft } from "@/lib/form-import-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type FormsView = "dashboard" | "structure" | "history";
 
@@ -54,10 +55,13 @@ const dateFormatter = new Intl.DateTimeFormat("es-MX", {
 export function FormsModule({
   forms,
   onFormsChange,
+  session,
 }: {
   forms: AppFormDefinition[];
   onFormsChange: (forms: AppFormDefinition[]) => void;
+  session: ActiveSession;
 }) {
+  const documentAdministrator = isAdministrator(session);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(forms[0]?.id ?? "");
   const [view, setView] = useState<FormsView>("dashboard");
@@ -222,9 +226,9 @@ export function FormsModule({
           <p>Diseño central de formularios, resultados e historial.</p>
         </div>
         <div className="forms-heading-actions">
-          <button className="button button-secondary" type="button" onClick={() => setImportOpen(true)}>
+          {documentAdministrator ? <button className="button button-secondary" type="button" onClick={() => setImportOpen(true)}>
             <Upload size={16} /> Importar con IA
-          </button>
+          </button> : null}
           <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}>
             <Plus size={16} /> Nuevo formulario
           </button>
@@ -378,7 +382,7 @@ export function FormsModule({
         />
       ) : null}
 
-      {importOpen ? (
+      {importOpen && documentAdministrator ? (
         <ImportFormDialog
           onClose={() => setImportOpen(false)}
           onCreate={(form) => {
