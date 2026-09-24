@@ -64,6 +64,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     { data: processData },
     { data: moduleData },
     { data: moduleActionData },
+    { data: specificPermissionData },
   ] =
     await Promise.all([
       supabase
@@ -83,6 +84,10 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
       supabase
         .from("user_module_action_permissions")
         .select("module_id, action")
+        .eq("user_id", claims.sub),
+      supabase
+        .from("user_permission_overrides")
+        .select("allowed, permission:permissions(code)")
         .eq("user_id", claims.sub),
     ]);
 
@@ -123,6 +128,12 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
         }]
       : [];
   });
+  const specificPermissions = Object.fromEntries(
+    (specificPermissionData ?? []).flatMap((row) => {
+      const relation = Array.isArray(row.permission) ? row.permission[0] : row.permission;
+      return relation?.code ? [[relation.code, row.allowed]] : [];
+    }),
+  );
 
   return {
     userId: profile?.external_id || claims.sub,
@@ -138,6 +149,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     assignedProcessIds,
     assignedModuleIds,
     moduleActionPermissions,
+    specificPermissions,
     positionId: profile?.position_id || undefined,
     documentAccess,
     continuousImprovementRole:

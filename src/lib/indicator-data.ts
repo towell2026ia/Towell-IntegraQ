@@ -14,6 +14,7 @@ export interface IndicatorDefinition {
   id: string;
   sourceRow: number;
   processId: string;
+  processIds?: string[];
   area: string;
   directionObjective: string;
   directionMetric: string;
@@ -253,6 +254,7 @@ export function buildInitialIndicatorResults(): IndicatorResults {
 export function buildInitialIndicatorDefinitions(): ConfiguredIndicator[] {
   return indicatorCatalog.map((indicator) => ({
     ...indicator,
+    processIds: indicator.processIds?.length ? [...new Set(indicator.processIds)] : [indicator.processId],
     evaluationRules: buildDefaultEvaluationRules(indicator.metric),
     schedule: {
       "2025": buildQuarterSchedule(2025),
@@ -266,6 +268,7 @@ export function normalizeConfiguredIndicators(
 ): ConfiguredIndicator[] {
   return indicators.map((indicator) => ({
     ...indicator,
+    processIds: indicator.processIds?.length ? [...new Set(indicator.processIds)] : [indicator.processId],
     evaluationRules:
       indicator.evaluationRules ?? buildDefaultEvaluationRules(indicator.metric),
     schedule: indicator.schedule ?? {
@@ -273,6 +276,12 @@ export function normalizeConfiguredIndicators(
       "2026": buildQuarterSchedule(2026),
     },
   }));
+}
+
+export function getIndicatorProcessIds(
+  indicator: Pick<IndicatorDefinition, "processId" | "processIds">,
+) {
+  return [...new Set(indicator.processIds?.length ? indicator.processIds : [indicator.processId])];
 }
 
 export function buildQuarterSchedule(year: number): Record<Quarter, string> {

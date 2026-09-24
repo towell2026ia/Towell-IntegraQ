@@ -17,6 +17,7 @@ import type {
   ProcessDocumentAccess,
   UserType,
 } from "@/lib/session-data";
+import type { SpecificPermissionState } from "@/lib/specific-permissions";
 
 export type UserAccountStatus = "active" | "inactive";
 
@@ -37,6 +38,7 @@ export interface UserAccessAccount {
   moduleActionPermissions: ModuleActionPermission[];
   documentAccess: ProcessDocumentAccess[];
   continuousImprovementRole?: ContinuousImprovementRole;
+  specificPermissions?: SpecificPermissionState;
   createdAt: string;
 }
 
@@ -51,6 +53,7 @@ export interface CreateUserAccessInput {
   continuousImprovementRole?: ContinuousImprovementRole;
   documentAccess?: ProcessDocumentAccess[];
   moduleActionPermissions?: ModuleActionPermission[];
+  specificPermissions?: SpecificPermissionState;
   positionCatalog?: OrganizationPosition[];
   createdAt: string;
 }
@@ -73,6 +76,7 @@ export const relationshipDocumentRole: Record<
 
 export const internalAssignableModuleIds: WorkspaceModuleId[] = [
   "home",
+  "home-settings",
   "documents",
   "risks",
   "indicators",
@@ -145,6 +149,7 @@ export function createUserAccessAccount(
       moduleActionPermissions: [],
       documentAccess: [],
       continuousImprovementRole: "manager",
+      specificPermissions: input.specificPermissions ?? {},
     };
   }
 
@@ -184,6 +189,7 @@ export function createUserAccessAccount(
       moduleActionPermissions: normalizedModulePermissions,
       documentAccess,
       continuousImprovementRole: input.continuousImprovementRole ?? "submitter",
+      specificPermissions: input.specificPermissions ?? {},
     };
   }
 
@@ -198,6 +204,7 @@ export function createUserAccessAccount(
     assignedModuleIds: [portalId],
     moduleActionPermissions: [{ moduleId: portalId, action: "view" }],
     documentAccess: [],
+    specificPermissions: input.specificPermissions ?? {},
   };
 }
 

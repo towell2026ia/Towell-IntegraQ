@@ -100,6 +100,46 @@ describe("home dashboard aggregation", () => {
     expect(forbiddenProcess).toHaveLength(0);
   });
 
+  it("recalculates every document metric with only the authorized process records", () => {
+    const standardSession: ActiveSession = {
+      ...activeSession,
+      userId: "USR-TEJIDO-001",
+      userType: "Usuario interno",
+      assignedProcessIds: ["P-13"],
+    };
+    const sources = buildSources(standardSession);
+    const dashboard = buildHomeDashboard(sources, undefined, asOf);
+    const authorizedDocuments = sources.documents.filter((document) => document.processId === "P-13");
+
+    expect(dashboard.documentMetrics.find((metric) => metric.id === "current")?.value)
+      .toBe(authorizedDocuments.filter((document) => document.versions.some((version) => version.status === "current")).length);
+    expect(
+      dashboard.searchIndex
+        .filter((item) => item.module === "documents")
+        .every((item) => item.meta.includes("Tejido")),
+    ).toBe(true);
+  });
+
+  it("applies the administrator process selector to counters, objectives and search", () => {
+    const dashboard = buildHomeDashboard(
+      buildSources(),
+      {
+        area: "all",
+        processId: "P-13",
+        responsible: "all",
+        status: "all",
+        module: "all",
+        from: "",
+        to: "",
+      },
+      asOf,
+    );
+
+    expect(dashboard.processScope.ids).toEqual(["P-13"]);
+    expect(dashboard.qualityObjectives.every((objective) => objective.processId === "P-13")).toBe(true);
+    expect(dashboard.searchIndex.some((item) => item.searchText.includes("P-01"))).toBe(false);
+  });
+
   it("derives overdue action alerts and module status from the same action records", () => {
     const dashboard = buildHomeDashboard(buildSources(), undefined, asOf);
     const overdueActions = demoCorrectiveActions.filter(

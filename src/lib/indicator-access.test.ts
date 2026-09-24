@@ -55,6 +55,17 @@ describe("indicator access policy", () => {
     expect(canUpdateIndicatorResult(user, { processId: "P-13" })).toBe(false);
   });
 
+  it("allows an objective linked to several processes when one authorized process matches", () => {
+    const sharedObjective = {
+      ...qualityIndicator,
+      processId: "P-13",
+      processIds: ["P-13", "P-08"],
+    };
+
+    expect(canViewIndicator(user, sharedObjective)).toBe(true);
+    expect(canUpdateIndicatorResult(user, sharedObjective)).toBe(true);
+  });
+
   it("keeps a process viewer from capturing indicator results", () => {
     const viewer: ActiveSession = {
       ...user,

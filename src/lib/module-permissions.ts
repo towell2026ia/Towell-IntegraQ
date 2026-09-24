@@ -20,6 +20,50 @@ export interface ModulePermissionGroup {
 
 export const editableModulePermissionGroups: ModulePermissionGroup[] = [
   {
+    moduleId: "access",
+    label: "Usuarios",
+    capabilities: [
+      { action: "view", label: "Ver usuarios", description: "Consulta el directorio y permisos actuales." },
+      { action: "create", label: "Crear usuarios", description: "Invita y configura nuevas cuentas." },
+      { action: "update", label: "Editar usuarios", description: "Actualiza datos y estado de cuentas." },
+      { action: "manage", label: "Administrar permisos", description: "Modifica roles, procesos y permisos específicos." },
+    ],
+  },
+  {
+    moduleId: "customers",
+    label: "Clientes",
+    capabilities: [
+      { action: "view", label: "Acceder y consultar", description: "Ve el módulo y la información de clientes." },
+      { action: "create", label: "Crear", description: "Registra clientes y expedientes." },
+      { action: "update", label: "Editar", description: "Actualiza información de clientes." },
+      { action: "manage", label: "Administrar", description: "Gestiona integralmente el módulo de clientes." },
+    ],
+  },
+  {
+    moduleId: "suppliers",
+    label: "Proveedores",
+    capabilities: [
+      { action: "view", label: "Acceder y consultar", description: "Ve el módulo y la información de proveedores." },
+      { action: "create", label: "Crear", description: "Registra proveedores y evaluaciones." },
+      { action: "update", label: "Editar", description: "Actualiza información de proveedores." },
+      { action: "manage", label: "Administrar", description: "Gestiona integralmente el módulo de proveedores." },
+    ],
+  },
+  {
+    moduleId: "customer-portal",
+    label: "Portal de Clientes",
+    capabilities: [
+      { action: "view", label: "Acceder", description: "Habilita el acceso funcional al Portal de Clientes." },
+    ],
+  },
+  {
+    moduleId: "supplier-portal",
+    label: "Portal de Proveedores",
+    capabilities: [
+      { action: "view", label: "Acceder", description: "Habilita el acceso funcional al Portal de Proveedores." },
+    ],
+  },
+  {
     moduleId: "documents",
     label: "Información documentada",
     capabilities: [

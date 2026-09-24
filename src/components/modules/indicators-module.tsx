@@ -12,7 +12,6 @@ import {
   FileCheck2,
   Gauge,
   LockKeyhole,
-  Paperclip,
   Pencil,
   Plus,
   Save,
@@ -31,6 +30,7 @@ import {
   formatIndicatorValue,
   getIndicatorScheduleDate,
   getIndicatorScore,
+  getIndicatorProcessIds,
   parseIndicatorMetric,
   quarters,
   statusLabels,
@@ -49,6 +49,8 @@ import {
   matchesIndicatorArea,
 } from "@/lib/indicator-access";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { EvidenceManager } from "@/components/evidence/evidence-manager";
+import type { AttachmentRecord } from "@/lib/attachment-storage";
 
 type IndicatorView = "dashboard" | "sheet" | "pending" | "catalog" | "submission";
 
@@ -291,7 +293,7 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
 }
 
 function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => void; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
-  const [evidence, setEvidence] = useState<File | null>(null);
+  const [evidence, setEvidence] = useState<AttachmentRecord[]>([]);
   const [saved, setSaved] = useState(false);
   const rule = parseIndicatorMetric(indicator.metric);
   const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
@@ -306,8 +308,8 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
     onResult({
       value: Number(form.get("value")),
       comments: String(form.get("comments") ?? "").trim(),
-      evidenceName: evidence?.name ?? record?.evidenceName,
-      evidenceSize: evidence?.size ?? record?.evidenceSize,
+      evidenceName: evidence[0]?.originalName ?? record?.evidenceName,
+      evidenceSize: evidence[0]?.sizeBytes ?? record?.evidenceSize,
       submittedAt: new Date().toISOString(),
       submittedBy: session.name,
     });
@@ -331,7 +333,15 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
       <form className="indicator-single-form" onSubmit={submit}>
         <label><span>Resultado trimestral</span><div className="indicator-value-input"><input defaultValue={record?.value ?? ""} disabled={!editable} min="0" name="value" required step="any" type="number" /><span>{rule.unit === "percent" ? "%" : rule.unit === "weeks" ? "sem" : "valor"}</span></div><small>Se evaluará contra {indicator.metric}.</small></label>
         <label><span>Comentarios</span><textarea defaultValue={record?.comments ?? ""} disabled={!editable} name="comments" placeholder="Contexto del resultado, desviaciones o acciones relacionadas" rows={5} /></label>
-        <label><span>Evidencia</span><div className={`indicator-evidence-field ${!editable ? "disabled" : ""}`}><Paperclip size={18} /><div><strong>{evidence?.name ?? record?.evidenceName ?? "Sin archivo adjunto"}</strong><small>PDF, imagen o archivo de Excel</small></div><input accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls" aria-label="Adjuntar evidencia" disabled={!editable} onChange={(event) => setEvidence(event.target.files?.[0] ?? null)} type="file" /></div></label>
+        <EvidenceManager
+          moduleId="indicators"
+          onChange={setEvidence}
+          permissions={{ read: true, add: editable, replace: editable, delete: administrativeOverride, history: administrativeOverride }}
+          processId={indicator.processId}
+          resourceKey={`${indicator.id}:${year}:${quarter}`}
+          resourceType="indicator_result"
+        />
+        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>El registro anterior sólo conservaba el nombre; vuelve a adjuntar el binario una vez para habilitar Ver y Descargar.</small></span></div> : null}
         {record ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Último registro manual</strong><small>{record.submittedBy} · {formatTimestamp(record.submittedAt)}</small></span></div> : null}
         <footer><p>{saved ? <><CheckCircle2 size={15} /> Resultado guardado</> : <><CircleAlert size={15} /> No se cargará información automáticamente.</>}</p><button className="button button-primary" disabled={!editable} type="submit"><Save size={17} /> Guardar resultado</button></footer>
       </form>
@@ -382,12 +392,20 @@ function IndicatorEditor({ definitions, indicator, onClose, onSave, year }: { de
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const processId = String(form.get("processId")).trim();
     const schedule = structuredClone(indicator?.schedule ?? { "2025": buildQuarterSchedule(2025), "2026": buildQuarterSchedule(2026) });
     schedule[String(year)] = Object.fromEntries(quarters.map((quarter) => [quarter, String(form.get(`schedule-${quarter}`))])) as Record<Quarter, string>;
     onSave({
       id: indicator?.id ?? nextId,
       sourceRow: indicator?.sourceRow ?? 0,
-      processId: String(form.get("processId")).trim(),
+      processId,
+      processIds: [...new Set([
+        processId,
+        ...String(form.get("processIds"))
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ])],
       area: String(form.get("area")).trim(),
       directionObjective: indicator?.directionObjective ?? "",
       directionMetric: indicator?.directionMetric ?? "",
@@ -411,7 +429,7 @@ function IndicatorEditor({ definitions, indicator, onClose, onSave, year }: { de
       <section className="quality-modal indicator-editor-modal" role="dialog" aria-modal="true" aria-labelledby="indicator-editor-title" onMouseDown={(event) => event.stopPropagation()}>
         <header><div><span>{indicator?.id ?? nextId}</span><h3 id="indicator-editor-title">{indicator ? "Editar indicador" : "Nuevo indicador"}</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={17} /></button></header>
         <form onSubmit={submit}>
-          <div className="indicator-editor-grid"><label><span>Proceso o área</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>Código de proceso</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>Métrica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. ≥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><textarea defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective" rows={2} /></label><label className="span-2"><span>Descripción</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
+          <div className="indicator-editor-grid"><label><span>Proceso o área</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>Proceso principal</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Procesos relacionados</span><input defaultValue={indicator ? getIndicatorProcessIds(indicator).join(", ") : ""} name="processIds" placeholder="Ej. P-13, P-15" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>Métrica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. ≥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><textarea defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective" rows={2} /></label><label className="span-2"><span>Descripción</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
           <fieldset className="indicator-rules-fieldset"><legend>Reglas de evaluación</legend><div><label className="rule-compliant"><span>Cumple</span><input defaultValue={defaultRules.compliant} name="rule-compliant" placeholder=">=90" required /></label><label className="rule-marginal"><span>Marginal</span><input defaultValue={defaultRules.marginal} name="rule-marginal" placeholder=">=85.5,<90" required /></label><label className="rule-noncompliant"><span>No cumple</span><input defaultValue={defaultRules.noncompliant} name="rule-noncompliant" placeholder="<85.5" required /></label></div><p>Usa operadores &gt;, &gt;=, &lt;, &lt;= o =. Separa condiciones simultáneas con coma y alternativas con punto y coma.</p></fieldset>
           <fieldset className="indicator-schedule-fieldset"><legend>Fechas programadas de captura · {year}</legend><div>{quarters.map((quarter) => <label key={quarter}><span>{quarterLabels[quarter]}</span><input defaultValue={defaults[quarter]} name={`schedule-${quarter}`} required type="date" /></label>)}</div><p>La captura solo estará habilitada en la fecha indicada para cada trimestre.</p></fieldset>
           <footer><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit"><Save size={16} /> Guardar indicador</button></footer>

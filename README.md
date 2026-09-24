@@ -9,6 +9,17 @@ clientes y proveedores desde una sola interfaz.
 > migracion inicial de identidad, organigrama, procesos, permisos y RLS se
 > encuentra en `supabase/migrations`.
 
+## Infraestructura asignada
+
+- Repositorio canonico: `https://github.com/towell2026ia/Towell-IntegraQ`
+- Proyecto Supabase: `Towell-IntregaQ`
+- Project ref: `yptrqowmviixlkrxjrqr`
+- URL: `https://yptrqowmviixlkrxjrqr.supabase.co`
+
+Todos los cambios de base de datos de este repositorio deben dirigirse a ese
+project ref. Las claves secretas se conservan exclusivamente en `.env.local` o
+en el gestor de secretos del entorno y nunca se incorporan al repositorio.
+
 ## Modulos disponibles
 
 - Inicio y bandeja de pendientes.

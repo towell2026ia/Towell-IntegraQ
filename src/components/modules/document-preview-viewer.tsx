@@ -5,6 +5,9 @@ import {
   ChevronRight,
   FileWarning,
   LoaderCircle,
+  Maximize2,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   forwardRef,
@@ -69,6 +72,7 @@ export const DocumentPreviewViewer = forwardRef<
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfRendering, setPdfRendering] = useState(false);
+  const [pdfZoom, setPdfZoom] = useState(1);
   const sourceBytesRef = useRef<ArrayBuffer | null>(null);
   const previewSurfaceRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -82,14 +86,15 @@ export const DocumentPreviewViewer = forwardRef<
     setError("");
 
     void (async () => {
-      const signedUrl = await getControlledDocumentDownloadUrl(version);
+      const normalizedPreview = version.previewStatus === "ready" && Boolean(version.previewPath);
+      const signedUrl = await getControlledDocumentDownloadUrl(version, normalizedPreview ? "preview" : "original");
       if (!signedUrl) throw new Error("Este registro todavía no tiene un archivo consultable.");
       const response = await fetch(signedUrl, { cache: "no-store" });
       if (!response.ok) throw new Error("No fue posible abrir el archivo privado.");
       const bytes = await response.arrayBuffer();
       if (!active) return;
       sourceBytesRef.current = bytes;
-      const extension = fileExtension(version.fileName);
+      const extension = normalizedPreview ? "pdf" : fileExtension(version.fileName);
 
       if (extension === "pdf") {
         const pdfjs = await import("pdfjs-dist");
@@ -157,7 +162,7 @@ export const DocumentPreviewViewer = forwardRef<
     setPdfRendering(true);
     void pdfDocument.getPage(pdfPage).then(async (page) => {
       if (!active || !pdfCanvasRef.current) return;
-      const viewport = page.getViewport({ scale: 1.35 });
+      const viewport = page.getViewport({ scale: 1.35 * pdfZoom });
       const canvas = pdfCanvasRef.current;
       const context = canvas.getContext("2d");
       if (!context) return;
@@ -174,7 +179,7 @@ export const DocumentPreviewViewer = forwardRef<
     return () => {
       active = false;
     };
-  }, [pdfDocument, pdfPage]);
+  }, [pdfDocument, pdfPage, pdfZoom]);
 
   async function capturePreview() {
     const surface = previewSurfaceRef.current;
@@ -253,8 +258,14 @@ export const DocumentPreviewViewer = forwardRef<
               <button type="button" disabled={pdfPage <= 1} onClick={() => setPdfPage((page) => Math.max(1, page - 1))}><ChevronLeft size={15} /> Anterior</button>
               <span>Página {pdfPage} de {pdfDocument.numPages}</span>
               <button type="button" disabled={pdfPage >= pdfDocument.numPages} onClick={() => setPdfPage((page) => Math.min(pdfDocument.numPages, page + 1))}>Siguiente <ChevronRight size={15} /></button>
+              <button type="button" onClick={() => setPdfZoom((value) => Math.max(.5, value - .25))}><ZoomOut size={15} /> Zoom -</button>
+              <span>{Math.round(pdfZoom * 100)}%</span>
+              <button type="button" onClick={() => setPdfZoom((value) => Math.min(3, value + .25))}><ZoomIn size={15} /> Zoom +</button>
+              <button type="button" onClick={() => setPdfZoom(1.45)}><Maximize2 size={15} /> Ajustar ancho</button>
+              <button type="button" onClick={() => setPdfZoom(.85)}><Maximize2 size={15} /> Ajustar página</button>
             </nav>
           ) : null}
+          {version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" ? "Preview PDF normalizado" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{version.previewStatus === "ready" ? "La orientación y paginación provienen del motor documental." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
           {kind === "spreadsheet" && sheetNames.length > 1 ? (
             <nav className="secure-preview-navigation secure-sheet-tabs" aria-label="Hojas del libro">
               {sheetNames.map((sheetName) => <button className={activeSheet === sheetName ? "active" : ""} key={sheetName} type="button" onClick={() => setActiveSheet(sheetName)}>{sheetName}</button>)}

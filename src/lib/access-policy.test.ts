@@ -37,6 +37,25 @@ describe("access policy", () => {
     expect(canAccessModule(baseSession, "suppliers")).toBe(false);
   });
 
+  it("denies clients and suppliers explicitly even when a legacy menu assignment remains", () => {
+    expect(canAccessModule({
+      ...baseSession,
+      assignedModuleIds: ["customers", "suppliers"],
+      specificPermissions: {
+        "clientes.acceder": false,
+        "proveedores.acceder": false,
+      },
+    }, "customers")).toBe(false);
+    expect(canAccessModule({
+      ...baseSession,
+      assignedModuleIds: ["customers", "suppliers"],
+      specificPermissions: {
+        "clientes.acceder": true,
+        "proveedores.acceder": false,
+      },
+    }, "customers")).toBe(true);
+  });
+
   it("limits a customer to the portal for its linked company", () => {
     const customer: ActiveSession = {
       ...baseSession,

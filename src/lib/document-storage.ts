@@ -395,12 +395,14 @@ async function callLifecycleRpc(documentId: string, name: string, parameters: Re
 
 export async function getControlledDocumentDownloadUrl(
   version: ControlledDocumentVersion,
+  target: "original" | "preview" = "original",
 ) {
-  if (!version.storageObjectPath) return null;
+  const path = target === "preview" ? version.previewPath : version.storageObjectPath;
+  if (!path) return null;
   const supabase = createClient();
   const { data, error } = await supabase.storage
     .from(version.storageBucket || privateBucket)
-    .createSignedUrl(version.storageObjectPath, 60);
+    .createSignedUrl(path, 60);
   if (error) throw new Error(errorMessage(error));
   return data.signedUrl;
 }
@@ -441,6 +443,10 @@ type RelatedFile = {
   mime_type: string | null;
   size_bytes: number | null;
   sha256: string | null;
+  preview_path: string | null;
+  preview_status: ControlledDocumentVersion["previewStatus"];
+  preview_generated_at: string | null;
+  preview_error: string | null;
 } | Array<{
   id: string;
   bucket_id: string;
@@ -448,6 +454,10 @@ type RelatedFile = {
   mime_type: string | null;
   size_bytes: number | null;
   sha256: string | null;
+  preview_path: string | null;
+  preview_status: ControlledDocumentVersion["previewStatus"];
+  preview_generated_at: string | null;
+  preview_error: string | null;
 }> | null;
 
 type StoredDocumentRow = {
@@ -556,7 +566,11 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
           object_path,
           mime_type,
           size_bytes,
-          sha256
+          sha256,
+          preview_path,
+          preview_status,
+          preview_generated_at,
+          preview_error
         )
       )
     `);
@@ -627,6 +641,10 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
                   mimeType: file.mime_type ?? undefined,
                   sizeBytes: file.size_bytes ?? undefined,
                   sha256: file.sha256 ?? undefined,
+                  previewPath: file.preview_path ?? undefined,
+                  previewStatus: file.preview_status ?? undefined,
+                  previewGeneratedAt: file.preview_generated_at ?? undefined,
+                  previewError: file.preview_error ?? undefined,
                 }
               : {}),
           } satisfies ControlledDocumentVersion;

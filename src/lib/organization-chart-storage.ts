@@ -14,6 +14,10 @@ export interface ProcessOrganizationSource {
   mimeType: string;
   createdAt: string;
   interpretedCount: number;
+  bucketId: string;
+  objectPath: string;
+  sizeBytes: number | null;
+  version: number;
 }
 
 export interface OrganizationImportItem {
@@ -51,12 +55,29 @@ export async function uploadProcessOrganizationChart({
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
   const objectPath = `${userData.user.id}/organization/${processId}/${Date.now()}-${crypto.randomUUID()}-${safeName(file.name)}`;
   const sha256 = await fileSha256(file);
+  const current = await supabase.from("file_objects")
+    .select("id,version")
+    .eq("resource_type", "process_organization_chart")
+    .eq("resource_key", processId)
+    .eq("is_current", true)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (current.error) throw new Error(current.error.message);
   const uploaded = await supabase.storage.from(privateBucket).upload(objectPath, file, {
     cacheControl: "3600",
     contentType: file.type || "application/octet-stream",
     upsert: false,
   });
   if (uploaded.error) throw new Error(uploaded.error.message);
+  if (current.data) {
+    const replaced = await supabase.from("file_objects").update({ is_current: false }).eq("id", current.data.id);
+    if (replaced.error) {
+      await supabase.storage.from(privateBucket).remove([objectPath]);
+      throw new Error(replaced.error.message);
+    }
+  }
   const fileObject = await supabase.from("file_objects").insert({
     bucket_id: privateBucket,
     object_path: objectPath,
@@ -68,10 +89,16 @@ export async function uploadProcessOrganizationChart({
     module_id: "documents",
     audience: "internal",
     resource_type: "process_organization_chart",
+    resource_key: processId,
     category: `interpreted:${items.length}`,
+    version: (current.data?.version ?? 0) + 1,
+    is_current: true,
+    replaces_file_id: current.data?.id ?? null,
+    preview_status: file.type.startsWith("image/") ? "not_required" : "pending",
     uploaded_by: userData.user.id,
   }).select("id").single();
   if (fileObject.error) {
+    if (current.data) await supabase.from("file_objects").update({ is_current: true }).eq("id", current.data.id);
     await supabase.storage.from(privateBucket).remove([objectPath]);
     throw new Error(fileObject.error.message);
   }
@@ -88,8 +115,10 @@ export async function uploadProcessOrganizationChart({
 
 export async function loadProcessOrganizationSources(): Promise<ProcessOrganizationSource[]> {
   const result = await createClient().from("file_objects")
-    .select("id,process_id,original_name,mime_type,created_at,category")
+    .select("id,process_id,original_name,mime_type,created_at,category,bucket_id,object_path,size_bytes,version")
     .eq("resource_type", "process_organization_chart")
+    .eq("is_current", true)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (result.error) throw new Error(result.error.message);
   return (result.data ?? []).flatMap((row) => row.process_id ? [{
@@ -99,7 +128,29 @@ export async function loadProcessOrganizationSources(): Promise<ProcessOrganizat
     mimeType: row.mime_type || "application/octet-stream",
     createdAt: row.created_at,
     interpretedCount: Number(String(row.category ?? "").split(":")[1] ?? 0) || 0,
+    bucketId: row.bucket_id,
+    objectPath: row.object_path,
+    sizeBytes: row.size_bytes,
+    version: row.version,
   }] : []);
+}
+
+export async function getProcessOrganizationChartUrl(source: ProcessOrganizationSource) {
+  const { data, error } = await createClient().storage.from(source.bucketId || privateBucket).createSignedUrl(source.objectPath, 120);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
+export async function deleteProcessOrganizationChart(source: ProcessOrganizationSource) {
+  const supabase = createClient();
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
+  const { error } = await supabase.from("file_objects").update({
+    is_current: false,
+    deleted_at: new Date().toISOString(),
+    deleted_by: userData.user.id,
+  }).eq("id", source.id).is("deleted_at", null);
+  if (error) throw new Error(error.message);
 }
 
 function safeName(value: string) {

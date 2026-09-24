@@ -39,6 +39,10 @@ export interface ControlledDocumentVersion {
   mimeType?: string;
   sizeBytes?: number;
   sha256?: string;
+  previewPath?: string;
+  previewStatus?: "pending" | "processing" | "ready" | "error" | "not_required";
+  previewGeneratedAt?: string;
+  previewError?: string;
 }
 
 export type DocumentLifecycleStatus = "active" | "obsolete" | "deleted";

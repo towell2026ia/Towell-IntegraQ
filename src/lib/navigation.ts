@@ -3,6 +3,7 @@ export type WorkspaceModuleId =
   | "processes"
   | "organization"
   | "access"
+  | "home-settings"
   | "documents"
   | "risks"
   | "indicators"
@@ -32,6 +33,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   processes: { label: "Procesos", breadcrumb: "Configuración", status: "Disponible" },
   organization: { label: "Organización y puestos", breadcrumb: "Configuración", status: "Disponible" },
   access: { label: "Usuarios y acceso", breadcrumb: "Configuración", status: "Disponible" },
+  "home-settings": { label: "Configuración de Inicio", breadcrumb: "Configuración", status: "Disponible" },
   documents: { label: "Información documentada", breadcrumb: "Operación", status: "Disponible" },
   risks: { label: "Riesgos y oportunidades", breadcrumb: "Operación", status: "Disponible" },
   indicators: { label: "Objetivos e indicadores", breadcrumb: "Operación", status: "Disponible" },

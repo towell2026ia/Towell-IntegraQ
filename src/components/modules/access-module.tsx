@@ -31,6 +31,11 @@ import { organizationPositions as fallbackPositions, type OrganizationPosition }
 import { loadOrganizationPositions, positionsChangedEvent } from "@/lib/organization-position-client";
 import { workspaceModuleMeta } from "@/lib/navigation";
 import {
+  editableSpecificPermissionGroups,
+  type SpecificPermissionKey,
+  type SpecificPermissionState,
+} from "@/lib/specific-permissions";
+import {
   editableModulePermissionGroups,
   hasModuleAction,
   normalizeModulePermissions,
@@ -347,6 +352,17 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
       ) : null}
 
       <section className="user-access-section">
+        <div className="section-title-row"><h4>Roles y permisos específicos</h4><span className="count-badge">{account.userType === "Administrador" ? "Todos" : Object.values(account.specificPermissions ?? {}).filter(Boolean).length}</span></div>
+        <div className="user-capability-summary">
+          {editableSpecificPermissionGroups.map((group) => {
+            const enabled = group.permissions.filter(([key]) => account.specificPermissions?.[key]);
+            if (!enabled.length) return null;
+            return <div key={group.id}><strong>{group.label}</strong><span>{enabled.map(([, label]) => label).join(" · ")}</span></div>;
+          })}
+        </div>
+      </section>
+
+      <section className="user-access-section">
         <div className="section-title-row"><h4>Menús visibles</h4><span className="count-badge">{account.assignedModuleIds.length}</span></div>
         <div className="user-module-list">{account.assignedModuleIds.map((module) => <span key={module}>{workspaceModuleMeta[module].label}</span>)}</div>
       </section>
@@ -369,6 +385,7 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
   const [companyId, setCompanyId] = useState(account?.companyId ?? "");
   const [documentAccess, setDocumentAccess] = useState<ProcessDocumentAccess[]>(account?.documentAccess ?? []);
   const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(account?.moduleActionPermissions ?? []);
+  const [specificPermissions, setSpecificPermissions] = useState<SpecificPermissionState>(account?.specificPermissions ?? {});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const internal = userType === "Administrador" || userType === "Usuario interno";
@@ -392,6 +409,7 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
     setCompanyId("");
     setDocumentAccess([]);
     setModuleActionPermissions([]);
+    setSpecificPermissions({});
   }
 
   function toggleProcess(processId: string) {
@@ -434,6 +452,25 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
     });
   }
 
+  function toggleSpecificPermission(permission: SpecificPermissionKey) {
+    const enabling = !specificPermissions[permission];
+    setSpecificPermissions((current) => ({
+      ...current,
+      [permission]: !current[permission],
+    }));
+    const modulePermission = specificPermissionModuleAction(permission);
+    if (!modulePermission) return;
+    setModuleActionPermissions((current) => {
+      if (enabling) return normalizeModulePermissions([...current, modulePermission]);
+      if (modulePermission.action === "view") {
+        return current.filter((item) => item.moduleId !== modulePermission.moduleId);
+      }
+      return current.filter((item) =>
+        item.moduleId !== modulePermission.moduleId || item.action !== modulePermission.action,
+      );
+    });
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaveError("");
@@ -449,6 +486,7 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
       continuousImprovementRole: userType === "Usuario interno" ? continuousImprovementRole : undefined,
       documentAccess: userType === "Usuario interno" ? documentAccess : undefined,
       moduleActionPermissions: userType === "Usuario interno" ? moduleActionPermissions : undefined,
+      specificPermissions,
       positionCatalog: positions,
       createdAt: account?.createdAt ?? new Date().toISOString(),
     });
@@ -522,6 +560,26 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
             </div>
           ) : null}
 
+          {userType !== "Administrador" ? (
+            <section className="specific-permission-editor">
+              <header><div><span>Rol base + excepciones</span><h4>Roles y permisos</h4></div><strong>{Object.values(specificPermissions).filter(Boolean).length}</strong></header>
+              <p>Los controles muestran la configuración real guardada. Puedes agregar o retirar permisos sin recrear al usuario.</p>
+              <div className="specific-permission-groups">
+                {editableSpecificPermissionGroups.map((group) => (
+                  <fieldset key={group.id}>
+                    <legend>{group.label}</legend>
+                    {group.permissions.map(([key, label]) => (
+                      <label className={specificPermissions[key] ? "enabled" : ""} key={key}>
+                        <input checked={Boolean(specificPermissions[key])} onChange={() => toggleSpecificPermission(key)} type="checkbox" />
+                        <span><strong>{label}</strong><small>{key}</small></span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
           {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
           <footer><button className="button button-secondary" disabled={saving} type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? <RefreshCw className="spin" size={16} /> : <UserPlus size={16} />} {saving ? "Guardando..." : account ? "Guardar cambios" : "Crear usuario"}</button></footer>
         </form>
@@ -548,4 +606,21 @@ function AccessMetric({ icon, label, value, tone }: { icon: React.ReactNode; lab
 
 function getInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("es-MX");
+}
+
+function specificPermissionModuleAction(permission: SpecificPermissionKey): ModuleActionPermission | null {
+  const [family, action] = permission.split(".");
+  const moduleId = family === "usuarios" ? "access"
+    : family === "clientes" ? "customers"
+      : family === "proveedores" ? "suppliers"
+        : family === "portal_clientes" ? "customer-portal"
+          : family === "portal_proveedores" ? "supplier-portal"
+            : null;
+  if (!moduleId) return null;
+  if ((family === "clientes" || family === "proveedores") && action === "ver") return null;
+  const moduleAction = action === "acceder" || action === "ver" ? "view"
+    : action === "crear" ? "create"
+      : action === "editar" || action === "desactivar" ? "update"
+        : "manage";
+  return { moduleId, action: moduleAction };
 }

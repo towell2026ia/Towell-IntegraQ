@@ -13,6 +13,7 @@ import {
 } from "@/lib/domain";
 import {
   evaluateConfiguredIndicator,
+  getIndicatorProcessIds,
   quarters,
   type ConfiguredIndicator,
   type IndicatorResults,
@@ -24,7 +25,12 @@ import type { ManagementReviewRecord } from "@/lib/management-review-data";
 import type { RiskWorkspaceState } from "@/lib/risk-opportunity-data";
 import type { SupplierAuditCalendarEvent } from "@/lib/quality-parties-data";
 import {
-  canAccessProcess,
+  getEffectiveHomeProcessIds,
+  getVisibleHomeSectionIds,
+  type HomeSectionConfiguration,
+  type HomeSectionId,
+} from "@/lib/home-visibility";
+import {
   isAdministrator,
   type ActiveSession,
 } from "@/lib/session-data";
@@ -67,9 +73,15 @@ export interface HomeDashboardSources {
     date: string;
     scope: string;
     status: string;
+    processId?: string;
   }>;
   managementReview?: ManagementReviewRecord | null;
   risks?: RiskWorkspaceState;
+  sectionConfigurations?: HomeSectionConfiguration[];
+  qualityPolicy?: {
+    title: string;
+    statement: string;
+  };
 }
 
 export interface HomeDocumentMetric {
@@ -156,6 +168,23 @@ export interface HomeSearchResult {
 
 export interface HomeDashboardData {
   generatedAt: string;
+  visibleSections: HomeSectionId[];
+  processScope: {
+    ids: string[];
+    label: string;
+  };
+  qualityPolicy: {
+    title: string;
+    statement: string;
+  };
+  qualityObjectives: Array<{
+    id: string;
+    name: string;
+    processId: string;
+    processName: string;
+    target: string;
+    leader: string;
+  }>;
   documentMetrics: HomeDocumentMetric[];
   pendingTasks: HomeWorkItem[];
   alerts: HomeAlert[];
@@ -205,30 +234,42 @@ export function buildHomeDashboard(
   const currentQuarter = quarters[Math.floor(now.getMonth() / 3)] as Quarter;
   const hasGlobalAccess = isAdministrator(sources.session);
   const processById = new Map(processCatalog.map((process) => [process.id, process]));
+  const effectiveProcessIds = getEffectiveHomeProcessIds(
+    sources.session,
+    filters.processId,
+  );
+  const effectiveProcessIdSet = new Set(effectiveProcessIds);
+  const visibleSections = getVisibleHomeSectionIds(
+    sources.session,
+    sources.sectionConfigurations,
+  );
 
-  const accessibleDocuments = sources.documents.filter((document) =>
-    getDocumentPermissions(sources.session, document.processId).view,
+  const accessibleDocuments = sources.documents.filter(
+    (document) =>
+      effectiveProcessIdSet.has(document.processId) &&
+      getDocumentPermissions(sources.session, document.processId).view,
   );
-  const accessibleActions = sources.actions.filter(
-    (action) =>
-      hasGlobalAccess ||
-      action.owner === sources.session.name ||
-      action.area === sources.session.department,
-  );
-  const accessibleAssets = sources.assets.filter(
-    (asset) =>
-      hasGlobalAccess ||
-      asset.owner === sources.session.name ||
-      asset.location === sources.session.department,
-  );
+  const accessibleActions = sources.actions.filter((action) => {
+    const processId = resolveRecordProcessId(action.processId, action.area);
+    return Boolean(processId && effectiveProcessIdSet.has(processId));
+  });
+  const accessibleAssets = sources.assets.filter((asset) => {
+    const processId = resolveRecordProcessId(asset.processId, asset.location);
+    return Boolean(processId && effectiveProcessIdSet.has(processId));
+  });
   const accessibleIndicators = sources.indicators.filter(
-    (indicator) =>
-      canAccessProcess(sources.session, indicator.processId),
+    (indicator) => getIndicatorProcessIds(indicator).some((processId) =>
+      effectiveProcessIdSet.has(processId),
+    ),
   );
-  const canViewAudits =
-    hasGlobalAccess || ["Calidad", "Compras"].includes(sources.session.department);
-  const accessibleSupplierAudits = canViewAudits ? sources.supplierAudits : [];
-  const accessibleExternalAudits = canViewAudits ? sources.externalAudits : [];
+  const accessibleSupplierAudits = sources.supplierAudits.filter((audit) =>
+    effectiveProcessIdSet.has(audit.processId),
+  );
+  const accessibleExternalAudits = sources.externalAudits.filter((audit) =>
+    audit.processId
+      ? effectiveProcessIdSet.has(audit.processId)
+      : hasGlobalAccess && filters.processId === "all",
+  );
 
   const documents = accessibleDocuments.filter((document) => {
     const version = getWorkingVersion(document);
@@ -245,7 +286,7 @@ export function buildHomeDashboard(
   const actions = accessibleActions.filter((action) =>
     matchesFilters(filters, {
       area: action.area,
-      processId: processCatalog.find((process) => process.name === action.area)?.id,
+      processId: resolveRecordProcessId(action.processId, action.area),
       responsible: action.owner,
       status: action.status,
       module: "corrective-actions",
@@ -255,6 +296,7 @@ export function buildHomeDashboard(
   const assets = accessibleAssets.filter((asset) =>
     matchesFilters(filters, {
       area: asset.location,
+      processId: resolveRecordProcessId(asset.processId, asset.location),
       responsible: asset.owner,
       status: getAssetDueStatus(asset, today),
       module: "calibrations",
@@ -262,6 +304,7 @@ export function buildHomeDashboard(
     }),
   );
   const indicators = accessibleIndicators.filter((indicator) => {
+    const indicatorProcessIds = getIndicatorProcessIds(indicator);
     const record = getIndicatorRecord(
       sources.indicatorResults,
       indicator.id,
@@ -277,7 +320,10 @@ export function buildHomeDashboard(
     );
     return matchesFilters(filters, {
       area: indicator.area,
-      processId: indicator.processId,
+      processId:
+        filters.processId !== "all" && indicatorProcessIds.includes(filters.processId)
+          ? filters.processId
+          : indicator.processId,
       responsible: indicator.leader,
       status,
       module: "indicators",
@@ -286,8 +332,8 @@ export function buildHomeDashboard(
   });
   const supplierAudits = accessibleSupplierAudits.filter((audit) =>
     matchesFilters(filters, {
-      area: "Compras",
-      processId: "P-10",
+      area: processById.get(audit.processId)?.name ?? audit.processId,
+      processId: audit.processId,
       responsible: audit.supplierName,
       status: audit.status,
       module: "audits",
@@ -371,7 +417,17 @@ export function buildHomeDashboard(
     today,
     now,
   });
-  const accessibleRisks = (sources.risks?.risks ?? []).filter((risk) => canAccessProcess(sources.session, risk.processId));
+  const accessibleRisks = (sources.risks?.risks ?? []).filter(
+    (risk) =>
+      effectiveProcessIdSet.has(risk.processId) &&
+      matchesFilters(filters, {
+        area: processById.get(risk.processId)?.name ?? risk.processId,
+        processId: risk.processId,
+        responsible: risk.owner,
+        status: risk.status,
+        module: "risks",
+      }),
+  );
   const accessibleRiskIds = new Set(accessibleRisks.map((risk) => risk.id));
   const riskPendingTasks: HomeWorkItem[] = [
     ...accessibleRisks.filter((risk) => (risk.latest ?? risk.initial).level === "CRÍTICO" && risk.status !== "closed").map((risk) => ({ id: `risk-${risk.id}`, title: risk.title, detail: `SO ${(risk.latest ?? risk.initial).so} · requiere seguimiento`, module: "risks" as const, moduleLabel: "Riesgos", priority: "critical" as const, area: processById.get(risk.processId)?.name ?? risk.processId, processId: risk.processId, responsible: risk.owner, status: risk.status, targetId: risk.id })),
@@ -652,12 +708,13 @@ export function buildHomeDashboard(
     today,
   ).slice(0, 10);
   const searchIndex = buildSearchIndex({
-    documents: accessibleDocuments,
-    actions: accessibleActions,
-    assets: accessibleAssets,
-    indicators: accessibleIndicators,
-    supplierAudits: accessibleSupplierAudits,
+    documents,
+    actions,
+    assets,
+    indicators,
+    supplierAudits,
     session: sources.session,
+    processIds: effectiveProcessIds,
   });
 
   const filterOptions = buildFilterOptions({
@@ -667,9 +724,35 @@ export function buildHomeDashboard(
     indicators: accessibleIndicators,
     supplierAudits: accessibleSupplierAudits,
   });
+  if (hasGlobalAccess) {
+    filterOptions.processes = processCatalog.map((process) => ({
+      id: process.id,
+      name: process.name,
+    }));
+  }
 
   return {
     generatedAt: now.toISOString(),
+    visibleSections: [...visibleSections],
+    processScope: {
+      ids: effectiveProcessIds,
+      label: buildProcessScopeLabel(effectiveProcessIds, processById),
+    },
+    qualityPolicy: sources.qualityPolicy ?? {
+      title: "Política de Calidad",
+      statement: "Consulta la versión vigente de la Política de Calidad en Información documentada. Su publicación y visibilidad se administran desde la configuración de Inicio.",
+    },
+    qualityObjectives: indicators.map((indicator) => ({
+      id: indicator.id,
+      name: indicator.qualityObjective || indicator.name,
+      processId: indicator.processId,
+      processName: getIndicatorProcessIds(indicator)
+        .filter((processId) => effectiveProcessIdSet.has(processId))
+        .map((processId) => processById.get(processId)?.name ?? processId)
+        .join(" · ") || indicator.area,
+      target: indicator.metric,
+      leader: indicator.leader,
+    })),
     documentMetrics,
     pendingTasks: allPendingTasks,
     alerts,
@@ -756,7 +839,7 @@ function buildPendingTasks({
         priority: overdue ? "critical" : remainingDays <= 14 ? "attention" : "normal",
         dueDate: action.dueDate,
         area: action.area,
-        processId: processCatalog.find((process) => process.name === action.area)?.id,
+        processId: resolveRecordProcessId(action.processId, action.area),
         responsible: action.owner,
         status: action.status,
         targetId: action.id,
@@ -775,6 +858,7 @@ function buildPendingTasks({
         priority: overdue ? "critical" : "attention",
         dueDate: asset.nextDueDate,
         area: asset.location,
+        processId: resolveRecordProcessId(asset.processId, asset.location),
         responsible: asset.owner,
         status: overdue ? "overdue" : "due_soon",
         targetId: asset.id,
@@ -827,8 +911,8 @@ function buildPendingTasks({
         moduleLabel: "Auditorías",
         priority: remainingDays <= 14 ? "attention" : "normal",
         dueDate: audit.date,
-        area: "Compras",
-        processId: "P-10",
+        area: processById.get(audit.processId)?.name ?? audit.processId,
+        processId: audit.processId,
         responsible: audit.supplierName,
         status: audit.status,
         targetId: audit.id,
@@ -948,6 +1032,7 @@ function buildSearchIndex({
   indicators,
   supplierAudits,
   session,
+  processIds,
 }: {
   documents: ControlledDocument[];
   actions: CorrectiveAction[];
@@ -955,6 +1040,7 @@ function buildSearchIndex({
   indicators: ConfiguredIndicator[];
   supplierAudits: SupplierAuditCalendarEvent[];
   session: ActiveSession;
+  processIds: string[];
 }) {
   const items: HomeSearchResult[] = [];
   documents.forEach((document) => items.push({
@@ -983,7 +1069,7 @@ function buildSearchIndex({
     title: `${indicator.id} · ${indicator.name}`,
     meta: `Indicador · ${indicator.area}`,
     module: "indicators",
-    searchText: [indicator.id, indicator.name, indicator.area, indicator.leader, indicator.metric].join(" "),
+    searchText: [indicator.id, indicator.name, indicator.area, indicator.leader, indicator.metric, ...getIndicatorProcessIds(indicator)].join(" "),
   }));
   supplierAudits.forEach((audit) => items.push({
     id: audit.id,
@@ -993,11 +1079,7 @@ function buildSearchIndex({
     searchText: [audit.id, audit.supplierCode, audit.supplierName, audit.status].join(" "),
   }));
   processCatalog
-    .filter(
-      (process) =>
-        canAccessProcess(session, process.id) ||
-        (process.parentId && canAccessProcess(session, process.parentId)),
-    )
+    .filter((process) => processIds.includes(process.id))
     .forEach((process) => items.push({
       id: process.id,
       title: `${process.id} · ${process.name}`,
@@ -1029,7 +1111,18 @@ function buildFilterOptions({
   supplierAudits: SupplierAuditCalendarEvent[];
 }) {
   const processIds = new Set(documents.map((document) => document.processId));
-  indicators.forEach((indicator) => processIds.add(indicator.processId));
+  indicators.forEach((indicator) => {
+    getIndicatorProcessIds(indicator).forEach((processId) => processIds.add(processId));
+  });
+  actions.forEach((action) => {
+    const processId = resolveRecordProcessId(action.processId, action.area);
+    if (processId) processIds.add(processId);
+  });
+  assets.forEach((asset) => {
+    const processId = resolveRecordProcessId(asset.processId, asset.location);
+    if (processId) processIds.add(processId);
+  });
+  supplierAudits.forEach((audit) => processIds.add(audit.processId));
   const areas = new Set<string>();
   documents.forEach((document) => {
     const process = processCatalog.find((item) => item.id === document.processId);
@@ -1038,7 +1131,10 @@ function buildFilterOptions({
   actions.forEach((action) => areas.add(action.area));
   assets.forEach((asset) => areas.add(asset.location));
   indicators.forEach((indicator) => areas.add(indicator.area));
-  if (supplierAudits.length) areas.add("Compras");
+  supplierAudits.forEach((audit) => {
+    const process = processCatalog.find((item) => item.id === audit.processId);
+    if (process) areas.add(process.name);
+  });
   const responsibles = new Set<string>();
   documents.forEach((document) => {
     const version = getWorkingVersion(document);
@@ -1124,6 +1220,37 @@ function countByStatus(values: string[]) {
     counts[value] = (counts[value] ?? 0) + 1;
     return counts;
   }, {});
+}
+
+function resolveRecordProcessId(processId?: string, processLabel?: string) {
+  if (processId && processCatalog.some((process) => process.id === processId)) {
+    return processId;
+  }
+  if (!processLabel) return undefined;
+  const normalizedLabel = normalizeSearchText(processLabel);
+  const exact = processCatalog.find(
+    (process) =>
+      normalizeSearchText(process.name) === normalizedLabel ||
+      normalizeSearchText(process.sourceLabel) === normalizedLabel,
+  );
+  if (exact) return exact.id;
+  const partialMatches = processCatalog.filter((process) => {
+    const name = normalizeSearchText(process.name);
+    const sourceLabel = normalizeSearchText(process.sourceLabel);
+    return name.includes(normalizedLabel) || sourceLabel.includes(normalizedLabel);
+  });
+  return partialMatches.length === 1 ? partialMatches[0].id : undefined;
+}
+
+function buildProcessScopeLabel(
+  processIds: string[],
+  processById: Map<string, (typeof processCatalog)[number]>,
+) {
+  if (!processIds.length) return "Sin procesos autorizados";
+  if (processIds.length === processCatalog.length) return "Todos los procesos";
+  const names = processIds.map((processId) => processById.get(processId)?.name ?? processId);
+  if (names.length <= 3) return names.join(" · ");
+  return `${names.slice(0, 2).join(" · ")} +${names.length - 2}`;
 }
 
 export function searchHomeDashboard(

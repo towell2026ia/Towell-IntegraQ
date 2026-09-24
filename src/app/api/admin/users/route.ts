@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 
-import { authorize } from "@/lib/access/authorize";
 import { processCatalog } from "@/lib/configuration-data";
 import { normalizeModulePermissions } from "@/lib/module-permissions";
 import {
@@ -14,7 +13,10 @@ import type {
 } from "@/lib/session-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
-import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+import {
+  editableSpecificPermissionKeys,
+  type SpecificPermissionKey,
+} from "@/lib/specific-permissions";
 import type { UserAccessAccount } from "@/lib/user-access-data";
 
 export const maxDuration = 30;
@@ -55,7 +57,7 @@ type ProfileRow = {
   created_at: string;
 };
 
-async function requireAdministrator() {
+async function requireUserPermission(permission: SpecificPermissionKey) {
   const supabase = await createClient();
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return null;
@@ -64,9 +66,12 @@ async function requireAdministrator() {
     .select("user_type,status")
     .eq("id", userData.user.id)
     .maybeSingle();
-  return profile?.user_type === "administrator" && profile.status === "active"
-    ? userData.user
-    : null;
+  if (profile?.status !== "active") return null;
+  if (profile.user_type === "administrator") return userData.user;
+  const { data: allowed } = await supabase.rpc("has_permission", {
+    requested_permission: permission,
+  });
+  return allowed ? userData.user : null;
 }
 
 export async function GET() {
@@ -82,13 +87,10 @@ export async function GET() {
 }
 
 async function listAccounts() {
-  const actor = await requireAdministrator();
+  const actor = await requireUserPermission("usuarios.ver");
   if (!actor) {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
   }
-  const access = authorize({ user: await getAuthenticatedSession(), permission: "system.admin" });
-  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
-
   const admin = createAdminClient();
   const [
     profilesResult,
@@ -96,6 +98,7 @@ async function listAccounts() {
     processPermissionsResult,
     modulePermissionsResult,
     moduleActionsResult,
+    permissionOverridesResult,
     authUsersResult,
   ] = await Promise.all([
     admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,created_at").order("full_name"),
@@ -103,6 +106,7 @@ async function listAccounts() {
     admin.from("user_process_permissions").select("user_id,process_id,document_role,inherited_from_position_id"),
     admin.from("user_module_permissions").select("user_id,module_id,can_view"),
     admin.from("user_module_action_permissions").select("user_id,module_id,action"),
+    admin.from("user_permission_overrides").select("user_id,allowed,permission:permissions(code)"),
     admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
   ]);
 
@@ -112,6 +116,7 @@ async function listAccounts() {
     processPermissionsResult.error,
     modulePermissionsResult.error,
     moduleActionsResult.error,
+    permissionOverridesResult.error,
     authUsersResult.error,
   ].find(Boolean);
   if (firstError) {
@@ -157,6 +162,17 @@ async function listAccounts() {
           )
           .map((permission) => permission.module_id)
           .filter(isWorkspaceModuleId);
+    const specificPermissions = Object.fromEntries(
+      editableSpecificPermissionKeys.map((key) => [
+        key,
+        profile.user_type === "administrator"
+          ? true
+          : (permissionOverridesResult.data ?? []).find((row) => {
+              const relation = Array.isArray(row.permission) ? row.permission[0] : row.permission;
+              return row.user_id === profile.id && relation?.code === key;
+            })?.allowed ?? false,
+      ]),
+    );
 
     return {
       id: profile.external_id,
@@ -179,6 +195,7 @@ async function listAccounts() {
       documentAccess,
       continuousImprovementRole:
         profile.continuous_improvement_role ?? undefined,
+      specificPermissions,
       createdAt: profile.created_at,
     } satisfies UserAccessAccount;
   });
@@ -212,13 +229,12 @@ async function handleAccountRequest(request: Request, create: boolean) {
 }
 
 async function saveAccount(request: Request, create: boolean) {
-  const actor = await requireAdministrator();
+  const actor = await requireUserPermission(
+    create ? "usuarios.crear" : "usuarios.administrar_permisos",
+  );
   if (!actor) {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
   }
-  const access = authorize({ user: await getAuthenticatedSession(), permission: "system.admin" });
-  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
-
   const account = (await request.json()) as UserAccessAccount;
   if (!account.fullName?.trim() || !account.email?.trim()) {
     return NextResponse.json({ error: "Nombre y correo son obligatorios." }, { status: 400 });
@@ -367,6 +383,31 @@ async function saveAccount(request: Request, create: boolean) {
     }
   }
 
+  {
+    const { data: permissionRows, error: permissionError } = await admin
+      .from("permissions")
+      .select("id,code")
+      .in("code", editableSpecificPermissionKeys);
+    if (permissionError) {
+      return NextResponse.json({ error: permissionError.message }, { status: 400 });
+    }
+    if (permissionRows?.length) {
+      const { error: overrideError } = await admin
+        .from("user_permission_overrides")
+        .upsert(permissionRows.map((permission) => ({
+          user_id: userId,
+          permission_id: permission.id,
+          allowed: account.userType === "Administrador"
+            ? true
+            : Boolean(account.specificPermissions?.[permission.code as SpecificPermissionKey]),
+          granted_by: actor.id,
+        })), { onConflict: "user_id,permission_id" });
+      if (overrideError) {
+        return NextResponse.json({ error: overrideError.message }, { status: 400 });
+      }
+    }
+  }
+
   await admin.from("audit_log").insert({
     actor_id: actor.id,
     action: create ? "user.created" : "user.access_updated",
@@ -376,6 +417,7 @@ async function saveAccount(request: Request, create: boolean) {
       user_type: databaseUserType,
       process_count: account.documentAccess.length,
       module_action_count: account.moduleActionPermissions.length,
+      specific_permissions: account.specificPermissions ?? {},
     },
   });
 

@@ -32,9 +32,28 @@ export function canAccessModule(
 
   const externalKind = getExternalKindForSession(session);
   if (externalKind) {
+    const permission = externalKind === "customer"
+      ? "portal_clientes.acceder"
+      : "portal_proveedores.acceder";
+    if (session.specificPermissions?.[permission] === false) return false;
     return (
       hasValidExternalScope(session) && module === EXTERNAL_PORTALS[externalKind]
     );
+  }
+
+  const requiredSpecificPermission = module === "customers"
+    ? "clientes.acceder"
+    : module === "suppliers"
+      ? "proveedores.acceder"
+      : module === "customer-portal"
+        ? "portal_clientes.acceder"
+        : module === "supplier-portal"
+          ? "portal_proveedores.acceder"
+          : null;
+  if (requiredSpecificPermission) {
+    const configured = session.specificPermissions?.[requiredSpecificPermission];
+    if (configured === false) return false;
+    if (configured === true) return Boolean(session.assignedModuleIds?.includes(module));
   }
 
   return (

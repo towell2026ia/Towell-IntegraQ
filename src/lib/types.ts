@@ -106,6 +106,7 @@ export type MeasurementActivity = "calibration" | "verification";
 
 export interface MeasurementAsset {
   id: string;
+  processId?: string;
   code: string;
   name: string;
   location: string;

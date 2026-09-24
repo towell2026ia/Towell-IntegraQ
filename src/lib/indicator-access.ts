@@ -1,4 +1,4 @@
-import { canSubmitIndicator, type ConfiguredIndicator, type Quarter } from "@/lib/indicator-data";
+import { canSubmitIndicator, getIndicatorProcessIds, type ConfiguredIndicator, type Quarter } from "@/lib/indicator-data";
 import {
   canAccessProcess,
   canModifyProcess,
@@ -15,18 +15,22 @@ export function canManageIndicatorCatalog(session: ActiveSession) {
 
 export function canViewIndicator(
   session: ActiveSession,
-  indicator: Pick<ConfiguredIndicator, "processId">,
+  indicator: Pick<ConfiguredIndicator, "processId" | "processIds">,
 ) {
-  return canAccessProcess(session, indicator.processId);
+  return getIndicatorProcessIds(indicator).some((processId) =>
+    canAccessProcess(session, processId),
+  );
 }
 
 export function canUpdateIndicatorResult(
   session: ActiveSession,
-  indicator: Pick<ConfiguredIndicator, "processId">,
+  indicator: Pick<ConfiguredIndicator, "processId" | "processIds">,
 ) {
   return (
     canViewIndicator(session, indicator) &&
-    canModifyProcess(session, indicator.processId) &&
+    getIndicatorProcessIds(indicator).some((processId) =>
+      canModifyProcess(session, processId),
+    ) &&
     canPerformModuleAction(session, "indicators", "update")
   );
 }

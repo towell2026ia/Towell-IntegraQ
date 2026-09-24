@@ -1,4 +1,5 @@
 import type { WorkspaceModuleId } from "@/lib/navigation";
+import type { SpecificPermissionState } from "@/lib/specific-permissions";
 
 export type UserType =
   | "Administrador"
@@ -53,6 +54,7 @@ export interface ActiveSession {
   assignedProcessIds: string[];
   assignedModuleIds?: WorkspaceModuleId[];
   moduleActionPermissions?: ModuleActionPermission[];
+  specificPermissions?: SpecificPermissionState;
   positionId?: string;
   documentAccess?: ProcessDocumentAccess[];
   continuousImprovementRole?: ContinuousImprovementRole;

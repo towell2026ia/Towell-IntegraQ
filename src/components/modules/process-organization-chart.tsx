@@ -1,6 +1,7 @@
 "use client";
+/* eslint-disable @next/next/no-img-element */
 
-import { AlertTriangle, Check, FileSpreadsheet, ImageIcon, LoaderCircle, Network, Plus, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, Eye, FileSpreadsheet, ImageIcon, LoaderCircle, Network, Plus, Trash2, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import type { ProcessCatalogItem } from "@/lib/configuration-data";
@@ -9,6 +10,8 @@ import { documentValidatorByProcess } from "@/lib/document-data";
 import { computeHierarchyLevels, type OrganizationChartDraft } from "@/lib/organization-chart-data";
 import {
   interpretProcessOrganizationChart,
+  deleteProcessOrganizationChart,
+  getProcessOrganizationChartUrl,
   type OrganizationImportItem,
   type ProcessOrganizationSource,
   uploadProcessOrganizationChart,
@@ -45,6 +48,9 @@ export function ProcessOrganizationChart({
   const [interpreting, setInterpreting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [showImage, setShowImage] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const ownerPositionId = documentValidatorByProcess[process.id]?.positionId ?? "PU-01";
 
   useEffect(() => {
@@ -56,6 +62,16 @@ export function ProcessOrganizationChart({
     });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    if (source?.mimeType.startsWith("image/")) {
+      void getProcessOrganizationChartUrl(source).then((url) => { if (active) setSourceUrl(url); }).catch((error) => {
+        if (active) setFeedback(error instanceof Error ? error.message : "No fue posible abrir el organigrama.");
+      });
+    } else Promise.resolve().then(() => { if (active) setSourceUrl(""); });
+    return () => { active = false; };
+  }, [source]);
 
   const parentOptions = useMemo(() => [...positions].sort((left, right) => left.level - right.level || left.id.localeCompare(right.id)), [positions]);
 
@@ -101,22 +117,35 @@ export function ProcessOrganizationChart({
     } finally { setSaving(false); }
   }
 
+  async function removeCurrent() {
+    if (!source || !window.confirm("¿Deseas eliminar el organigrama actual?")) return;
+    setDeleting(true); setFeedback("");
+    try {
+      await deleteProcessOrganizationChart(source);
+      setSourceUrl(""); setShowImage(false);
+      setFeedback("Organigrama eliminado. Ya puedes cargar uno nuevo.");
+      await onSaved();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "No fue posible eliminar el organigrama.");
+    } finally { setDeleting(false); }
+  }
+
   return <>
     <section className="documents-detail-section department-chart-section">
       <div className="section-title-row">
         <h4>Organigrama del departamento</h4>
-        <span className={source ? "quality-state success" : "pending-badge"}>{source ? "Interpretado" : "Pendiente por subir"}</span>
+        <span className={source ? "quality-state success" : "pending-badge"}>{source ? "Vigente" : "Pendiente por subir"}</span>
       </div>
-      <div className={`department-chart-placeholder ${source ? "department-chart-ready" : ""}`}>
-        <div className="department-chart-flow" aria-hidden="true"><span /><i /><span /><i /><span /></div>
-        <div><strong>{source ? source.fileName : "Organigrama vertical"}</strong><p>{process.name}{source ? ` · ${formatDate(source.createdAt)} · ${source.interpretedCount} puestos revisados` : ""}</p></div>
-        {permissions.upload ? <label className={`button button-secondary file-button ${interpreting ? "disabled" : ""}`}>
-          {interpreting ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {interpreting ? "Interpretando…" : source ? "Actualizar organigrama" : "Subir organigrama"}
-          <input accept=".xlsx,.xlsm,image/jpeg,image/png,image/webp" disabled={interpreting} type="file" onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.currentTarget.value = ""; }} />
-        </label> : <span className="organization-readonly-note">Consulta de organigrama</span>}
-      </div>
+      {source ? <div className="department-chart-document">
+        <div className="department-chart-image-frame">
+          {sourceUrl ? <img alt={`Organigrama de ${process.name}`} src={sourceUrl} /> : <div className="department-chart-file-fallback"><FileSpreadsheet size={34} /><strong>Vista previa en preparación</strong><span>El archivo original se conserva y puede actualizarse.</span></div>}
+        </div>
+        <div className="department-chart-metadata"><span><strong>{source.fileName}</strong><small>Actualizado: {formatDate(source.createdAt)} · V{source.version}</small></span><div>{sourceUrl ? <button className="button button-secondary" type="button" onClick={() => setShowImage(true)}><Eye size={15} /> Ver completo</button> : null}{permissions.upload ? <label className={`button button-secondary file-button ${interpreting ? "disabled" : ""}`}><Upload size={15} /> {interpreting ? "Interpretando…" : "Editar / Actualizar"}<input accept=".xlsx,.xlsm,image/jpeg,image/png,image/webp" disabled={interpreting} type="file" onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.currentTarget.value = ""; }} /></label> : null}{permissions.delete ? <button className="button button-secondary danger" disabled={deleting} type="button" onClick={() => void removeCurrent()}><Trash2 size={15} /> {deleting ? "Eliminando…" : "Eliminar"}</button> : null}</div></div>
+      </div> : <div className="department-chart-placeholder"><div className="department-chart-flow" aria-hidden="true"><span /><i /><span /><i /><span /></div><div><strong>No existe un organigrama cargado</strong><p>{process.name}</p></div>{permissions.upload ? <label className={`button button-primary file-button ${interpreting ? "disabled" : ""}`}>{interpreting ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {interpreting ? "Interpretando…" : "+ Cargar organigrama"}<input accept=".xlsx,.xlsm,image/jpeg,image/png,image/webp" disabled={interpreting} type="file" onChange={(event) => { const selected = event.target.files?.[0]; if (selected) void selectFile(selected); event.currentTarget.value = ""; }} /></label> : <span className="organization-readonly-note">Consulta de organigrama</span>}</div>}
       {feedback ? <p className="organization-import-feedback" role="status">{feedback}</p> : null}
     </section>
+
+    {showImage && sourceUrl && source ? <div className="organization-image-backdrop" role="presentation" onMouseDown={() => setShowImage(false)}><section role="dialog" aria-modal="true" aria-label={`Organigrama de ${process.name}`} onMouseDown={(event) => event.stopPropagation()}><header><div><strong>{source.fileName}</strong><small>{process.name}</small></div><button className="icon-button" type="button" title="Cerrar" onClick={() => setShowImage(false)}><X size={18} /></button></header><div><img alt={`Organigrama completo de ${process.name}`} src={sourceUrl} /></div></section></div> : null}
 
     {draft && file ? <div className="organization-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setDraft(null); }}>
       <section className="organization-import-dialog" role="dialog" aria-modal="true" aria-labelledby="organization-import-title">

@@ -4,6 +4,7 @@ import {
   AlertOctagon,
   ArrowRight,
   BellRing,
+  BookOpenCheck,
   CalendarClock,
   CalendarDays,
   ChartNoAxesCombined,
@@ -30,7 +31,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
   buildHomeDashboard,
@@ -42,6 +43,7 @@ import {
   type HomeTone,
 } from "@/lib/home-dashboard";
 import { workspaceModuleMeta, type WorkspaceModuleId } from "@/lib/navigation";
+import type { HomeSectionConfiguration } from "@/lib/home-visibility";
 
 interface HomeModuleProps {
   onNavigate: (module: WorkspaceModuleId, targetId?: string) => void;
@@ -97,9 +99,26 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [sectionConfigurations, setSectionConfigurations] = useState<
+    HomeSectionConfiguration[] | undefined
+  >(sources.sectionConfigurations);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/home/config", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { configurations?: HomeSectionConfiguration[] } | null) => {
+        if (!cancelled && payload?.configurations) {
+          setSectionConfigurations(payload.configurations);
+        }
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
   const dashboard = useMemo(
-    () => buildHomeDashboard(sources, filters, asOf),
-    [asOf, filters, sources],
+    () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
+    [asOf, filters, sectionConfigurations, sources],
   );
   const searchResults = useMemo(
     () => searchHomeDashboard(dashboard.searchIndex, searchQuery),
@@ -107,6 +126,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
   );
   const firstName = sources.session.name.split(" ")[0];
   const greeting = getGreeting(asOf);
+  const visibleSections = new Set(dashboard.visibleSections);
   const activeFilterCount = Object.entries(filters).filter(
     ([key, value]) => key === "from" || key === "to" ? Boolean(value) : value !== "all",
   ).length;
@@ -172,7 +192,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </div>
 
         <div className="home-command-context">
-          <span><strong>{sources.session.company}</strong><small>{sources.session.site ?? "Centro principal"}</small></span>
+          <span><strong>{sources.session.company}</strong><small>{dashboard.processScope.label}</small></span>
           <span className="home-role-chip">{sources.session.userType}</span>
         </div>
       </section>
@@ -199,8 +219,38 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      <div className="home-priority-grid">
-        <section className="home-operation-panel home-alert-panel">
+      {visibleSections.has("quality-policy") ? (
+        <section className="home-quality-policy" aria-labelledby="home-quality-policy-title">
+          <span><BookOpenCheck size={21} /></span>
+          <div>
+            <small>Sistema de Gestión de Calidad</small>
+            <h3 id="home-quality-policy-title">{dashboard.qualityPolicy.title}</h3>
+            <p>{dashboard.qualityPolicy.statement}</p>
+          </div>
+          <em>{dashboard.processScope.label}</em>
+        </section>
+      ) : null}
+
+      {visibleSections.has("quality-objectives") ? (
+        <section className="home-dashboard-section home-objectives-section">
+          <SectionHeader eyebrow="Dirección estratégica" title="Objetivos de Calidad" icon={Target} count={dashboard.qualityObjectives.length} />
+          <div className="home-objective-grid">
+            {dashboard.qualityObjectives.length ? dashboard.qualityObjectives.slice(0, 6).map((objective) => (
+              <button key={objective.id} type="button" onClick={() => onNavigate("indicators", objective.id)}>
+                <span>{objective.processName}</span>
+                <strong>{objective.name}</strong>
+                <small>Meta: {objective.target}</small>
+                <em>{objective.leader}</em>
+                <ChevronRight size={16} />
+              </button>
+            )) : <EmptyState icon={Target} text="No hay objetivos configurados para los procesos autorizados." />}
+          </div>
+        </section>
+      ) : null}
+
+      {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
+      <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>
+        {visibleSections.has("alerts") ? <section className="home-operation-panel home-alert-panel">
           <SectionHeader eyebrow="Atención" title="Alertas" icon={BellRing} count={dashboard.alerts.length} />
           <div className="home-alert-list">
             {dashboard.alerts.length ? dashboard.alerts.slice(0, 5).map((alert) => (
@@ -211,9 +261,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
               </button>
             )) : <EmptyState icon={CheckCircle2} text="No hay alertas dentro del alcance seleccionado." />}
           </div>
-        </section>
+        </section> : null}
 
-        <section className="home-operation-panel home-pending-panel">
+        {visibleSections.has("pending-tasks") ? <section className="home-operation-panel home-pending-panel">
           <SectionHeader eyebrow="Mi trabajo" title="Pendientes" icon={ListChecks} count={dashboard.pendingTasks.length} />
           <div className="home-task-list">
             {dashboard.pendingTasks.length ? dashboard.pendingTasks.slice(0, 6).map((task) => {
@@ -228,10 +278,10 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
               );
             }) : <EmptyState icon={CheckCircle2} text="No tienes actividades pendientes." />}
           </div>
-        </section>
-      </div>
+        </section> : null}
+      </div>) : null}
 
-      <section className="home-dashboard-section home-document-section">
+      {visibleSections.has("document-status") ? <section className="home-dashboard-section home-document-section">
         <SectionHeader eyebrow="Control documental" title="Estado documental" icon={FileCheck2} />
         <div className="home-document-metrics">
           {dashboard.documentMetrics.map((metric) => {
@@ -247,9 +297,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             );
           })}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-dashboard-section home-upcoming-section">
+      {visibleSections.has("upcoming-events") ? <section className="home-dashboard-section home-upcoming-section">
         <SectionHeader eyebrow="Calendario" title="Próximos eventos" icon={CalendarClock} count={dashboard.upcomingEvents.length} />
         <div className="home-upcoming-list">
           {dashboard.upcomingEvents.length ? dashboard.upcomingEvents.slice(0, 6).map((event) => (
@@ -260,9 +310,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             </button>
           )) : <EmptyState icon={CalendarDays} text="No hay eventos próximos." />}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-dashboard-section home-performance-section">
+      {visibleSections.has("performance") ? <section className="home-dashboard-section home-performance-section">
         <SectionHeader eyebrow="Sistema de Gestión" title="Desempeño" icon={ChartNoAxesCombined} />
         <div className="home-kpi-strip">
           {dashboard.kpis.map((kpi) => (
@@ -271,9 +321,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             </button>
           ))}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-dashboard-section home-modules-section">
+      {visibleSections.has("module-status") ? <section className="home-dashboard-section home-modules-section">
         <SectionHeader eyebrow="Fuentes oficiales" title="Estado de módulos" icon={Network} />
         <div className="home-module-status-grid">
           {dashboard.moduleStatus.map((item) => {
@@ -288,9 +338,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             );
           })}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-dashboard-section home-trends-section">
+      {visibleSections.has("trends") ? <section className="home-dashboard-section home-trends-section">
         <SectionHeader eyebrow="Lectura ejecutiva" title="Tendencias" icon={Gauge} />
         <div className="home-trend-grid">
           {dashboard.trends.map((trend) => (
@@ -311,9 +361,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             </button>
           ))}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-dashboard-section home-activity-section">
+      {visibleSections.has("recent-activity") ? <section className="home-dashboard-section home-activity-section">
         <SectionHeader eyebrow="Trazabilidad" title="Actividad reciente" icon={Clock3} count={dashboard.recentActivity.length} />
         <div className="home-activity-list">
           {dashboard.recentActivity.length ? dashboard.recentActivity.slice(0, 7).map((activity) => {
@@ -327,9 +377,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             );
           }) : <EmptyState icon={Clock3} text="No hay actividad dentro del alcance seleccionado." />}
         </div>
-      </section>
+      </section> : null}
 
-      <section className="home-quick-actions" aria-label="Acciones rápidas">
+      {visibleSections.has("quick-actions") ? <section className="home-quick-actions" aria-label="Acciones rápidas">
         <div><span>Acciones rápidas</span><small>{sources.session.userType === "Administrador" ? "Administración" : "Mi alcance"}</small></div>
         {sources.session.userType === "Administrador" ? (
           <>
@@ -341,7 +391,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         ) : (
           <button type="button" onClick={() => onNavigate(dashboard.pendingTasks[0]?.module ?? "documents")}><Plus size={16} /> Abrir siguiente pendiente</button>
         )}
-      </section>
+      </section> : null}
     </div>
   );
 }

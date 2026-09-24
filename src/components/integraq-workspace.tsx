@@ -39,6 +39,7 @@ import { CustomersModule } from "@/components/modules/customers-module";
 import { DocumentsModule } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
+import { HomeSettingsModule } from "@/components/modules/home-settings-module";
 import { IndicatorsModule } from "@/components/modules/indicators-module";
 import { ManagementReviewModule } from "@/components/modules/management-review-module";
 import { ModulePlaceholder } from "@/components/modules/module-placeholder";
@@ -154,6 +155,7 @@ const navigationGroups = [
       { id: "processes" as const, icon: Network },
       { id: "organization" as const, icon: Building2 },
       { id: "access" as const, icon: UserCog },
+      { id: "home-settings" as const, icon: Settings2 },
       { id: "forms" as const, icon: Settings2 },
     ],
   },
@@ -543,6 +545,7 @@ export function IntegraQWorkspace({
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
+          {activeModule === "home-settings" ? <HomeSettingsModule /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} /> : null}

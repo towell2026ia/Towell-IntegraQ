@@ -25,6 +25,7 @@ export type SupplierQualityRecord = {
 
 export type SupplierAuditCalendarEvent = {
   id: string;
+  processId: string;
   supplierId: string;
   supplierCode: string;
   supplierName: string;
@@ -35,7 +36,7 @@ export type SupplierAuditCalendarEvent = {
 
 type SupplierAuditCalendarEventSeed = Omit<
   SupplierAuditCalendarEvent,
-  "supplierId"
+  "supplierId" | "processId"
 >;
 
 type SupplierAuditSemesterSeed = Omit<SupplierAuditSemester, "events"> & {
@@ -244,6 +245,7 @@ export const supplierAuditSemesters: SupplierAuditSemester[] =
     ...semester,
     events: semester.events.map((event) => ({
       ...event,
+      processId: "P-10",
       supplierId:
         supplierQualityCatalog.find(
           (supplier) => supplier.code === event.supplierCode,
