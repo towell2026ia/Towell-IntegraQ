@@ -2,6 +2,8 @@ import "server-only";
 
 import { createClient } from "@supabase/supabase-js";
 
+import { assertRecoverySupabaseUrl } from "./recovery-guard";
+
 export function createAdminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const secretKey = process.env.SUPABASE_SECRET_KEY;
@@ -9,6 +11,7 @@ export function createAdminClient() {
   if (!url || !secretKey) {
     throw new Error("Falta configurar la clave secreta de Supabase.");
   }
+  assertRecoverySupabaseUrl(url);
 
   return createClient(url, secretKey, {
     auth: {

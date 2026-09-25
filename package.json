@@ -9,6 +9,16 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "recovery:inspect": "node scripts/recovery/inspect-backup.mjs",
+    "recovery:start": "node scripts/recovery/start-recovery.mjs",
+    "recovery:reset": "node scripts/recovery/reset-schema.mjs",
+    "recovery:restore:auth": "node scripts/recovery/restore-auth.mjs",
+    "recovery:restore:database": "node scripts/recovery/restore-database.mjs",
+    "recovery:restore:storage": "node scripts/recovery/restore-storage.mjs",
+    "recovery:restore": "node scripts/recovery/restore-all.mjs",
+    "recovery:validate": "node scripts/recovery/run-recovery-tests.mjs",
+    "recovery:dev": "node scripts/recovery/dev-recovery.mjs",
+    "recovery:stop": "node scripts/recovery/stop-recovery.mjs",
     "previews:worker": "node scripts/generate-document-previews.mjs"
   },
   "dependencies": {
@@ -34,6 +44,7 @@
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.2",
     "eslint-config-next": "16.2.12",
+    "supabase": "2.117.0",
     "typescript": "5.9.3",
     "vitest": "4.1.10"
   },

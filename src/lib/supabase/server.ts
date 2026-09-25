@@ -3,6 +3,8 @@ import "server-only";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+import { assertRecoverySupabaseUrl } from "./recovery-guard";
+
 export async function createClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
@@ -10,6 +12,7 @@ export async function createClient() {
   if (!url || !publishableKey) {
     throw new Error("Falta configurar Supabase en .env.local.");
   }
+  assertRecoverySupabaseUrl(url);
 
   const cookieStore = await cookies();
 
