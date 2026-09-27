@@ -6,6 +6,10 @@ import { EvidenceManager } from "@/components/evidence/evidence-manager";
 import { workspaceModuleMeta, type WorkspaceModuleId } from "@/lib/navigation";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
+export function shouldRenderModuleDocuments(moduleId: WorkspaceModuleId) {
+  return moduleId !== "home";
+}
+
 export function ModuleDocumentsPanel({
   moduleId,
   session,
@@ -13,6 +17,8 @@ export function ModuleDocumentsPanel({
   moduleId: WorkspaceModuleId;
   session: ActiveSession;
 }) {
+  if (!shouldRenderModuleDocuments(moduleId)) return null;
+
   const administrator = isAdministrator(session);
   const moduleLabel = workspaceModuleMeta[moduleId].label;
 
