@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
+import { GeneralInformationModule } from "@/components/modules/general-information-module";
 import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
 import {
   processCatalog,
@@ -52,7 +53,7 @@ import {
   type AppFormValue,
 } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
-import { isAdministrator } from "@/lib/session-data";
+import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { restoreStoredDocument } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
@@ -77,7 +78,7 @@ const dateFormatter = new Intl.DateTimeFormat("es-MX", {
   timeZone: "UTC",
 });
 
-type DocumentsView = "process" | "type" | "form" | "master";
+type DocumentsView = "general" | "process" | "type" | "form" | "master";
 type FormView = "dashboard" | "data";
 
 interface DocumentsModuleProps {
@@ -96,12 +97,22 @@ export function DocumentsModule({
   session,
 }: DocumentsModuleProps) {
   const focusedDocument = controlledDocuments.find((document) => document.id === focusId);
+  const canViewControlledDocuments = isAdministrator(session) || (
+    !isExternalUser(session) && (
+      Boolean(session.assignedModuleIds?.includes("documents")) ||
+      Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === "documents" && permission.action === "view"))
+    )
+  );
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(
     getPrimaryDocumentProcessId(focusedDocument?.processId ?? "P-01"),
   );
   const [documentsView, setDocumentsView] = useState<DocumentsView>(
-    focusedDocument?.appFormId ? "form" : focusedDocument ? "type" : "process",
+    canViewControlledDocuments && focusedDocument?.appFormId
+      ? "form"
+      : canViewControlledDocuments && focusedDocument
+        ? "type"
+        : "general",
   );
   const [selectedTypeId, setSelectedTypeId] = useState(focusedDocument?.documentTypeId ?? "processes");
   const [selectedFormId, setSelectedFormId] = useState<string | null>(focusedDocument?.appFormId ?? null);
@@ -116,7 +127,7 @@ export function DocumentsModule({
     () => controlledDocuments.filter(isOperationalDocument),
     [controlledDocuments],
   );
-  const canViewMasterList = documentAdvancedActionsEnabled && processCatalog.some(
+  const canViewMasterList = canViewControlledDocuments && documentAdvancedActionsEnabled && processCatalog.some(
     (process) => getDocumentPermissions(session, process.id).masterList,
   );
   const filtered = useMemo(() => {
@@ -178,6 +189,21 @@ export function DocumentsModule({
 
   return (
     <>
+      <nav className="form-view-tabs" aria-label="Repositorios de información documentada">
+        <button className={documentsView === "general" ? "active" : ""} type="button" onClick={() => setDocumentsView("general")}>
+          <BookOpen size={15} /> Información General
+        </button>
+        {canViewControlledDocuments ? (
+          <button className={documentsView !== "general" ? "active" : ""} type="button" onClick={() => setDocumentsView("process")}>
+            <Workflow size={15} /> Documentos controlados
+          </button>
+        ) : null}
+      </nav>
+
+      {documentsView === "general" ? (
+        <GeneralInformationModule session={session} />
+      ) : (
+      <>
       <section className="module-heading">
         <div>
           <p className="module-kicker">Control documental</p>
@@ -293,6 +319,8 @@ export function DocumentsModule({
           ) : null}
         </div>
       </section>
+      )}
+      </>
       )}
     </>
   );

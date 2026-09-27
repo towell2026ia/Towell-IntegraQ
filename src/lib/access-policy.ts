@@ -29,6 +29,7 @@ export function canAccessModule(
   module: WorkspaceModuleId,
 ) {
   if (isAdministrator(session)) return true;
+  if (module === "documents") return true;
 
   const externalKind = getExternalKindForSession(session);
   if (externalKind) {

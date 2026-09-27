@@ -30,6 +30,7 @@ interface DocumentPreviewViewerProps {
   code: string;
   version: ControlledDocumentVersion;
   onReadyChange: (ready: boolean) => void;
+  sourceUrl?: () => Promise<string | null>;
 }
 
 type PreviewKind = "pdf" | "document" | "spreadsheet" | "image";
@@ -60,7 +61,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 export const DocumentPreviewViewer = forwardRef<
   DocumentPreviewViewerHandle,
   DocumentPreviewViewerProps
->(function DocumentPreviewViewer({ code, version, onReadyChange }, ref) {
+>(function DocumentPreviewViewer({ code, version, onReadyChange, sourceUrl }, ref) {
   const [kind, setKind] = useState<PreviewKind | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -87,7 +88,9 @@ export const DocumentPreviewViewer = forwardRef<
 
     void (async () => {
       const normalizedPreview = version.previewStatus === "ready" && Boolean(version.previewPath);
-      const signedUrl = await getControlledDocumentDownloadUrl(version, normalizedPreview ? "preview" : "original");
+      const signedUrl = sourceUrl
+        ? await sourceUrl()
+        : await getControlledDocumentDownloadUrl(version, normalizedPreview ? "preview" : "original");
       if (!signedUrl) throw new Error("Este registro todavía no tiene un archivo consultable.");
       const response = await fetch(signedUrl, { cache: "no-store" });
       if (!response.ok) throw new Error("No fue posible abrir el archivo privado.");
@@ -154,7 +157,7 @@ export const DocumentPreviewViewer = forwardRef<
       if (localImageUrl) URL.revokeObjectURL(localImageUrl);
       if (loadedPdf) void loadedPdf.cleanup();
     };
-  }, [onReadyChange, version]);
+  }, [onReadyChange, sourceUrl, version]);
 
   useEffect(() => {
     if (!pdfDocument || !pdfCanvasRef.current) return;

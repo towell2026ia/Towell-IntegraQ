@@ -1,0 +1,79 @@
+.repository { display: grid; gap: 14px; min-width: 0; }
+.heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.heading h3 { margin: 2px 0 5px; font-size: 20px; }
+.heading p { margin: 0; color: var(--muted); font-size: 11px; }
+.actions, .rowActions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.readOnly { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; color: #176143; background: #e4f5ec; border-radius: 999px; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.adminTabs { display: flex; gap: 6px; padding: 5px; width: fit-content; background: #eef2f6; border-radius: 8px; }
+.adminTabs button { padding: 7px 12px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; cursor: pointer; font: inherit; font-size: 10px; }
+.adminTabs .activeTab { color: var(--blue); background: #fff; box-shadow: 0 1px 4px #17243a18; font-weight: 800; }
+.breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 32px; }
+.breadcrumb span { display: inline-flex; align-items: center; gap: 4px; }
+.breadcrumb button { padding: 4px; color: var(--blue); background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.filters { display: grid; grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(140px, auto)); gap: 8px; }
+.filters label { display: flex; align-items: center; gap: 8px; padding: 0 10px; background: #fff; border: 1px solid var(--line); border-radius: 7px; }
+.filters input, .filters select, .reviewRow input, .reviewRow select, .bulkTools select { min-width: 0; padding: 9px; font: inherit; font-size: 10px; background: #fff; border: 1px solid var(--line); border-radius: 7px; }
+.filters label input { flex: 1; padding-inline: 0; border: 0; outline: 0; }
+.folderGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.folderCard { min-width: 0; padding: 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.folderOpen { display: flex; width: 100%; align-items: center; gap: 10px; padding: 0 0 11px; color: var(--ink); text-align: left; background: transparent; border: 0; cursor: pointer; }
+.folderOpen > svg { flex: 0 0 auto; color: #d99d20; fill: #ffe7a9; }
+.folderOpen span { display: grid; min-width: 0; gap: 3px; }
+.folderOpen strong, .folderOpen small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folderOpen strong { font-size: 12px; }
+.folderOpen small { color: var(--muted); font-size: 9px; }
+.folderCard .rowActions { justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--line); }
+.rowActions button { display: grid; width: 30px; height: 30px; place-items: center; color: #475569; background: #f8fafc; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+.rowActions button:hover { color: var(--blue); border-color: #9db9dc; }
+.tableWrap { overflow: auto; background: #fff; border: 1px solid var(--line); border-radius: 9px; }
+.documentTable { width: 100%; min-width: 780px; border-collapse: collapse; }
+.documentTable th { padding: 10px 12px; color: var(--muted); text-align: left; background: #f7f9fb; font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
+.documentTable td { padding: 11px 12px; border-top: 1px solid var(--line); font-size: 10px; vertical-align: middle; }
+.documentTable td:first-child { display: flex; align-items: center; gap: 9px; }
+.documentTable td:first-child > svg { color: var(--blue); }
+.documentTable td:first-child span { display: grid; gap: 2px; }
+.documentTable td small { color: var(--muted); }
+.current, .notCurrent { display: inline-flex; padding: 4px 7px; border-radius: 999px; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.current { color: #176143; background: #def4e9; }
+.notCurrent { color: #7a5510; background: #fff0c8; }
+.loading, .tableEmpty, .empty { display: grid; min-height: 150px; place-items: center; align-content: center; gap: 7px; padding: 24px; color: var(--muted); text-align: center; background: #fff; border: 1px dashed #bdc8d4; border-radius: 9px; font-size: 11px; }
+.tableEmpty strong, .empty h4 { margin: 0; color: var(--ink); }
+.tableEmpty span, .empty p { margin: 0; }
+.deletedGrid { display: grid; gap: 8px; }
+.deletedGrid article { display: flex; align-items: center; gap: 10px; padding: 12px; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+.deletedGrid article div { display: grid; flex: 1; gap: 2px; }
+.deletedGrid article small { color: var(--muted); }
+.auditList { display: grid; gap: 6px; }
+.auditList article { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #fff; border: 1px solid var(--line); border-radius: 7px; }
+.auditList article div { display: grid; flex: 1; gap: 2px; }
+.auditList small { color: var(--muted); }
+.auditList code { font-size: 9px; }
+.backdrop { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 20px; background: #101b2abf; }
+.dialog { display: flex; width: min(1120px, 96vw); max-height: 92vh; flex-direction: column; gap: 14px; overflow: auto; padding: 18px; background: #f7f9fb; border-radius: 11px; box-shadow: 0 22px 70px #0005; }
+.dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.dialog > header > div { display: flex; align-items: center; gap: 10px; }
+.dialog > header span { display: grid; gap: 2px; }
+.dialog > header small { color: var(--muted); }
+.dialog > header button { display: grid; width: 32px; height: 32px; place-items: center; background: #fff; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+.dialog > footer { display: flex; justify-content: flex-end; gap: 8px; }
+.dropZone { display: grid; min-height: 130px; place-items: center; align-content: center; gap: 5px; padding: 18px; color: var(--muted); text-align: center; background: #fff; border: 2px dashed #a9bad0; border-radius: 9px; cursor: pointer; }
+.dropZone input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.dropZone strong { color: var(--ink); }
+.bulkTools { display: flex; flex-wrap: wrap; gap: 6px; }
+.bulkTools button { padding: 7px 9px; color: var(--blue); background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font: inherit; font-size: 9px; }
+.reviewTable { display: grid; gap: 5px; overflow: auto; }
+.reviewRow { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) 95px 105px 130px minmax(120px, 1fr) auto; gap: 6px; align-items: center; padding: 7px; background: #fff; border: 1px solid var(--line); border-radius: 7px; }
+.reviewRow > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; }
+.metadataButton { padding: 8px 9px; color: var(--blue); background: #fff; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font: inherit; font-size: 9px; }
+.progress { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+.progress > div { height: 8px; overflow: hidden; background: #dfe6ee; border-radius: 999px; }
+.progress > div span { display: block; height: 100%; background: var(--blue); transition: width .2s ease; }
+.progress small { grid-column: 1 / -1; color: var(--muted); }
+.previewDialog { width: min(1250px, 98vw); }
+.metadataDialog { width: min(700px, 94vw); }
+.metadataDialog dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.metadataDialog dl div { padding: 10px; background: #fff; border: 1px solid var(--line); border-radius: 7px; }
+.metadataDialog dt { color: var(--muted); font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.metadataDialog dd { margin: 4px 0 0; font-size: 11px; }
+@media (max-width: 1050px) { .folderGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .filters { grid-template-columns: 1fr 1fr; } .reviewRow { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .heading { flex-direction: column; } .actions { width: 100%; } .folderGrid, .filters, .metadataDialog dl { grid-template-columns: 1fr; } .dialog { width: 100%; max-height: 96vh; padding: 12px; } .reviewRow { grid-template-columns: 1fr; } }

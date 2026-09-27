@@ -7,7 +7,7 @@ import { workspaceModuleMeta, type WorkspaceModuleId } from "@/lib/navigation";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 export function shouldRenderModuleDocuments(moduleId: WorkspaceModuleId) {
-  return moduleId !== "home";
+  return moduleId !== "home" && moduleId !== "documents";
 }
 
 export function ModuleDocumentsPanel({

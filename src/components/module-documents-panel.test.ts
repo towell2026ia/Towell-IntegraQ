@@ -7,8 +7,11 @@ describe("module documents panel visibility", () => {
     expect(shouldRenderModuleDocuments("home")).toBe(false);
   });
 
+  it("uses the dedicated repository for Información Documentada", () => {
+    expect(shouldRenderModuleDocuments("documents")).toBe(false);
+  });
+
   it("preserves the reusable document panel for other modules", () => {
-    expect(shouldRenderModuleDocuments("documents")).toBe(true);
     expect(shouldRenderModuleDocuments("risks")).toBe(true);
   });
 });
