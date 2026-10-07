@@ -1,4 +1,5 @@
 import indicatorSource from "@/lib/indicator-source.json";
+import { buildDefaultCaptureWindows } from "@/lib/indicators/indicator-windows";
 
 export const quarters = ["Q1", "Q2", "Q3", "Q4"] as const;
 export type Quarter = (typeof quarters)[number];
@@ -29,6 +30,12 @@ export interface IndicatorDefinition {
 export interface ConfiguredIndicator extends IndicatorDefinition {
   evaluationRules: IndicatorEvaluationRules;
   schedule: Record<string, Record<Quarter, string>>;
+  captureWindows?: Record<string, Record<Quarter, IndicatorCaptureWindow>>;
+}
+
+export interface IndicatorCaptureWindow {
+  opensAt: string;
+  closesAt: string;
 }
 
 export interface IndicatorEvaluationRules {
@@ -40,10 +47,12 @@ export interface IndicatorEvaluationRules {
 export interface IndicatorResultRecord {
   value: number;
   comments: string;
+  evidenceFileId?: string;
   evidenceName?: string;
   evidenceSize?: number;
   submittedAt: string;
   submittedBy: string;
+  adminOverrideReason?: string;
 }
 
 export interface IndicatorTargetRule {
@@ -260,22 +269,32 @@ export function buildInitialIndicatorDefinitions(): ConfiguredIndicator[] {
       "2025": buildQuarterSchedule(2025),
       "2026": buildQuarterSchedule(2026),
     },
+    captureWindows: {
+      "2025": buildDefaultCaptureWindows(2025),
+      "2026": buildDefaultCaptureWindows(2026),
+    },
   }));
 }
 
 export function normalizeConfiguredIndicators(
   indicators: Array<IndicatorDefinition & Partial<ConfiguredIndicator>>,
 ): ConfiguredIndicator[] {
-  return indicators.map((indicator) => ({
-    ...indicator,
-    processIds: indicator.processIds?.length ? [...new Set(indicator.processIds)] : [indicator.processId],
-    evaluationRules:
-      indicator.evaluationRules ?? buildDefaultEvaluationRules(indicator.metric),
-    schedule: indicator.schedule ?? {
+  return indicators.map((indicator) => {
+    const schedule = indicator.schedule ?? {
       "2025": buildQuarterSchedule(2025),
       "2026": buildQuarterSchedule(2026),
-    },
-  }));
+    };
+    return {
+      ...indicator,
+      processIds: indicator.processIds?.length ? [...new Set(indicator.processIds)] : [indicator.processId],
+      evaluationRules:
+        indicator.evaluationRules ?? buildDefaultEvaluationRules(indicator.metric),
+      schedule,
+      captureWindows: indicator.captureWindows ?? Object.fromEntries(
+        Object.keys(schedule).map((year) => [year, buildDefaultCaptureWindows(Number(year))]),
+      ),
+    };
+  });
 }
 
 export function getIndicatorProcessIds(
@@ -307,13 +326,14 @@ export function canSubmitIndicator(
   quarter: Quarter,
   now = new Date(),
 ) {
-  const scheduledDate = getIndicatorScheduleDate(indicator, year, quarter);
-  const currentDate = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
-  return Boolean(scheduledDate) && scheduledDate === currentDate;
+  const window = indicator.captureWindows?.[String(year)]?.[quarter];
+  if (!window) return false;
+  const opensAt = new Date(window.opensAt);
+  const closesAt = new Date(window.closesAt);
+  return !Number.isNaN(opensAt.getTime())
+    && !Number.isNaN(closesAt.getTime())
+    && now >= opensAt
+    && now <= closesAt;
 }
 
 function clamp(value: number, minimum: number, maximum: number) {

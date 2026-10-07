@@ -64,7 +64,11 @@ export async function uploadAttachment(
   const supabase = createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
-  await assertAdministrator(supabase, userData.user.id);
+  if (scope.moduleId === "indicators" && scope.resourceType === "indicator_result") {
+    await assertIndicatorCapture(supabase, scope);
+  } else {
+    await assertAdministrator(supabase, userData.user.id);
+  }
 
   const attachmentId = crypto.randomUUID();
   const objectPath = [
@@ -82,7 +86,7 @@ export async function uploadAttachment(
     contentType: file.type || "application/octet-stream",
     upsert: false,
   });
-  if (uploaded.error) throw new Error(uploaded.error.message);
+  if (uploaded.error) throw new Error("No fue posible cargar la evidencia.");
 
   if (replace) {
     const previous = await supabase.from("file_objects")
@@ -91,7 +95,7 @@ export async function uploadAttachment(
       .eq("is_current", true);
     if (previous.error) {
       await supabase.storage.from(privateBucket).remove([objectPath]);
-      throw new Error(previous.error.message);
+      throw new Error("No fue posible reemplazar la evidencia.");
     }
   }
 
@@ -123,7 +127,7 @@ export async function uploadAttachment(
   if (result.error) {
     if (replace) await supabase.from("file_objects").update({ is_current: true }).eq("id", replace.id);
     await supabase.storage.from(privateBucket).remove([objectPath]);
-    throw new Error(result.error.message);
+    throw new Error("No fue posible registrar la evidencia.");
   }
   return result.data.id;
 }
@@ -202,5 +206,31 @@ async function assertAdministrator(
     .maybeSingle();
   if (error || data?.status !== "active" || data.user_type !== "administrator") {
     throw new Error("Solo el administrador puede cargar, editar o eliminar documentos.");
+  }
+}
+
+async function assertIndicatorCapture(
+  supabase: ReturnType<typeof createClient>,
+  scope: AttachmentScope,
+) {
+  if (!scope.processId) {
+    throw new Error("Este indicador no pertenece a uno de tus procesos asignados.");
+  }
+  const matched = /^([^:]+):(\d{4}):(Q[1-4])$/.exec(scope.resourceKey);
+  if (!matched) throw new Error("El periodo de captura no está configurado.");
+  const { data, error } = await supabase.rpc("indicator_capture_status", {
+    requested_code: matched[1],
+    requested_year: Number(matched[2]),
+    requested_quarter: matched[3],
+  });
+  if (error) throw new Error("No fue posible validar el permiso de captura.");
+  if (data === "process") {
+    throw new Error("Este indicador no pertenece a uno de tus procesos asignados.");
+  }
+  if (data === "permission") {
+    throw new Error("No tienes permiso para capturar resultados de este indicador.");
+  }
+  if (data !== "allowed") {
+    throw new Error("El periodo de captura está cerrado. Consulta la fecha de apertura y cierre.");
   }
 }

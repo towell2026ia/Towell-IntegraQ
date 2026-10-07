@@ -29,6 +29,7 @@ type ProfileRow = {
     name: string;
     kind: "internal" | "customer" | "supplier";
   } | null;
+  workspace_mode?: "demo" | "production" | null;
 };
 
 const userTypeLabels: Record<ProfileRow["user_type"], UserType> = {
@@ -154,6 +155,10 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     documentAccess,
     continuousImprovementRole:
       profile?.continuous_improvement_role || undefined,
+    workspaceMode:
+      profile?.workspace_mode === "demo" || appMetadata.workspace_mode === "demo"
+        ? "demo"
+        : "production",
     externalParty:
       profile?.external_party_kind &&
       profile.external_party_id &&

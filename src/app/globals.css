@@ -6402,6 +6402,9 @@ button:disabled {
 .indicator-catalog-search { display: flex; align-items: center; gap: 12px; padding: 12px 15px; background: #f8faf8; border-bottom: 1px solid var(--line); }
 .indicator-catalog-search > label { min-height: 36px; }
 .indicator-catalog-search > span { flex: 0 0 auto; color: var(--muted); font-size: 8px; font-weight: 800; }
+.indicator-default-window > label { display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 9px; font-weight: 800; }
+.indicator-default-window input { width: 72px; padding: 8px; background: #fff; border: 1px solid var(--line-strong); border-radius: 5px; }
+.indicator-default-window > span { margin-right: auto; }
 .indicator-catalog-row { display: grid; min-height: 62px; grid-template-columns: 66px minmax(250px, 1fr) minmax(150px, 0.45fr) 32px 32px; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); }
 .indicator-catalog-row:last-child { border-bottom: 0; }
 .indicator-catalog-row code { color: var(--primary); font-size: 8px; font-weight: 850; }
@@ -6429,6 +6432,10 @@ button:disabled {
 .indicator-rules-fieldset label.rule-noncompliant { border-top-color: var(--red); }
 .indicator-schedule-fieldset > div { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
 .indicator-schedule-fieldset label { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.indicator-window-state { align-self: flex-start; padding: 3px 7px; border-radius: 999px; font-size: 7px; font-style: normal; font-weight: 850; text-transform: uppercase; }
+.indicator-window-state.scheduled { color: #795411; background: #fff0ca; }
+.indicator-window-state.open { color: var(--green-strong); background: var(--green-soft); }
+.indicator-window-state.closed { color: var(--muted); background: #ecefed; }
 .indicator-rules-fieldset p, .indicator-schedule-fieldset p { margin: 9px 0 0; color: var(--muted); font-size: 8px; }
 .indicator-editor-modal form > footer, .indicator-delete-modal > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 15px; background: #f8faf8; border-top: 1px solid var(--line); }
 .indicator-delete-modal { width: min(480px, calc(100vw - 28px)); }

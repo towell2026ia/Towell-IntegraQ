@@ -45,10 +45,30 @@ describe("indicator catalog", () => {
     )).toBe(true);
   });
 
-  it("only opens capture on the programmed date", () => {
+  it("uses the standard post-quarter capture window instead of the scheduled date", () => {
     const indicator = buildInitialIndicatorDefinitions()[0];
-    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-09-30T12:00:00-06:00"))).toBe(true);
-    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-09-29T12:00:00-06:00"))).toBe(false);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-09-30T12:00:00-06:00"))).toBe(false);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-01T00:00:00-06:00"))).toBe(true);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-15T23:59:59-06:00"))).toBe(true);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-16T00:00:00-06:00"))).toBe(false);
+  });
+
+  it("uses the Supabase capture window when one is configured", () => {
+    const indicator = {
+      ...buildInitialIndicatorDefinitions()[0],
+      captureWindows: {
+        "2026": {
+          Q1: { opensAt: "2026-03-31T08:00:00-06:00", closesAt: "2026-03-31T18:00:00-06:00" },
+          Q2: { opensAt: "2026-06-30T08:00:00-06:00", closesAt: "2026-06-30T18:00:00-06:00" },
+          Q3: { opensAt: "2026-10-07T08:00:00-06:00", closesAt: "2026-10-07T18:00:00-06:00" },
+          Q4: { opensAt: "2026-12-31T08:00:00-06:00", closesAt: "2026-12-31T18:00:00-06:00" },
+        },
+      },
+    };
+
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-07T12:00:00-06:00"))).toBe(true);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-07T07:59:59-06:00"))).toBe(false);
+    expect(canSubmitIndicator(indicator, 2026, "Q3", new Date("2026-10-07T18:00:01-06:00"))).toBe(false);
   });
 
   it("creates and applies the three administrative evaluation rules", () => {

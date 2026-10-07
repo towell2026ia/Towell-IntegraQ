@@ -59,6 +59,7 @@ export interface ActiveSession {
   documentAccess?: ProcessDocumentAccess[];
   continuousImprovementRole?: ContinuousImprovementRole;
   externalParty?: ExternalPartyScope;
+  workspaceMode?: "demo" | "production";
 }
 
 export function isAdministrator(session: ActiveSession) {
@@ -91,6 +92,10 @@ export function isExternalUser(session: ActiveSession) {
   return session.userType === "Cliente" || session.userType === "Proveedor";
 }
 
+export function isDemoSession(session: ActiveSession) {
+  return session.workspaceMode === "demo";
+}
+
 export const activeSession: ActiveSession = {
   userId: "USR-FJHR-001",
   name: "Francisco Javier Hernández Retana",
@@ -106,4 +111,5 @@ export const activeSession: ActiveSession = {
   moduleActionPermissions: [],
   continuousImprovementRole: "manager",
   positionId: "PU-07",
+  workspaceMode: "production",
 };

@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   ALL_INDICATOR_AREAS,
+  applyIndicatorRuntimeAccess,
   canManageIndicatorCatalog,
   canEditIndicatorPeriod,
   canUpdateIndicatorResult,
   canViewIndicator,
   getAccessibleIndicators,
   getDefaultIndicatorArea,
+  getIndicatorCaptureDenialMessage,
+  getIndicatorCaptureDenialReason,
   matchesIndicatorArea,
 } from "@/lib/indicator-access";
 import { buildInitialIndicatorDefinitions } from "@/lib/indicator-data";
@@ -66,7 +69,7 @@ describe("indicator access policy", () => {
     expect(canUpdateIndicatorResult(user, sharedObjective)).toBe(true);
   });
 
-  it("keeps a process viewer from capturing indicator results", () => {
+  it("keeps a process viewer without indicators:update from capturing results", () => {
     const viewer: ActiveSession = {
       ...user,
       documentAccess: [{
@@ -78,6 +81,22 @@ describe("indicator access policy", () => {
     };
     expect(canViewIndicator(viewer, qualityIndicator)).toBe(true);
     expect(canUpdateIndicatorResult(viewer, qualityIndicator)).toBe(false);
+  });
+
+  it("regression Karen: a document viewer can capture when indicators:update is enabled", () => {
+    const karen: ActiveSession = {
+      ...user,
+      name: "Karen",
+      documentAccess: [{
+        processId: "P-08",
+        role: "viewer",
+        inheritedFromPositionId: "PU-KAREN",
+      }],
+      moduleActionPermissions: [{ moduleId: "indicators", action: "update" }],
+    };
+
+    expect(canViewIndicator(karen, qualityIndicator)).toBe(true);
+    expect(canUpdateIndicatorResult(karen, qualityIndicator)).toBe(true);
   });
 
   it("gives administrators the complete indicator scope by default", () => {
@@ -96,7 +115,8 @@ describe("indicator access policy", () => {
   });
 
   it("keeps the programmed capture window for standard users", () => {
-    expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-09-30T12:00:00-06:00"))).toBe(true);
+    expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-10-10T12:00:00-06:00"))).toBe(true);
+    expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-09-30T12:00:00-06:00"))).toBe(false);
     expect(canEditIndicatorPeriod(user, qualityIndicator, 2026, "Q3", new Date("2026-09-10T12:00:00-06:00"))).toBe(false);
     expect(canEditIndicatorPeriod(user, qualityIndicator, 2030, "Q4", new Date("2026-09-10T12:00:00-06:00"))).toBe(false);
   });
@@ -104,5 +124,54 @@ describe("indicator access policy", () => {
   it("keeps standard users inside their assigned area", () => {
     expect(getDefaultIndicatorArea(user)).toBe("Calidad");
     expect(matchesIndicatorArea(user, qualityIndicator, ALL_INDICATOR_AREAS)).toBe(false);
+  });
+
+  it.each([
+    ["admin con ventana cerrada", admin, "2026-10-08T12:00:00-06:00", true, null],
+    ["interno autorizado con permiso y ventana abierta", user, "2026-10-07T12:00:00-06:00", true, null],
+    ["interno autorizado con ventana cerrada", user, "2026-10-08T12:00:00-06:00", false, "window"],
+    ["interno autorizado sin permiso", { ...user, moduleActionPermissions: [] }, "2026-10-07T12:00:00-06:00", false, "permission"],
+    ["interno sin proceso con permiso", { ...user, assignedProcessIds: ["P-13"] }, "2026-10-07T12:00:00-06:00", false, "process"],
+    ["externo con datos de permiso artificiales", { ...user, userType: "Cliente" as const }, "2026-10-07T12:00:00-06:00", false, "process"],
+  ])("aplica la matriz de captura: %s", (_case, session, date, allowed, reason) => {
+    const indicator = {
+      ...qualityIndicator,
+      captureWindows: {
+        "2026": {
+          Q1: { opensAt: "2026-03-31T08:00:00-06:00", closesAt: "2026-03-31T18:00:00-06:00" },
+          Q2: { opensAt: "2026-06-30T08:00:00-06:00", closesAt: "2026-06-30T18:00:00-06:00" },
+          Q3: { opensAt: "2026-10-07T08:00:00-06:00", closesAt: "2026-10-07T18:00:00-06:00" },
+          Q4: { opensAt: "2026-12-31T08:00:00-06:00", closesAt: "2026-12-31T18:00:00-06:00" },
+        },
+      },
+    };
+
+    expect(canEditIndicatorPeriod(session, indicator, 2026, "Q3", new Date(date))).toBe(allowed);
+    expect(getIndicatorCaptureDenialReason(session, indicator, 2026, "Q3", new Date(date))).toBe(reason);
+  });
+
+  it("revalidates current process and capture permissions without recreating the session", () => {
+    const revoked = applyIndicatorRuntimeAccess(user, {
+      administrator: false,
+      assignedProcessIds: ["P-13"],
+      canUpdate: false,
+      canView: true,
+    });
+    expect(revoked.assignedProcessIds).toEqual(["P-13"]);
+    expect(canUpdateIndicatorResult(revoked, qualityIndicator)).toBe(false);
+
+    const restored = applyIndicatorRuntimeAccess(revoked, {
+      administrator: false,
+      assignedProcessIds: ["P-08"],
+      canUpdate: true,
+      canView: true,
+    });
+    expect(canUpdateIndicatorResult(restored, qualityIndicator)).toBe(true);
+  });
+
+  it("uses clear denial messages", () => {
+    expect(getIndicatorCaptureDenialMessage("permission")).toBe("No tienes permiso para capturar resultados de este indicador.");
+    expect(getIndicatorCaptureDenialMessage("process")).toBe("Este indicador no pertenece a uno de tus procesos asignados.");
+    expect(getIndicatorCaptureDenialMessage("window")).toBe("El periodo de captura está cerrado. Consulta la fecha de apertura y cierre.");
   });
 });

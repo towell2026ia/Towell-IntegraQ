@@ -49,6 +49,7 @@ import { ProcessesModule } from "@/components/modules/processes-module";
 import { RisksOpportunitiesModule } from "@/components/modules/risks-opportunities-module";
 import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal-module";
 import { SuppliersModule } from "@/components/modules/suppliers-module";
+import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import {
   demoCorrectiveActions,
   demoMeasurementAssets,
@@ -84,10 +85,11 @@ import { buildHomeDashboard } from "@/lib/home-dashboard";
 import {
   buildInitialIndicatorDefinitions,
   buildInitialIndicatorResults,
-  normalizeConfiguredIndicators,
   type ConfiguredIndicator,
   type IndicatorResults,
 } from "@/lib/indicator-data";
+import { applyIndicatorRuntimeAccess } from "@/lib/indicator-access";
+import { DEFAULT_CAPTURE_DAYS_AFTER_CLOSE } from "@/lib/indicators/indicator-windows";
 import {
   buildDemoManagementReviewHistory,
   type ManagementReviewRecord,
@@ -97,7 +99,7 @@ import {
   workspaceModuleMeta,
   type WorkspaceModuleId,
 } from "@/lib/navigation";
-import { isExternalUser, type ActiveSession } from "@/lib/session-data";
+import { isDemoSession, isExternalUser, type ActiveSession } from "@/lib/session-data";
 import {
   loadRiskWorkspace,
   saveRiskWorkspace,
@@ -177,6 +179,7 @@ export function IntegraQWorkspace({
   onSignOut: () => void;
   session: ActiveSession;
 }) {
+  const demoMode = isDemoSession(session);
   const [activeModule, setActiveModule] = useState<WorkspaceModuleId>(() =>
     getDefaultModuleForSession(session),
   );
@@ -192,11 +195,21 @@ export function IntegraQWorkspace({
   const [forms, setForms] = useState<AppFormDefinition[]>(() =>
     normalizeAppForms(appFormCatalog),
   );
-  const [indicatorDefinitions, setIndicatorDefinitions] = useState<ConfiguredIndicator[]>(
-    buildInitialIndicatorDefinitions,
+  const [demoIndicatorDefinitions, setDemoIndicatorDefinitions] = useState<ConfiguredIndicator[]>(
+    () => demoMode ? buildInitialIndicatorDefinitions() : [],
   );
-  const [indicatorResults, setIndicatorResults] = useState<IndicatorResults>(
-    buildInitialIndicatorResults,
+  const [demoIndicatorResults, setDemoIndicatorResults] = useState<IndicatorResults>(
+    () => demoMode ? buildInitialIndicatorResults() : {},
+  );
+  const [demoIndicatorCaptureDays, setDemoIndicatorCaptureDays] = useState(DEFAULT_CAPTURE_DAYS_AFTER_CLOSE);
+  const indicatorRuntime = useIndicatorRuntime(
+    !demoMode && !isExternalUser(session) && canAccessModule(session, "indicators"),
+  );
+  const indicatorDefinitions = demoMode ? demoIndicatorDefinitions : indicatorRuntime.definitions;
+  const indicatorResults = demoMode ? demoIndicatorResults : indicatorRuntime.results;
+  const indicatorSession = useMemo(
+    () => demoMode || !indicatorRuntime.access ? session : applyIndicatorRuntimeAccess(session, indicatorRuntime.access),
+    [demoMode, indicatorRuntime.access, session],
   );
   const [riskWorkspace, setRiskWorkspace] = useState<RiskWorkspaceState>(
     buildInitialRiskWorkspace,
@@ -239,8 +252,6 @@ export function IntegraQWorkspace({
         const savedAssets = window.localStorage.getItem("integraq.measurementAssets.v2");
         const savedDocuments = window.localStorage.getItem("integraq.controlledDocuments.v1");
         const savedForms = window.localStorage.getItem("integraq.appForms.v1");
-        const savedDefinitions = window.localStorage.getItem("integraq.indicatorDefinitions.v3") ?? window.localStorage.getItem("integraq.indicatorDefinitions.v2");
-        const savedResults = window.localStorage.getItem("integraq.indicatorResults.v3") ?? window.localStorage.getItem("integraq.indicatorResults.v2");
         const savedRiskWorkspace = window.localStorage.getItem("integraq.riskWorkspace.v1");
         const savedManagementReviews = window.localStorage.getItem("integraq.managementReviews.v2");
         const savedManagementReview = window.localStorage.getItem("integraq.managementReview.v1");
@@ -264,8 +275,6 @@ export function IntegraQWorkspace({
         setControlledDocuments(
           synchronizeAppFormDocuments(hydratedDocuments, hydratedForms),
         );
-        if (savedDefinitions) setIndicatorDefinitions(normalizeConfiguredIndicators(JSON.parse(savedDefinitions) as ConfiguredIndicator[]));
-        if (savedResults) setIndicatorResults(JSON.parse(savedResults) as IndicatorResults);
         if (savedRiskWorkspace) setRiskWorkspace(normalizeRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState));
         if (savedManagementReviews) {
           setManagementReviews(JSON.parse(savedManagementReviews) as ManagementReviewRecord[]);
@@ -331,12 +340,6 @@ export function IntegraQWorkspace({
     if (!storageReady) return;
     window.localStorage.setItem("integraq.appForms.v1", JSON.stringify(forms));
   }, [forms, storageReady]);
-
-  useEffect(() => {
-    if (!storageReady) return;
-    window.localStorage.setItem("integraq.indicatorDefinitions.v3", JSON.stringify(indicatorDefinitions));
-    window.localStorage.setItem("integraq.indicatorResults.v3", JSON.stringify(indicatorResults));
-  }, [indicatorDefinitions, indicatorResults, storageReady]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -550,7 +553,7 @@ export function IntegraQWorkspace({
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
           {activeModule === "documents" ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
-          {activeModule === "indicators" ? <IndicatorsModule definitions={indicatorDefinitions} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} onDefinitionsChange={setIndicatorDefinitions} onResultsChange={setIndicatorResults} results={indicatorResults} session={session} /> : null}
+          {activeModule === "indicators" ? <IndicatorsModule captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
           {activeModule === "risks" ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}

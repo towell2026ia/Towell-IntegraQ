@@ -101,6 +101,30 @@ describe("organization-driven user access", () => {
     expect(account?.assignedModuleIds).toContain("continuous-improvement");
   });
 
+  it("preserves indicator capture independently from a viewer document role", () => {
+    const account = createUserAccessAccount({
+      id: "USR-KAREN",
+      fullName: "Karen",
+      email: "karen@towell.test",
+      userType: "Usuario interno",
+      positionId: "PU-16",
+      documentAccess: [{
+        processId: "P-08",
+        role: "viewer",
+        inheritedFromPositionId: "PU-16",
+      }],
+      moduleActionPermissions: [{ moduleId: "indicators", action: "update" }],
+      createdAt: "2026-10-07T12:00:00.000Z",
+    });
+
+    expect(account?.documentAccess[0]?.role).toBe("viewer");
+    expect(account?.moduleActionPermissions).toEqual(expect.arrayContaining([
+      { moduleId: "indicators", action: "view" },
+      { moduleId: "indicators", action: "update" },
+    ]));
+    expect(account?.assignedModuleIds).toContain("indicators");
+  });
+
   it("keeps an external customer on one company portal", () => {
     const account = createUserAccessAccount({
       id: "EXT-CLI-002",
