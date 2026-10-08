@@ -24,10 +24,15 @@ type ProfileRow = {
   external_party_kind: "customer" | "supplier" | null;
   external_party_id: string | null;
   external_party_name: string | null;
+  external_site_id: string | null;
   external_party: {
     code: string;
     name: string;
     kind: "internal" | "customer" | "supplier";
+  } | null;
+  external_site: {
+    code: string;
+    name: string;
   } | null;
   workspace_mode?: "demo" | "production" | null;
 };
@@ -70,7 +75,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     await Promise.all([
       supabase
         .from("profiles")
-        .select("*, external_party:organizations!profiles_external_party_id_fkey(code,name,kind)")
+        .select("*, external_party:organizations!profiles_external_party_id_fkey(code,name,kind), external_site:external_company_sites!profiles_external_site_id_fkey(code,name)")
         .eq("id", claims.sub)
         .maybeSingle(),
       supabase
@@ -165,9 +170,13 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
       (profile.external_party?.name || profile.external_party_name)
         ? {
             kind: profile.external_party_kind,
-            companyId: profile.external_party?.code || profile.external_party_id,
+            companyId: profile.external_party_id,
+            companyCode: profile.external_party?.code,
             companyName:
               profile.external_party?.name || profile.external_party_name || "",
+            siteId: profile.external_site_id || undefined,
+            siteCode: profile.external_site?.code,
+            siteName: profile.external_site?.name,
           }
         : undefined,
   };

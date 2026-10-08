@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -30,7 +30,8 @@ describe("indicator source of truth", () => {
   });
 
   it("does not expose indicators through the generic workspace repository", () => {
-    const genericAreas = readFileSync(join(process.cwd(), "src/lib/workspace-data.ts"), "utf8");
+    const repositoryPath = join(process.cwd(), "src/lib/workspace-data.ts");
+    const genericAreas = existsSync(repositoryPath) ? readFileSync(repositoryPath, "utf8") : "";
 
     expect(genericAreas).not.toContain('"indicatorDefinitions"');
     expect(genericAreas).not.toContain('"indicatorResults"');

@@ -15,6 +15,11 @@ export function isWithinScope(user: ActiveSession, grant: PermissionGrant, recor
     case "process": return Boolean(grant.processId && record.processId === grant.processId);
     case "own_records": return record.ownerId === (user.authUserId ?? user.userId) || record.createdBy === (user.authUserId ?? user.userId);
     case "assigned_records": return Boolean(record.assignedUserIds?.includes(user.authUserId ?? user.userId));
-    case "company": return Boolean(grant.companyId && record.companyId === grant.companyId && user.externalParty?.companyId === grant.companyId);
+    case "company": return Boolean(
+      grant.companyId
+      && record.companyId === grant.companyId
+      && user.externalParty?.companyId === grant.companyId
+      && (!user.externalParty.siteId || !record.siteId || record.siteId === user.externalParty.siteId),
+    );
   }
 }

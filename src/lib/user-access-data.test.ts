@@ -140,4 +140,21 @@ describe("organization-driven user access", () => {
     expect(session.assignedProcessIds).toEqual([]);
     expect(session.externalParty?.companyId).toBe("customer-002");
   });
+
+  it("preserves the optional site scope for an external supplier", () => {
+    const account = createUserAccessAccount({
+      id: "EXT-PROV-001",
+      fullName: "Responsable planta A",
+      email: "planta-a@example.test",
+      userType: "Proveedor",
+      companyId: "company-anahuac",
+      companyName: "Anáhuac",
+      siteId: "site-035-a",
+      siteCode: "035-A",
+      siteName: "Planta Algodón anillo",
+      createdAt: "2026-10-08T12:00:00.000Z",
+    });
+    const session = buildSessionFromAccount(account!);
+    expect(session.externalParty).toMatchObject({ companyId: "company-anahuac", siteId: "site-035-a", siteCode: "035-A" });
+  });
 });

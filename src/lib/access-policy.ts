@@ -86,11 +86,13 @@ export function canAccessCompanyRecord(
   session: ActiveSession,
   kind: ExternalPartyKind,
   companyId: string,
+  siteId?: string,
 ) {
   if (isAdministrator(session)) return true;
   return (
     getExternalKindForSession(session) === kind &&
     session.externalParty?.kind === kind &&
-    session.externalParty.companyId === companyId
+    session.externalParty.companyId === companyId &&
+    (!session.externalParty.siteId || !siteId || session.externalParty.siteId === siteId)
   );
 }

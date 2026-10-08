@@ -26,6 +26,13 @@ describe("authorize", () => {
     expect(authorize({ user: customer, permission: "documents.file.read", record: { companyId: "customer-b" } }).reason).toBe("OUTSIDE_SCOPE");
   });
 
+  it("limits a site-scoped supplier while retaining company-wide records", () => {
+    const supplier: ActiveSession = { ...internal, userType: "Proveedor", assignedProcessIds: [], moduleActionPermissions: [], externalParty: { kind: "supplier", companyId: "anahuac", companyName: "Anáhuac", siteId: "035-a" } };
+    expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac" } }).allowed).toBe(true);
+    expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac", siteId: "035-a" } }).allowed).toBe(true);
+    expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac", siteId: "035-oe" } }).reason).toBe("OUTSIDE_SCOPE");
+  });
+
   it("expires temporary grants", () => {
     expect(authorize({ user: internal, permission: "audits.execute", record: { assignedUserIds: ["u1"] }, grants: [{ permission: "audits.execute", scope: "assigned_records", endsAt: "2026-01-01T00:00:00Z" }], now: new Date("2026-09-07T00:00:00Z") }).reason).toBe("FORBIDDEN");
   });

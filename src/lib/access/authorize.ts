@@ -24,7 +24,7 @@ export function can(input: AuthorizationInput) {
 function deriveLegacyGrants(user: ActiveSession, permission: string): PermissionGrant[] {
   if (user.externalParty) {
     const externalAllowed = permission.endsWith(".read") || permission.includes("evidence.submit");
-    return externalAllowed ? [{ permission, scope: "company", companyId: user.externalParty.companyId }] : [];
+    return externalAllowed ? [{ permission, scope: "company", companyId: user.externalParty.companyId, siteId: user.externalParty.siteId }] : [];
   }
   const aliases: Record<string, string[]> = {
     "documents.file.submit": ["documents.file.edit"],

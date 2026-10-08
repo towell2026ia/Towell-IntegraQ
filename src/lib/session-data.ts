@@ -12,7 +12,11 @@ export type ExternalPartyKind = "customer" | "supplier";
 export interface ExternalPartyScope {
   kind: ExternalPartyKind;
   companyId: string;
+  companyCode?: string;
   companyName: string;
+  siteId?: string;
+  siteCode?: string;
+  siteName?: string;
 }
 
 export type DocumentAccessRole = "viewer" | "modifier" | "authorizer";

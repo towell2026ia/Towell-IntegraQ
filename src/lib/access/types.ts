@@ -11,6 +11,7 @@ export interface PermissionGrant {
   areaId?: string;
   processId?: string;
   companyId?: string;
+  siteId?: string;
   startsAt?: string;
   endsAt?: string;
 }
@@ -23,6 +24,7 @@ export interface AuthorizationRecord {
   ownerId?: string;
   assignedUserIds?: string[];
   companyId?: string;
+  siteId?: string;
   createdBy?: string;
 }
 

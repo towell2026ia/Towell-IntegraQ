@@ -2,6 +2,7 @@
 
 import {
   Check,
+  BookOpenCheck,
   Eye,
   EyeOff,
   LayoutDashboard,
@@ -16,6 +17,7 @@ import type {
   HomeSectionConfiguration,
   HomeSectionScope,
 } from "@/lib/home-visibility";
+import { loadInstitutionalInformation, saveInstitutionalItem, type InstitutionalDocumentOption, type InstitutionalItem } from "@/lib/institutional-information-data";
 
 type ProcessOption = {
   id: string;
@@ -222,6 +224,39 @@ export function HomeSettingsModule() {
           ) : null}
         </section>
       )}
+      <InstitutionalSettings />
     </>
   );
+}
+
+function InstitutionalSettings() {
+  const [items, setItems] = useState<InstitutionalItem[]>([]);
+  const [documents, setDocuments] = useState<InstitutionalDocumentOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadInstitutionalInformation().then((result) => { if (!cancelled) { setItems(result.items); setDocuments(result.documents ?? []); } }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "No fue posible consultar la información institucional."); }).finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  function update(position: InstitutionalItem["position"], change: Partial<InstitutionalItem>) {
+    setItems((current) => current.map((item) => item.position === position ? { ...item, ...change } : item)); setError(""); setNotice("");
+  }
+
+  async function save(item: InstitutionalItem) {
+    setSaving(item.position); setError(""); setNotice("");
+    try { const result = await saveInstitutionalItem(item); setItems((current) => current.map((value) => value.position === result.item.position ? result.item : value)); setNotice(`${item.title} quedó actualizado.`); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible guardar la referencia institucional."); }
+    finally { setSaving(""); }
+  }
+
+  return <section className="institutional-settings-panel">
+    <header><span><BookOpenCheck size={20} /></span><div><p className="module-kicker">Documentos controlados</p><h3>Información institucional</h3><p>Configura referencias a la versión vigente; no se copian archivos en Inicio.</p></div></header>
+    {error ? <div className="form-error" role="alert">{error}</div> : null}{notice ? <div className="form-success" role="status"><Check size={15} /> {notice}</div> : null}
+    {loading ? <div className="home-settings-loading"><LoaderCircle className="spin" size={22} /> Cargando referencias…</div> : <div className="institutional-settings-grid">{items.map((item) => <article key={item.position}><header><div><strong>{item.title}</strong><small>{item.position}</small></div><label className="home-settings-switch"><input checked={item.active} type="checkbox" onChange={(event) => update(item.position, { active: event.target.checked })} /><span>{item.active ? "Activo" : "Oculto"}</span></label></header>{item.position === "CONFIDENTIALITY" ? <label>Contenido<select value={item.contentKind} onChange={(event) => update(item.position, { contentKind: event.target.value as "document" | "text", documentId: undefined, shortText: undefined })}><option value="text">Texto configurable</option><option value="document">Documento controlado</option></select></label> : null}{item.contentKind === "document" ? <label>Documento controlado<select value={item.documentId ?? ""} onChange={(event) => update(item.position, { documentId: event.target.value || undefined })}><option value="">Seleccionar documento</option>{documents.map((document) => <option disabled={document.currentRevision === undefined} key={document.id} value={document.id}>{document.code} · {document.title}{document.currentRevision === undefined ? " · sin versión vigente" : ` · Rev. ${document.currentRevision}`}</option>)}</select></label> : <label>Leyenda corta<textarea rows={4} value={item.shortText ?? ""} onChange={(event) => update(item.position, { shortText: event.target.value })} /></label>}<div className="institutional-visibility"><label><input checked={item.visibleToInternal} type="checkbox" onChange={(event) => update(item.position, { visibleToInternal: event.target.checked })} /> Usuarios internos</label><label><input checked={item.visibleToExternal} type="checkbox" onChange={(event) => update(item.position, { visibleToExternal: event.target.checked })} /> Usuarios externos</label></div><footer><span>{item.document ? `${item.document.code} · revisión ${item.document.revision}` : item.contentKind === "text" && item.shortText ? "Texto administrado" : "Sin contenido vigente"}</span><button className="button button-secondary" disabled={saving === item.position} onClick={() => void save(item)} type="button">{saving === item.position ? <LoaderCircle className="spin" size={14} /> : <Save size={14} />} Guardar</button></footer></article>)}</div>}
+  </section>;
 }

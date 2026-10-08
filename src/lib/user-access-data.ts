@@ -32,6 +32,9 @@ export interface UserAccessAccount {
   branch?: string;
   companyId?: string;
   companyName?: string;
+  siteId?: string;
+  siteCode?: string;
+  siteName?: string;
   status: UserAccountStatus;
   assignedProcessIds: string[];
   assignedModuleIds: WorkspaceModuleId[];
@@ -50,6 +53,9 @@ export interface CreateUserAccessInput {
   positionId?: string;
   companyId?: string;
   companyName?: string;
+  siteId?: string;
+  siteCode?: string;
+  siteName?: string;
   continuousImprovementRole?: ContinuousImprovementRole;
   documentAccess?: ProcessDocumentAccess[];
   moduleActionPermissions?: ModuleActionPermission[];
@@ -200,6 +206,9 @@ export function createUserAccessAccount(
     ...shared,
     companyId: input.companyId,
     companyName: input.companyName.trim(),
+    siteId: input.siteId,
+    siteCode: input.siteCode,
+    siteName: input.siteName,
     assignedProcessIds: [],
     assignedModuleIds: [portalId],
     moduleActionPermissions: [{ moduleId: portalId, action: "view" }],
@@ -261,6 +270,9 @@ export function buildSessionFromAccount(
             kind: externalKind,
             companyId: account.companyId,
             companyName: account.companyName,
+            siteId: account.siteId,
+            siteCode: account.siteCode,
+            siteName: account.siteName,
           }
         : undefined,
   };

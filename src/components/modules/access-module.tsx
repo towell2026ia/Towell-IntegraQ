@@ -9,7 +9,9 @@ import {
   LockKeyhole,
   Mail,
   Pencil,
+  Plus,
   Power,
+  MapPin,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -29,6 +31,14 @@ import {
 } from "@/lib/configuration-data";
 import { organizationPositions as fallbackPositions, type OrganizationPosition } from "@/lib/organization-data";
 import { loadOrganizationPositions, positionsChangedEvent } from "@/lib/organization-position-client";
+import { useExternalCompanies } from "@/hooks/use-external-companies";
+import {
+  saveExternalCompany,
+  saveExternalCompanySite,
+  type ExternalCompany,
+  type ExternalCompanyKind,
+  type ExternalCompanySite,
+} from "@/lib/external-company-data";
 import { workspaceModuleMeta } from "@/lib/navigation";
 import {
   editableSpecificPermissionGroups,
@@ -40,10 +50,6 @@ import {
   hasModuleAction,
   normalizeModulePermissions,
 } from "@/lib/module-permissions";
-import {
-  customerQualityCatalog,
-  supplierQualityCatalog,
-} from "@/lib/quality-parties-data";
 import type {
   ContinuousImprovementRole,
   DocumentAccessRole,
@@ -60,7 +66,7 @@ import {
   type UserAccessAccount,
 } from "@/lib/user-access-data";
 
-type AccessTab = "types" | "permissions" | "rules" | "users";
+type AccessTab = "types" | "permissions" | "rules" | "companies" | "users";
 
 export function AccessModule() {
   const [activeTab, setActiveTab] = useState<AccessTab>("types");
@@ -72,6 +78,7 @@ export function AccessModule() {
   const [loadError, setLoadError] = useState("");
   const [actionNotice, setActionNotice] = useState("");
   const [positions, setPositions] = useState<OrganizationPosition[]>(fallbackPositions);
+  const companyDirectory = useExternalCompanies();
 
   useEffect(() => {
     void loadAccounts();
@@ -163,7 +170,7 @@ export function AccessModule() {
     setActionNotice(
       payload.message ??
         (creating
-          ? `Usuario creado. Supabase envió la invitación a ${account.email}.`
+          ? `Usuario creado. Se envió la invitación a ${account.email}.`
           : "Usuario actualizado correctamente."),
     );
     setActiveTab("users");
@@ -198,6 +205,7 @@ export function AccessModule() {
             <button className={activeTab === "types" ? "segment-active" : ""} type="button" onClick={() => setActiveTab("types")}>Tipos de usuario</button>
             <button className={activeTab === "permissions" ? "segment-active" : ""} type="button" onClick={() => setActiveTab("permissions")}>Permisos</button>
             <button className={activeTab === "rules" ? "segment-active" : ""} type="button" onClick={() => setActiveTab("rules")}>Reglas</button>
+            <button className={activeTab === "companies" ? "segment-active" : ""} type="button" onClick={() => setActiveTab("companies")}>Empresas externas</button>
             <button className={activeTab === "users" ? "segment-active" : ""} type="button" onClick={() => setActiveTab("users")}>Usuarios</button>
           </div>
           <label className="panel-search wide">
@@ -209,9 +217,10 @@ export function AccessModule() {
         {activeTab === "types" ? <UserTypesTable items={visibleTypes} /> : null}
         {activeTab === "permissions" ? <PermissionMatrix items={visiblePermissionAreas} /> : null}
         {activeTab === "rules" ? <AccessRules items={visibleRules} /> : null}
+        {activeTab === "companies" ? <ExternalCompaniesMaster directory={companyDirectory} /> : null}
         {activeTab === "users" ? (
           loadingAccounts ? <div className="access-empty"><RefreshCw className="spin" size={24} /><p>Cargando usuarios y permisos...</p></div>
-            : loadError ? <div className="access-empty"><LockKeyhole size={24} /><h3>No fue posible consultar Supabase</h3><p>{loadError}</p><button className="button button-secondary" type="button" onClick={() => void loadAccounts()}><RefreshCw size={15} /> Reintentar</button></div>
+            : loadError ? <div className="access-empty"><LockKeyhole size={24} /><h3>No fue posible consultar los usuarios</h3><p>{loadError}</p><button className="button button-secondary" type="button" onClick={() => void loadAccounts()}><RefreshCw size={15} /> Reintentar</button></div>
               : <UserAccountsWorkspace
                   accounts={visibleAccounts}
                   allAccounts={accounts}
@@ -227,6 +236,8 @@ export function AccessModule() {
       {editingAccount !== undefined ? (
         <UserAccountModal
           account={editingAccount}
+          companies={companyDirectory.companies}
+          onCompaniesChange={companyDirectory.refresh}
           positions={positions}
           onClose={() => setEditingAccount(undefined)}
           onSave={saveAccount}
@@ -377,19 +388,25 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
   );
 }
 
-function UserAccountModal({ account, positions, onClose, onSave }: { account: UserAccessAccount | null; positions: OrganizationPosition[]; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
+function UserAccountModal({ account, companies, onCompaniesChange, positions, onClose, onSave }: { account: UserAccessAccount | null; companies: ExternalCompany[]; onCompaniesChange: () => Promise<ExternalCompany[]>; positions: OrganizationPosition[]; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
   const [fullName, setFullName] = useState(account?.fullName ?? "");
   const [email, setEmail] = useState(account?.email ?? "");
   const [userType, setUserType] = useState<UserType>(account?.userType ?? "Usuario interno");
   const [positionId, setPositionId] = useState(account?.positionId ?? "");
   const [companyId, setCompanyId] = useState(account?.companyId ?? "");
+  const [siteId, setSiteId] = useState(account?.siteId ?? "");
+  const [showCompanyCreator, setShowCompanyCreator] = useState(false);
+  const [companyCreatorError, setCompanyCreatorError] = useState("");
   const [documentAccess, setDocumentAccess] = useState<ProcessDocumentAccess[]>(account?.documentAccess ?? []);
   const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(account?.moduleActionPermissions ?? []);
   const [specificPermissions, setSpecificPermissions] = useState<SpecificPermissionState>(account?.specificPermissions ?? {});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const internal = userType === "Administrador" || userType === "Usuario interno";
-  const companyCatalog = userType === "Cliente" ? customerQualityCatalog : supplierQualityCatalog;
+  const companyKind: ExternalCompanyKind = userType === "Cliente" ? "customer" : "supplier";
+  const companyCatalog = companies.filter((company) => company.kind === companyKind && company.active);
+  const selectedCompany = companyCatalog.find((company) => company.id === companyId);
+  const siteCatalog = selectedCompany?.sites.filter((site) => site.active) ?? [];
   const continuousImprovementRole: ContinuousImprovementRole = hasModuleAction(
     moduleActionPermissions,
     "continuous-improvement",
@@ -407,6 +424,7 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
     setUserType(nextType);
     setPositionId("");
     setCompanyId("");
+    setSiteId("");
     setDocumentAccess([]);
     setModuleActionPermissions([]);
     setSpecificPermissions({});
@@ -475,14 +493,18 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
     event.preventDefault();
     setSaveError("");
     const company = companyCatalog.find((item) => item.id === companyId);
+    const site = company?.sites.find((item) => item.id === siteId);
     const built = createUserAccessAccount({
-      id: account?.id ?? `USR-${Date.now()}`,
+      id: account?.id ?? "USR-NUEVO",
       fullName,
       email,
       userType,
       positionId: internal ? positionId : undefined,
       companyId: internal ? undefined : company?.id,
       companyName: internal ? undefined : company?.name,
+      siteId: internal ? undefined : site?.id,
+      siteCode: internal ? undefined : site?.code,
+      siteName: internal ? undefined : site?.name,
       continuousImprovementRole: userType === "Usuario interno" ? continuousImprovementRole : undefined,
       documentAccess: userType === "Usuario interno" ? documentAccess : undefined,
       moduleActionPermissions: userType === "Usuario interno" ? moduleActionPermissions : undefined,
@@ -518,8 +540,13 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
             <label className="wide">Correo de acceso<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
             <label>Tipo de usuario<select value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
             {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
-            {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => setCompanyId(event.target.value)}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label> : null}
+            {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => { setCompanyId(event.target.value); setSiteId(""); }}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label> : null}
+            {!internal ? <label>Sucursal (opcional)<select disabled={!companyId || !siteCatalog.length} value={siteId} onChange={(event) => setSiteId(event.target.value)}><option value="">Toda la empresa</option>{siteCatalog.map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label> : null}
+            {!internal ? <div className="wide external-company-create-toggle"><button className="button button-secondary" type="button" onClick={() => setShowCompanyCreator((current) => !current)}><Plus size={14} /> Crear empresa</button><small>Registra la empresa sin salir del alta de usuario.</small></div> : null}
           </div>
+
+          {!internal && showCompanyCreator ? <QuickCompanyCreator kind={companyKind} onCancel={() => setShowCompanyCreator(false)} onError={setCompanyCreatorError} onSaved={async (company) => { await onCompaniesChange(); setCompanyId(company.id); setSiteId(company.sites[0]?.id ?? ""); setShowCompanyCreator(false); }} /> : null}
+          {companyCreatorError ? <div className="form-error" role="alert">{companyCreatorError}</div> : null}
 
           {userType === "Administrador" ? <div className="user-inheritance-preview"><div><ShieldCheck size={18} /><span><strong>Acceso total</strong><small>Todos los procesos, menús, acciones y configuraciones.</small></span></div></div> : null}
 
@@ -586,6 +613,76 @@ function UserAccountModal({ account, positions, onClose, onSave }: { account: Us
       </section>
     </div>
   );
+}
+
+function ExternalCompaniesMaster({ directory }: { directory: ReturnType<typeof useExternalCompanies> }) {
+  const [selectedId, setSelectedId] = useState("");
+  const [companyEditor, setCompanyEditor] = useState<ExternalCompany | "new" | null>(null);
+  const [siteEditor, setSiteEditor] = useState<ExternalCompanySite | "new" | null>(null);
+  const [error, setError] = useState("");
+  const selected = directory.companies.find((company) => company.id === selectedId) ?? directory.companies[0] ?? null;
+
+  async function refresh(preferredId?: string) {
+    const companies = await directory.refresh();
+    if (preferredId && companies.some((company) => company.id === preferredId)) setSelectedId(preferredId);
+  }
+
+  async function toggleCompany(company: ExternalCompany) {
+    setError("");
+    try {
+      await saveExternalCompany({ ...company, active: !company.active });
+      await refresh(company.id);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No fue posible actualizar la empresa.");
+    }
+  }
+
+  async function toggleSite(site: ExternalCompanySite) {
+    setError("");
+    try {
+      await saveExternalCompanySite({ ...site, active: !site.active });
+      await refresh(site.companyId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No fue posible actualizar la sucursal.");
+    }
+  }
+
+  if (directory.loading) return <div className="access-empty"><RefreshCw className="spin" size={24} /><p>Cargando empresas externas…</p></div>;
+  if (directory.error) return <div className="access-empty"><Building2 size={24} /><h3>No fue posible consultar las empresas</h3><p>{directory.error}</p><button className="button button-secondary" onClick={() => void directory.refresh()} type="button">Reintentar</button></div>;
+
+  return <div className="external-company-master">
+    <div className="external-company-toolbar"><div><strong>Maestro de empresas y sucursales</strong><small>La empresa es la identidad principal; cada planta conserva su código histórico.</small></div><button className="button button-primary" onClick={() => setCompanyEditor("new")} type="button"><Plus size={15} /> Nueva empresa</button></div>
+    {error ? <div className="form-error" role="alert">{error}</div> : null}
+    <div className="external-company-layout">
+      <div className="external-company-list">{directory.companies.map((company) => <button className={company.id === selected?.id ? "selected" : ""} key={company.id} onClick={() => setSelectedId(company.id)} type="button"><Building2 size={16} /><span><strong>{company.name}</strong><small>{company.code} · {company.kind === "supplier" ? "Proveedor" : "Cliente"} · {company.sites.length} sucursales</small></span><em className={company.active ? "active" : "inactive"}>{company.active ? "Activa" : "Inactiva"}</em></button>)}</div>
+      {selected ? <section className="external-company-detail"><header><div><span>{selected.code}</span><h3>{selected.name}</h3><p>{selected.kind === "supplier" ? "Empresa proveedora" : "Empresa cliente"}{selected.category ? ` · ${selected.category}` : ""}</p></div><div><button className="icon-button" onClick={() => setCompanyEditor(selected)} title="Editar empresa" type="button"><Pencil size={15} /></button><button className="icon-button" onClick={() => void toggleCompany(selected)} title={selected.active ? "Desactivar empresa" : "Reactivar empresa"} type="button"><Power size={15} /></button></div></header><div className="section-title-row"><h4>Plantas y sucursales</h4><button className="button button-secondary" onClick={() => setSiteEditor("new")} type="button"><Plus size={14} /> Nueva sucursal</button></div><div className="external-site-list">{selected.sites.map((site) => <article key={site.id}><MapPin size={16} /><span><strong>{site.name}</strong><small>{site.code}{site.address ? ` · ${site.address}` : ""}</small></span><em className={site.active ? "active" : "inactive"}>{site.active ? "Activa" : "Inactiva"}</em><button className="icon-button" onClick={() => setSiteEditor(site)} title="Editar sucursal" type="button"><Pencil size={14} /></button><button className="icon-button" onClick={() => void toggleSite(site)} title={site.active ? "Desactivar sucursal" : "Reactivar sucursal"} type="button"><Power size={14} /></button></article>)}</div>{!selected.sites.length ? <div className="user-access-empty"><MapPin size={16} /> Sin sucursales; los usuarios tendrán alcance de empresa.</div> : null}</section> : <div className="access-empty"><Building2 size={24} /><p>Crea la primera empresa externa.</p></div>}
+    </div>
+    {companyEditor ? <CompanyEditor company={companyEditor === "new" ? null : companyEditor} onClose={() => setCompanyEditor(null)} onSaved={async (company) => { await refresh(company.id); setCompanyEditor(null); }} /> : null}
+    {siteEditor && selected ? <SiteEditor company={selected} site={siteEditor === "new" ? null : siteEditor} onClose={() => setSiteEditor(null)} onSaved={async () => { await refresh(selected.id); setSiteEditor(null); }} /> : null}
+  </div>;
+}
+
+function CompanyEditor({ company, onClose, onSaved }: { company: ExternalCompany | null; onClose: () => void; onSaved: (company: ExternalCompany) => Promise<void> }) {
+  const [code, setCode] = useState(company?.code ?? "");
+  const [name, setName] = useState(company?.name ?? "");
+  const [kind, setKind] = useState<ExternalCompanyKind>(company?.kind ?? "supplier");
+  const [category, setCategory] = useState(company?.category ?? "");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(""); try { const result = await saveExternalCompany({ id: company?.id, code, name, kind, category, active: company?.active ?? true }); await onSaved(result.company); } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible guardar la empresa."); setSaving(false); } }
+  return <div className="quality-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="quality-modal external-company-modal" role="dialog" aria-modal="true" aria-labelledby="company-editor-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span>MAESTRO EXTERNO</span><h3 id="company-editor-title">{company ? "Editar empresa" : "Nueva empresa"}</h3></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={17} /></button></header><form onSubmit={submit}><label><span>Tipo</span><select disabled={Boolean(company)} value={kind} onChange={(event) => setKind(event.target.value as ExternalCompanyKind)}><option value="supplier">Proveedor</option><option value="customer">Cliente</option></select></label><label><span>Código</span><input required value={code} onChange={(event) => setCode(event.target.value)} /></label><label className="wide"><span>Nombre legal o comercial</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label>{kind === "supplier" ? <label className="wide"><span>Categoría</span><input value={category} onChange={(event) => setCategory(event.target.value)} placeholder="Hilaza, químicos, avíos…" /></label> : null}{error ? <div className="form-error wide">{error}</div> : null}<footer><button className="button button-secondary" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? "Guardando…" : "Guardar empresa"}</button></footer></form></section></div>;
+}
+
+function SiteEditor({ company, onClose, onSaved, site }: { company: ExternalCompany; onClose: () => void; onSaved: () => Promise<void>; site: ExternalCompanySite | null }) {
+  const [code, setCode] = useState(site?.code ?? ""); const [name, setName] = useState(site?.name ?? ""); const [address, setAddress] = useState(site?.address ?? ""); const [error, setError] = useState(""); const [saving, setSaving] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(""); try { await saveExternalCompanySite({ id: site?.id, companyId: company.id, code, name, address, active: site?.active ?? true }); await onSaved(); } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible guardar la sucursal."); setSaving(false); } }
+  return <div className="quality-modal-backdrop" role="presentation" onMouseDown={onClose}><section className="quality-modal external-company-modal" role="dialog" aria-modal="true" aria-labelledby="site-editor-title" onMouseDown={(event) => event.stopPropagation()}><header><div><span>{company.name}</span><h3 id="site-editor-title">{site ? "Editar sucursal" : "Nueva sucursal"}</h3></div><button className="icon-button" onClick={onClose} title="Cerrar" type="button"><X size={17} /></button></header><form onSubmit={submit}><label><span>Código histórico</span><input required value={code} onChange={(event) => setCode(event.target.value)} /></label><label><span>Nombre de planta o sucursal</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label><label className="wide"><span>Dirección</span><textarea rows={3} value={address} onChange={(event) => setAddress(event.target.value)} /></label>{error ? <div className="form-error wide">{error}</div> : null}<footer><button className="button button-secondary" onClick={onClose} type="button">Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? "Guardando…" : "Guardar sucursal"}</button></footer></form></section></div>;
+}
+
+function QuickCompanyCreator({ kind, onCancel, onError, onSaved }: { kind: ExternalCompanyKind; onCancel: () => void; onError: (message: string) => void; onSaved: (company: ExternalCompany) => Promise<void> }) {
+  const [code, setCode] = useState(""); const [name, setName] = useState(""); const [siteCode, setSiteCode] = useState(""); const [siteName, setSiteName] = useState(""); const [saving, setSaving] = useState(false);
+  async function save() { if (!code.trim() || !name.trim()) { onError("Código y nombre de empresa son obligatorios."); return; } setSaving(true); onError(""); try { const result = await saveExternalCompany({ code, name, kind }); let company = result.company; if (siteCode.trim() && siteName.trim()) { const siteResult = await saveExternalCompanySite({ companyId: company.id, code: siteCode, name: siteName }); company = { ...company, sites: [siteResult.site] }; } await onSaved(company); } catch (cause) { onError(cause instanceof Error ? cause.message : "No fue posible crear la empresa."); setSaving(false); } }
+  return <section className="quick-company-creator"><header><div><span>ALTA RÁPIDA</span><h4>Nueva {kind === "supplier" ? "empresa proveedora" : "empresa cliente"}</h4></div></header><div><label>Código<input value={code} onChange={(event) => setCode(event.target.value)} /></label><label>Nombre<input value={name} onChange={(event) => setName(event.target.value)} /></label><label>Sucursal inicial (opcional)<input value={siteName} onChange={(event) => setSiteName(event.target.value)} /></label><label>Código de sucursal<input value={siteCode} onChange={(event) => setSiteCode(event.target.value)} /></label></div><footer><button className="button button-secondary" onClick={onCancel} type="button">Cancelar</button><button className="button button-primary" disabled={saving} onClick={() => void save()} type="button">{saving ? "Creando…" : "Crear y seleccionar"}</button></footer></section>;
 }
 
 function UserTypesTable({ items }: { items: typeof userTypeCatalog[number][] }) {

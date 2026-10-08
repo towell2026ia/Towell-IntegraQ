@@ -33,7 +33,7 @@ export interface HomeSectionConfiguration {
 export const homeSectionDefinitions: ReadonlyArray<
   Pick<HomeSectionConfiguration, "id" | "label" | "description">
 > = [
-  { id: "quality-policy", label: "Política de Calidad", description: "Política general del Sistema de Gestión de Calidad." },
+  { id: "quality-policy", label: "Información institucional", description: "Política de Calidad, Código de Ética y confidencialidad desde documentos controlados." },
   { id: "quality-objectives", label: "Objetivos de Calidad", description: "Objetivos e indicadores vinculados con los procesos autorizados." },
   { id: "alerts", label: "Alertas", description: "Situaciones críticas o que requieren atención." },
   { id: "pending-tasks", label: "Pendientes", description: "Actividades bajo responsabilidad del usuario o de sus procesos." },

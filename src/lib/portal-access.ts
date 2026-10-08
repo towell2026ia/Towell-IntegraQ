@@ -15,6 +15,8 @@ import type { CorrectiveAction } from "@/lib/types";
 export interface PortalCompany {
   companyId: string;
   companyName: string;
+  siteId?: string;
+  siteName?: string;
 }
 
 const ADMIN_PREVIEW_COMPANY: Record<ExternalPartyKind, string> = {
@@ -39,8 +41,14 @@ export function resolvePortalCompany(
 
   if (!companyId) return null;
   const company = catalog.find((item) => item.id === companyId);
-  return company
-    ? { companyId: company.id, companyName: company.name }
+  if (company) return { companyId: company.id, companyName: company.name };
+  return matchingExternalType && session.externalParty
+    ? {
+        companyId: session.externalParty.companyId,
+        companyName: session.externalParty.companyName,
+        siteId: session.externalParty.siteId,
+        siteName: session.externalParty.siteName,
+      }
     : null;
 }
 

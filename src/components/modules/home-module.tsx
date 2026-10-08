@@ -17,6 +17,7 @@ import {
   FilePenLine,
   FileWarning,
   Gauge,
+  BookOpenCheck,
   ListChecks,
   Network,
   Plus,
@@ -30,7 +31,6 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import Image from "next/image";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
@@ -44,6 +44,7 @@ import {
 } from "@/lib/home-dashboard";
 import { workspaceModuleMeta, type WorkspaceModuleId } from "@/lib/navigation";
 import type { HomeSectionConfiguration } from "@/lib/home-visibility";
+import { getInstitutionalDocumentUrl, loadInstitutionalInformation, type InstitutionalItem } from "@/lib/institutional-information-data";
 
 interface HomeModuleProps {
   onNavigate: (module: WorkspaceModuleId, targetId?: string) => void;
@@ -93,38 +94,15 @@ const moduleIcons: Partial<Record<WorkspaceModuleId, LucideIcon>> = {
   organization: UserRound,
 };
 
-const homePolicyPosters = [
-  {
-    id: "quality-policy",
-    title: "Política de Calidad",
-    src: "/home/politica-calidad.png",
-  },
-  {
-    id: "environmental-policy",
-    title: "Política Ambiental",
-    src: "/home/politica-ambiental.png",
-  },
-  {
-    id: "safety-policy",
-    title: "Política de Seguridad e Higiene",
-    src: "/home/politica-seguridad-higiene.png",
-  },
-  {
-    id: "quality-objectives",
-    title: "Objetivos de Calidad",
-    src: "/home/objetivos-calidad.png",
-  },
-] as const;
-
-type HomePolicyPoster = (typeof homePolicyPosters)[number];
-
 export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleProps) {
   const [asOf] = useState(() => new Date());
   const [filters, setFilters] = useState<HomeDashboardFilters>(emptyHomeDashboardFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
-  const [selectedPoster, setSelectedPoster] = useState<HomePolicyPoster | null>(null);
+  const [institutionalItems, setInstitutionalItems] = useState<InstitutionalItem[]>([]);
+  const [selectedInstitutionalText, setSelectedInstitutionalText] = useState<InstitutionalItem | null>(null);
+  const [institutionalError, setInstitutionalError] = useState("");
   const [sectionConfigurations, setSectionConfigurations] = useState<
     HomeSectionConfiguration[] | undefined
   >(sources.sectionConfigurations);
@@ -143,9 +121,19 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
   }, []);
 
   useEffect(() => {
-    if (!selectedPoster) return;
+    let cancelled = false;
+    const refresh = async () => {
+      try { const result = await loadInstitutionalInformation(); if (!cancelled) { setInstitutionalItems(result.items.filter((item) => item.active && item.available)); setInstitutionalError(""); } }
+      catch (cause) { if (!cancelled) setInstitutionalError(cause instanceof Error ? cause.message : "No fue posible consultar la información institucional."); }
+    };
+    void refresh(); const onFocus = () => void refresh(); window.addEventListener("focus", onFocus);
+    return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedInstitutionalText) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedPoster(null);
+      if (event.key === "Escape") setSelectedInstitutionalText(null);
     };
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -154,7 +142,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [selectedPoster]);
+  }, [selectedInstitutionalText]);
 
   const dashboard = useMemo(
     () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
@@ -181,6 +169,13 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
     setSearchQuery("");
     setSearchFocused(false);
     onNavigate(module, targetId);
+  }
+
+  async function openInstitutionalItem(item: InstitutionalItem) {
+    setInstitutionalError("");
+    if (item.contentKind === "text") { setSelectedInstitutionalText(item); return; }
+    try { const result = await getInstitutionalDocumentUrl(item.position); window.open(result.signedUrl, "_blank", "noopener,noreferrer"); }
+    catch (cause) { setInstitutionalError(cause instanceof Error ? cause.message : "No fue posible abrir el documento institucional."); }
   }
 
   if (loading) return <HomeDashboardSkeleton />;
@@ -259,24 +254,11 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      {visibleSections.has("quality-policy") ? (
-        <section className="home-policy-gallery" aria-label="Políticas y objetivos de calidad">
-          {homePolicyPosters.map((poster) => (
-            <button
-              key={poster.id}
-              type="button"
-              aria-label={`Ampliar ${poster.title}`}
-              onClick={() => setSelectedPoster(poster)}
-            >
-              <Image
-                src={poster.src}
-                alt={poster.title}
-                fill
-                sizes="(max-width: 680px) 50vw, 25vw"
-              />
-              <span>{poster.title}</span>
-            </button>
-          ))}
+      {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
+        <section className="home-dashboard-section home-institutional-section" aria-label="Información institucional">
+          <SectionHeader eyebrow="Gobierno institucional" title="Información institucional" icon={BookOpenCheck} count={institutionalItems.length} />
+          <div className="home-institutional-list">{institutionalItems.map((item) => <article key={item.position}><span><BookOpenCheck size={18} /></span><div><strong>{item.title}</strong><small>{item.contentKind === "document" ? item.document ? `${item.document.code} · Revisión ${item.document.revision}` : "Documento vigente" : "Leyenda institucional"}</small></div><button className="button button-secondary" onClick={() => void openInstitutionalItem(item)} type="button">Ver</button></article>)}</div>
+          {institutionalError ? <div className="form-error" role="alert">{institutionalError}</div> : null}
         </section>
       ) : null}
 
@@ -442,22 +424,22 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         )}
       </section> : null}
 
-      {selectedPoster ? (
+      {selectedInstitutionalText ? (
         <div
           className="home-policy-viewer"
           role="presentation"
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setSelectedPoster(null);
+            if (event.target === event.currentTarget) setSelectedInstitutionalText(null);
           }}
         >
           <div role="dialog" aria-modal="true" aria-labelledby="home-policy-viewer-title">
             <header>
-              <h2 id="home-policy-viewer-title">{selectedPoster.title}</h2>
-              <button type="button" autoFocus aria-label="Cerrar imagen" title="Cerrar" onClick={() => setSelectedPoster(null)}>
+              <h2 id="home-policy-viewer-title">{selectedInstitutionalText.title}</h2>
+              <button type="button" autoFocus aria-label="Cerrar" title="Cerrar" onClick={() => setSelectedInstitutionalText(null)}>
                 <X size={20} />
               </button>
             </header>
-            <Image src={selectedPoster.src} alt={selectedPoster.title} width={2000} height={1500} sizes="94vw" />
+            <div className="home-institutional-text">{selectedInstitutionalText.shortText}</div>
           </div>
         </div>
       ) : null}

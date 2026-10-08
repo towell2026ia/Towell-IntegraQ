@@ -54,6 +54,7 @@ type ProfileRow = {
   continuous_improvement_role: "submitter" | "manager" | null;
   external_party_id: string | null;
   external_party_name: string | null;
+  external_site_id: string | null;
   created_at: string;
 };
 
@@ -80,7 +81,7 @@ export async function GET() {
   } catch (error) {
     console.error("No fue posible consultar las cuentas de acceso.", error);
     return NextResponse.json(
-      { error: "No fue posible consultar los usuarios en Supabase." },
+      { error: "No fue posible consultar los usuarios." },
       { status: 500 },
     );
   }
@@ -99,14 +100,16 @@ async function listAccounts() {
     modulePermissionsResult,
     moduleActionsResult,
     permissionOverridesResult,
+    externalSitesResult,
     authUsersResult,
   ] = await Promise.all([
-    admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,created_at").order("full_name"),
+    admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at").order("full_name"),
     admin.from("positions").select("id,name,branch"),
     admin.from("user_process_permissions").select("user_id,process_id,document_role,inherited_from_position_id"),
     admin.from("user_module_permissions").select("user_id,module_id,can_view"),
     admin.from("user_module_action_permissions").select("user_id,module_id,action"),
     admin.from("user_permission_overrides").select("user_id,allowed,permission:permissions(code)"),
+    admin.from("external_company_sites").select("id,code,name,company_id"),
     admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
   ]);
 
@@ -117,6 +120,7 @@ async function listAccounts() {
     modulePermissionsResult.error,
     moduleActionsResult.error,
     permissionOverridesResult.error,
+    externalSitesResult.error,
     authUsersResult.error,
   ].find(Boolean);
   if (firstError) {
@@ -130,6 +134,7 @@ async function listAccounts() {
     (authUsersResult.data.users ?? []).map((user) => [user.id, user.email ?? ""]),
   );
   const allModuleIds = Object.keys(workspaceModuleMeta) as WorkspaceModuleId[];
+  const externalSites = new Map((externalSitesResult.data ?? []).map((site) => [site.id, site]));
 
   const accounts = ((profilesResult.data ?? []) as ProfileRow[]).map((profile) => {
     const position = profile.position_id ? positions.get(profile.position_id) : null;
@@ -175,6 +180,10 @@ async function listAccounts() {
     );
 
     return {
+      ...(() => {
+        const site = profile.external_site_id ? externalSites.get(profile.external_site_id) : undefined;
+        return { siteId: site?.id, siteCode: site?.code, siteName: site?.name };
+      })(),
       id: profile.external_id,
       authUserId: profile.id,
       fullName: profile.full_name,
@@ -239,18 +248,35 @@ async function saveAccount(request: Request, create: boolean) {
   if (!account.fullName?.trim() || !account.email?.trim()) {
     return NextResponse.json({ error: "Nombre y correo son obligatorios." }, { status: 400 });
   }
-  if (
-    account.userType !== "Administrador" &&
-    account.userType !== "Usuario interno" &&
-    !isUuid(account.companyId)
-  ) {
+  const admin = createAdminClient();
+  const external = account.userType === "Cliente" || account.userType === "Proveedor";
+  if (external && !isUuid(account.companyId)) {
     return NextResponse.json(
-      { error: "La empresa externa debe existir primero en el catálogo de Supabase." },
+      { error: "Empresa no registrada. La empresa seleccionada todavía no está registrada en IntegraQ.", code: "COMPANY_NOT_REGISTERED" },
       { status: 400 },
     );
   }
-
-  const admin = createAdminClient();
+  if (external) {
+    const expectedKind = account.userType === "Cliente" ? "customer" : "supplier";
+    const companyResult = await admin.from("organizations").select("id,name,kind,active").eq("id", account.companyId).maybeSingle();
+    if (companyResult.error) throw companyResult.error;
+    if (!companyResult.data || companyResult.data.kind !== expectedKind || !companyResult.data.active) {
+      return NextResponse.json(
+        { error: "Empresa no registrada. La empresa seleccionada todavía no está registrada en IntegraQ.", code: "COMPANY_NOT_REGISTERED" },
+        { status: 400 },
+      );
+    }
+    account.companyName = companyResult.data.name;
+    if (account.siteId) {
+      const siteResult = await admin.from("external_company_sites").select("id,code,name,active").eq("id", account.siteId).eq("company_id", account.companyId).maybeSingle();
+      if (siteResult.error) throw siteResult.error;
+      if (!siteResult.data || !siteResult.data.active) {
+        return NextResponse.json({ error: "La sucursal seleccionada no pertenece a la empresa o está inactiva." }, { status: 400 });
+      }
+      account.siteCode = siteResult.data.code;
+      account.siteName = siteResult.data.name;
+    }
+  }
   let userId = account.authUserId;
   if (create) {
     const siteUrl = getPublicSiteUrl(request);
@@ -283,7 +309,6 @@ async function saveAccount(request: Request, create: boolean) {
   const { data: position } = account.positionId
     ? await admin.from("positions").select("name,branch,organization_id").eq("id", account.positionId).maybeSingle()
     : { data: null };
-  const external = account.userType === "Cliente" || account.userType === "Proveedor";
   const names = account.fullName.trim().split(/\s+/).filter(Boolean);
   const { error: profileError } = await admin
     .from("profiles")
@@ -312,6 +337,8 @@ async function saveAccount(request: Request, create: boolean) {
             : null,
       external_party_id: external ? account.companyId : null,
       external_party_name: external ? account.companyName ?? null : null,
+      external_site_id: external ? account.siteId ?? null : null,
+      site: external ? account.siteName ?? null : null,
     })
     .eq("id", userId);
   if (profileError) {
@@ -418,6 +445,8 @@ async function saveAccount(request: Request, create: boolean) {
       process_count: account.documentAccess.length,
       module_action_count: account.moduleActionPermissions.length,
       specific_permissions: account.specificPermissions ?? {},
+      external_company_id: external ? account.companyId : null,
+      external_site_id: external ? account.siteId ?? null : null,
     },
   });
 

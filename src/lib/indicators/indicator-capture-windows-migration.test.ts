@@ -16,7 +16,7 @@ describe("indicator capture window migration", () => {
   });
 
   it("preserves historical results while creating future periods", () => {
-    expect(migration).toContain("not exists (\n    select 1 from public.indicator_results");
+    expect(migration).toMatch(/not exists\s*\(\s*select 1 from public\.indicator_results/);
     expect(migration).toContain("on conflict (indicator_id, year, quarter) do nothing");
     expect(migration).not.toContain("delete from public.indicator_results");
   });
