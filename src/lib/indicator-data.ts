@@ -60,6 +60,8 @@ export interface IndicatorTargetRule {
   min?: number;
   max?: number;
   target?: number;
+  minOperator?: ">" | ">=";
+  maxOperator?: "<" | "<=";
   unit: "percent" | "weeks" | "currency" | "value";
 }
 
@@ -83,6 +85,7 @@ export const statusLabels: Record<IndicatorStatus, string> = {
 
 export function parseIndicatorMetric(metric: string): IndicatorTargetRule {
   const normalized = metric.replace(/\s+/g, " ").trim();
+  const normalizedOperators = normalized.replaceAll("≤", "<=").replaceAll("≥", ">=");
   const unit: IndicatorTargetRule["unit"] = normalized.includes("%")
     ? "percent"
     : /semana/i.test(normalized)
@@ -95,12 +98,29 @@ export function parseIndicatorMetric(metric: string): IndicatorTargetRule {
   );
 
   if (numbers.length >= 2 && /[,;]/.test(normalized)) {
-    return { type: "range", min: numbers[0], max: numbers[1], unit };
+    const conditions = Array.from(
+      normalizedOperators.matchAll(/(>=|<=|>|<|=)\s*(-?\d+(?:\.\d+)?)/g),
+    );
+    const minimum = conditions.find((match) => match[1] === ">" || match[1] === ">=");
+    const maximum = conditions.find((match) => match[1] === "<" || match[1] === "<=");
+    return {
+      type: "range",
+      min: minimum ? Number(minimum[2]) : numbers[0],
+      max: maximum ? Number(maximum[2]) : numbers[1],
+      minOperator: minimum?.[1] === ">" ? ">" : ">=",
+      maxOperator: maximum?.[1] === "<" ? "<" : "<=",
+      unit,
+    };
   }
 
   const target = numbers[0] ?? 0;
-  if (/≥|>=|>/.test(normalized)) return { type: "minimum", min: target, unit };
-  if (/≤|<=|</.test(normalized)) return { type: "maximum", max: target, unit };
+  const operator = normalizedOperators.match(/(>=|<=|>|<|=)/)?.[1];
+  if (operator === ">=" || operator === ">") {
+    return { type: "minimum", min: target, minOperator: operator, unit };
+  }
+  if (operator === "<=" || operator === "<") {
+    return { type: "maximum", max: target, maxOperator: operator, unit };
+  }
   return { type: "exact", target, unit };
 }
 
@@ -131,16 +151,22 @@ export function evaluateIndicator(
   const tolerance = Math.max(reference * 0.05, rule.unit === "percent" ? 0.5 : 1);
 
   if (rule.type === "minimum") {
-    if (value >= (rule.min ?? 0)) return "compliant";
-    return value >= (rule.min ?? 0) - tolerance ? "marginal" : "noncompliant";
+    const target = rule.min ?? 0;
+    if (rule.minOperator === ">" ? value > target : value >= target) return "compliant";
+    return value >= target - tolerance ? "marginal" : "noncompliant";
   }
   if (rule.type === "maximum") {
-    if (value <= (rule.max ?? 0)) return "compliant";
-    return value <= (rule.max ?? 0) + tolerance ? "marginal" : "noncompliant";
+    const target = rule.max ?? 0;
+    if (rule.maxOperator === "<" ? value < target : value <= target) return "compliant";
+    return value <= target + tolerance ? "marginal" : "noncompliant";
   }
   if (rule.type === "range") {
-    if (value >= (rule.min ?? 0) && value <= (rule.max ?? 0)) return "compliant";
-    if (value >= (rule.min ?? 0) - tolerance && value <= (rule.max ?? 0) + tolerance) {
+    const minimum = rule.min ?? 0;
+    const maximum = rule.max ?? minimum;
+    const aboveMinimum = rule.minOperator === ">" ? value > minimum : value >= minimum;
+    const belowMaximum = rule.maxOperator === "<" ? value < maximum : value <= maximum;
+    if (aboveMinimum && belowMaximum) return "compliant";
+    if (value >= minimum - tolerance && value <= maximum + tolerance) {
       return "marginal";
     }
     return "noncompliant";
@@ -184,18 +210,20 @@ export function buildDefaultEvaluationRules(metric: string): IndicatorEvaluation
   if (rule.type === "minimum") {
     const target = rule.min ?? 0;
     const marginal = roundRuleNumber(target - tolerance);
+    const operator = rule.minOperator ?? ">=";
     return {
-      compliant: `>=${roundRuleNumber(target)}`,
-      marginal: `>=${marginal},<${roundRuleNumber(target)}`,
+      compliant: `${operator}${roundRuleNumber(target)}`,
+      marginal: `>=${marginal},${operator === ">" ? "<=" : "<"}${roundRuleNumber(target)}`,
       noncompliant: `<${marginal}`,
     };
   }
   if (rule.type === "maximum") {
     const target = rule.max ?? 0;
     const marginal = roundRuleNumber(target + tolerance);
+    const operator = rule.maxOperator ?? "<=";
     return {
-      compliant: `<=${roundRuleNumber(target)}`,
-      marginal: `>${roundRuleNumber(target)},<=${marginal}`,
+      compliant: `${operator}${roundRuleNumber(target)}`,
+      marginal: `${operator === "<" ? ">=" : ">"}${roundRuleNumber(target)},<=${marginal}`,
       noncompliant: `>${marginal}`,
     };
   }
@@ -204,9 +232,11 @@ export function buildDefaultEvaluationRules(metric: string): IndicatorEvaluation
     const maximum = rule.max ?? minimum;
     const lower = roundRuleNumber(minimum - tolerance);
     const upper = roundRuleNumber(maximum + tolerance);
+    const minimumOperator = rule.minOperator ?? ">=";
+    const maximumOperator = rule.maxOperator ?? "<=";
     return {
-      compliant: `>=${roundRuleNumber(minimum)},<=${roundRuleNumber(maximum)}`,
-      marginal: `>=${lower},<${roundRuleNumber(minimum)};>${roundRuleNumber(maximum)},<=${upper}`,
+      compliant: `${minimumOperator}${roundRuleNumber(minimum)},${maximumOperator}${roundRuleNumber(maximum)}`,
+      marginal: `>=${lower},${minimumOperator === ">" ? "<=" : "<"}${roundRuleNumber(minimum)};${maximumOperator === "<" ? ">=" : ">"}${roundRuleNumber(maximum)},<=${upper}`,
       noncompliant: `<${lower};>${upper}`,
     };
   }
@@ -340,7 +370,7 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-function matchesEvaluationRule(value: number, expression: string) {
+export function matchesEvaluationRule(value: number, expression: string) {
   return expression
     .split(";")
     .map((alternative) => alternative.trim())
