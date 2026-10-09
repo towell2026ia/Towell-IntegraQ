@@ -54,8 +54,43 @@ alter table public.supplier_quality_evaluations
 alter table public.supplier_rncp_reports
   add column site_id uuid references public.external_company_sites(id) on delete restrict;
 
-alter table public.supplier_quality_evaluations
-  drop constraint supplier_quality_evaluations_supplier_id_period_start_period_end_key;
+do $$
+declare
+  legacy_constraint_name text;
+  legacy_constraint_count integer;
+begin
+  select count(*), min(candidate.conname)
+  into legacy_constraint_count, legacy_constraint_name
+  from (
+    select
+      constraint_record.conname::text as conname,
+      array_agg(attribute_record.attname::text order by key_column.ordinality) as column_names
+    from pg_constraint constraint_record
+    cross join lateral unnest(constraint_record.conkey)
+      with ordinality as key_column(attnum, ordinality)
+    join pg_attribute attribute_record
+      on attribute_record.attrelid = constraint_record.conrelid
+     and attribute_record.attnum = key_column.attnum
+    where constraint_record.conrelid =
+      'public.supplier_quality_evaluations'::regclass
+      and constraint_record.contype = 'u'
+    group by constraint_record.oid, constraint_record.conname
+  ) candidate
+  where candidate.column_names =
+    array['supplier_id', 'period_start', 'period_end']::text[];
+
+  if legacy_constraint_count <> 1 then
+    raise exception
+      'Expected exactly one legacy supplier evaluation UNIQUE constraint; found %',
+      legacy_constraint_count;
+  end if;
+
+  execute format(
+    'alter table public.supplier_quality_evaluations drop constraint %I',
+    legacy_constraint_name
+  );
+end;
+$$;
 create unique index supplier_quality_evaluations_scope_period_uidx
   on public.supplier_quality_evaluations(supplier_id, site_id, period_start, period_end)
   nulls not distinct;
