@@ -1,5 +1,6 @@
--- IQ-HOTFIX-IND-MASTER-01B: controlled production master bootstrap.
--- Prepared only. Applying this migration requires separate explicit authorization.
+-- IQ-HOTFIX-IND-MASTER-01D: controlled production master bootstrap operation.
+-- Prepared only. Executing this script requires separate explicit authorization.
+-- This file must remain outside supabase/migrations to prevent auto-execution.
 -- Inserts no indicator_results and imports no browser/localStorage data.
 
 begin;

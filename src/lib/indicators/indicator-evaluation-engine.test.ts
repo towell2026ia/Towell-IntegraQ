@@ -16,7 +16,10 @@ const engineMigration = readFileSync(
   "utf8",
 ).toLowerCase();
 const bootstrapMigration = readFileSync(
-  join(process.cwd(), "supabase/migrations/202610090002_indicator_master_bootstrap.sql"),
+  join(
+    process.cwd(),
+    "supabase/operations/indicator-master/20261009_indicator_master_bootstrap.sql",
+  ),
   "utf8",
 );
 const definitions = buildInitialIndicatorDefinitions();
@@ -130,6 +133,9 @@ describe("indicator evaluation expression engine", () => {
     expect(engineMigration).toContain("rule.marginal_rule");
     expect(engineMigration).toContain("rule.noncompliant_rule");
     expect(engineMigration).not.toMatch(/measured_value\s+between/);
+    expect(engineMigration).not.toMatch(
+      /insert\s+into\s+public\.indicator_(definitions|definition_processes|evaluation_rules|periods|results)/,
+    );
   });
 
   it("prepares an idempotent 52-definition bootstrap with no results", () => {
@@ -144,6 +150,24 @@ describe("indicator evaluation expression engine", () => {
     expect(bootstrapMigration).toContain("Indicator bootstrap postcondition failed: periods.");
     expect(bootstrapMigration).toContain(") <> 624 then");
     expect(bootstrapMigration).not.toMatch(/insert\s+into\s+public\.indicator_results/i);
+  });
+
+  it("keeps the data bootstrap outside automatic Supabase migrations", () => {
+    const automaticMigrationPath = join(
+      process.cwd(),
+      "supabase/migrations/202610090002_indicator_master_bootstrap.sql",
+    );
+    expect(() => readFileSync(automaticMigrationPath, "utf8")).toThrow();
+    expect(bootstrapMigration).toContain("Prepared only. Executing this script requires separate explicit authorization.");
+  });
+
+  it("requires a valid active production administrator for attribution", () => {
+    expect(bootstrapMigration).toContain("organization_id = target_organization_id");
+    expect(bootstrapMigration).toContain("workspace_mode = 'production'");
+    expect(bootstrapMigration).toContain("user_type = 'administrator'");
+    expect(bootstrapMigration).toContain("status = 'active'");
+    expect(bootstrapMigration).toContain("if bootstrap_actor_id is null then");
+    expect(bootstrapMigration).toContain("An active production administrator is required for bootstrap attribution.");
   });
 
   it("serializes the current master rules into the bootstrap", () => {
