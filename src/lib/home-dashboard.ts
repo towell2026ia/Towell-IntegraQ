@@ -419,6 +419,7 @@ export function buildHomeDashboard(
   });
   const accessibleRisks = (sources.risks?.risks ?? []).filter(
     (risk) =>
+      !risk.deletedAt &&
       effectiveProcessIdSet.has(risk.processId) &&
       matchesFilters(filters, {
         area: processById.get(risk.processId)?.name ?? risk.processId,

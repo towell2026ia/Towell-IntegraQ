@@ -1,0 +1,9 @@
+{
+  "commit": "REPLACE_WITH_VERIFIED_40_CHARACTER_COMMIT",
+  "backup": {"status": "NOT_RUN", "evidence": ""},
+  "tests": {"status": "NOT_RUN", "evidence": ""},
+  "ci": {"status": "NOT_RUN", "evidence": "", "commit": ""},
+  "supabasePreview": {"status": "NOT_RUN", "evidence": ""},
+  "deployment": {"status": "NOT_RUN", "evidence": "", "commit": ""},
+  "emailE2E": {"status": "NOT_RUN", "evidence": ""}
+}

@@ -2,8 +2,6 @@
 
 import {
   Activity,
-  AlertTriangle,
-  Bell,
   Bot,
   Building2,
   ChartNoAxesCombined,
@@ -30,6 +28,7 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 
 import { AccessModule } from "@/components/modules/access-module";
+import { NotificationInbox } from "@/components/notification-inbox";
 import { ActivityLogModule } from "@/components/modules/activity-log-module";
 import { AuditsModule } from "@/components/modules/audits-module";
 import { CalibrationsModule } from "@/components/modules/calibrations-module";
@@ -81,7 +80,6 @@ import {
   normalizeImprovementProjects,
   type ImprovementProject,
 } from "@/lib/continuous-improvement-data";
-import { buildHomeDashboard } from "@/lib/home-dashboard";
 import {
   buildInitialIndicatorDefinitions,
   buildInitialIndicatorResults,
@@ -115,7 +113,9 @@ import {
 } from "@/lib/quality-parties-data";
 import type { CorrectiveAction, MeasurementAsset } from "@/lib/types";
 import {
-  buildInitialRiskWorkspace,
+  buildDemoRiskWorkspace,
+  buildProductionRiskWorkspace,
+  operationalRiskWorkspace,
   normalizeRiskWorkspace,
   type RiskWorkspaceState,
 } from "@/lib/risk-opportunity-data";
@@ -185,7 +185,6 @@ export function IntegraQWorkspace({
   );
   const [navigationTarget, setNavigationTarget] = useState<{ module: WorkspaceModuleId; id: string } | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
   const [actions, setActions] = useState<CorrectiveAction[]>(demoCorrectiveActions);
   const [assets, setAssets] = useState<MeasurementAsset[]>(demoMeasurementAssets);
@@ -212,7 +211,7 @@ export function IntegraQWorkspace({
     [demoMode, indicatorRuntime.access, session],
   );
   const [riskWorkspace, setRiskWorkspace] = useState<RiskWorkspaceState>(
-    buildInitialRiskWorkspace,
+    () => demoMode ? buildDemoRiskWorkspace() : buildProductionRiskWorkspace(),
   );
   const [managementReviews, setManagementReviews] = useState<ManagementReviewRecord[]>(
     buildDemoManagementReviewHistory,
@@ -225,6 +224,7 @@ export function IntegraQWorkspace({
   );
   const [storageReady, setStorageReady] = useState(false);
   const [riskServerReady, setRiskServerReady] = useState(false);
+  const [riskStorageError, setRiskStorageError] = useState("");
 
   useEffect(() => {
     const syncModuleFromHash = () => {
@@ -275,7 +275,7 @@ export function IntegraQWorkspace({
         setControlledDocuments(
           synchronizeAppFormDocuments(hydratedDocuments, hydratedForms),
         );
-        if (savedRiskWorkspace) setRiskWorkspace(normalizeRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState));
+        if (demoMode && savedRiskWorkspace) setRiskWorkspace(normalizeRiskWorkspace(JSON.parse(savedRiskWorkspace) as RiskWorkspaceState, "demo"));
         if (savedManagementReviews) {
           setManagementReviews(JSON.parse(savedManagementReviews) as ManagementReviewRecord[]);
         } else if (savedManagementReview) {
@@ -298,7 +298,7 @@ export function IntegraQWorkspace({
       }
     }, 0);
     return () => window.clearTimeout(hydrationTask);
-  }, []);
+  }, [demoMode]);
 
   useEffect(() => {
     if (storageReady) {
@@ -352,19 +352,20 @@ export function IntegraQWorkspace({
     void loadRiskWorkspace()
       .then(({ state }) => {
         if (!active) return;
-        setRiskWorkspace(normalizeRiskWorkspace(state));
+        setRiskWorkspace(normalizeRiskWorkspace(state, demoMode ? "demo" : "production"));
         setRiskServerReady(true);
+        setRiskStorageError("");
       })
       .catch(() => {
-        if (active) setRiskServerReady(false);
+        if (active) { setRiskServerReady(false); setRiskStorageError("No fue posible consultar Riesgos en el servidor. La edición está deshabilitada."); }
       });
     return () => { active = false; };
-  }, [session, storageReady]);
+  }, [demoMode, session, storageReady]);
 
   useEffect(() => {
     if (!riskServerReady || isExternalUser(session)) return;
     const timer = window.setTimeout(() => {
-      void saveRiskWorkspace(riskWorkspace).catch(() => setRiskServerReady(false));
+      void saveRiskWorkspace(riskWorkspace).catch(() => { setRiskServerReady(false); setRiskStorageError("Los últimos cambios no se guardaron. Recarga Riesgos para consultar la versión vigente antes de continuar."); });
     }, 700);
     return () => window.clearTimeout(timer);
   }, [riskServerReady, riskWorkspace, session]);
@@ -404,7 +405,7 @@ export function IntegraQWorkspace({
       supplierAudits: supplierAuditSemesters.flatMap((semester) => semester.events),
       externalAudits: externalAuditCalendar,
       managementReview: currentManagementReview,
-      risks: riskWorkspace,
+      risks: operationalRiskWorkspace(riskWorkspace),
     }),
     [actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
   );
@@ -425,10 +426,6 @@ export function IntegraQWorkspace({
     }),
     [actions, assets, controlledDocuments, indicatorDefinitions, indicatorResults, session],
   );
-  const homeDashboard = useMemo(
-    () => buildHomeDashboard(homeSources),
-    [homeSources],
-  );
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
     const authorizedModule = resolveAuthorizedModule(session, module);
@@ -437,7 +434,6 @@ export function IntegraQWorkspace({
       authorizedModule === module && targetId ? { module, id: targetId } : null,
     );
     setSidebarOpen(false);
-    setNotificationsOpen(false);
     setNavigationQuery("");
     window.scrollTo({ top: 0, behavior: "auto" });
     if (window.location.hash.slice(1) !== authorizedModule) {
@@ -527,24 +523,12 @@ export function IntegraQWorkspace({
           <h1 className="topbar-page-title">{activeMeta.label}</h1>
           <div className="topbar-actions">
             {!externalSession ? <button className="icon-button" type="button" title="Actividad" onClick={() => changeModule("home")}><Activity size={19} /></button> : null}
-            {!externalSession ? <div className="notification-wrap">
-              <button className="icon-button notification-button" type="button" title="Notificaciones" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>
-                <Bell size={19} />{homeDashboard.alerts.length ? <span aria-label={`${homeDashboard.alerts.length} notificaciones`}>{homeDashboard.alerts.length}</span> : null}
-              </button>
-              {notificationsOpen ? (
-                <div className="notification-popover">
-                  <div className="popover-heading"><strong>Notificaciones</strong><small>{homeDashboard.alerts.length} pendientes</small></div>
-                  {homeDashboard.alerts.slice(0, 5).map((alert) => (
-                    <button key={alert.id} type="button" onClick={() => changeModule(alert.module, alert.targetId)}><AlertTriangle size={16} /><span><strong>{alert.title}</strong><small>{alert.alertType} · {alert.moduleLabel}</small></span></button>
-                  ))}
-                  {homeDashboard.alerts.length === 0 ? <div className="notification-empty">Sin alertas pendientes</div> : null}
-                </div>
-              ) : null}
-            </div> : null}
+            {!externalSession ? <NotificationInbox /> : null}
           </div>
         </header>
 
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
+          {activeModule === "risks" && riskStorageError ? <p role="alert">{riskStorageError}</p> : null}
           {activeModule === "home" ? <HomeModule loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}

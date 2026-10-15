@@ -10,6 +10,7 @@ export const riskTabs = [
   "actions",
   "contributions",
   "settings",
+  "deleted",
 ] as const;
 
 export type RiskTab = (typeof riskTabs)[number];
@@ -58,6 +59,11 @@ export interface RiskRecord {
   initial: RiskAssessment;
   latest?: RiskAssessment;
   source: string;
+  metadata?: { generated_for_demonstration?: boolean; [key: string]: unknown };
+  deletedAt?: string;
+  deletedBy?: string;
+  deletionReason?: string;
+  deletionCategory?: "test" | "duplicate" | "capture_error";
 }
 
 export interface RiskAction {
@@ -65,6 +71,7 @@ export interface RiskAction {
   riskId: string;
   title: string;
   owner: string;
+  ownerId?: string;
   dueDate: string;
   status: "open" | "in_progress" | "completed";
   evidence?: string;
@@ -160,7 +167,7 @@ const axisSource: Array<[string, string]> = [
   ["Flujo", "+"],
 ];
 
-export function buildInitialRiskWorkspace(): RiskWorkspaceState {
+export function buildDemoRiskWorkspace(): RiskWorkspaceState {
   return {
     cycle: new Date().getFullYear(),
     cycleStatus: "preparation",
@@ -230,8 +237,21 @@ export function buildInitialRiskWorkspace(): RiskWorkspaceState {
   };
 }
 
-export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null | undefined): RiskWorkspaceState {
-  const baseline = buildInitialRiskWorkspace();
+// The legacy entrypoint is deliberately safe for production. Fixtures must opt in to demo.
+export const buildInitialRiskWorkspace = buildProductionRiskWorkspace;
+
+export function buildProductionRiskWorkspace(cycle = new Date().getFullYear()): RiskWorkspaceState {
+  return { cycle, cycleStatus: "preparation", axes: [], swotItems: [], risks: [], actions: [], contributions: [], importIssues: [], directionCandidates: [] };
+}
+
+export function operationalRiskWorkspace(state: RiskWorkspaceState): RiskWorkspaceState {
+  const risks = state.risks.filter((risk) => !risk.deletedAt);
+  const ids = new Set(risks.map((risk) => risk.id));
+  return { ...state, risks, actions: state.actions.filter((action) => ids.has(action.riskId)) };
+}
+
+export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null | undefined, mode: "production" | "demo" = "production"): RiskWorkspaceState {
+  const baseline = mode === "demo" ? buildDemoRiskWorkspace() : buildProductionRiskWorkspace();
   if (!value) return baseline;
   return {
     ...baseline,
@@ -242,7 +262,7 @@ export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null
     actions: Array.isArray(value.actions) ? value.actions : baseline.actions,
     contributions: Array.isArray(value.contributions) ? value.contributions : baseline.contributions,
     importIssues: Array.isArray(value.importIssues) ? value.importIssues : baseline.importIssues,
-    directionCandidates: Array.isArray(value.directionCandidates) && value.directionCandidates.length ? value.directionCandidates.map((item) => ({ sourceType: "history", sourceName: directionSource.sourceFile, ...item })) : baseline.directionCandidates,
+    directionCandidates: Array.isArray(value.directionCandidates) && (value.directionCandidates.length || mode === "production") ? value.directionCandidates.map((item) => ({ sourceType: "history", sourceName: directionSource.sourceFile, ...item })) : baseline.directionCandidates,
   };
 }
 

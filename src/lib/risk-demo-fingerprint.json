@@ -1,0 +1,9 @@
+{
+  "id": "RYO-2025-002", "kind": "risk", "processId": "P-07", "cycle": 2025,
+  "title": "Interrupción de sistemas críticos", "event": "Indisponibilidad prolongada de servicios de información.",
+  "consequence": "Paro de operación y pérdida temporal de trazabilidad.", "owner": "Responsable de TI",
+  "strategicAxisId": "EJE-10", "status": "review", "treatment": "COMPARTIR EL RIESGO.",
+  "currentControls": "Respaldos y monitoreo de disponibilidad.",
+  "initial": {"severity":8,"occurrence":5,"detection":6,"so":40,"sod":240,"level":"MAYOR","version":"SOD-propuesta-v1","evaluatedAt":"2025-01-12"},
+  "source": "Captura manual de demostración"
+}
