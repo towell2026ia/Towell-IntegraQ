@@ -34,6 +34,8 @@ export interface ConfiguredIndicator extends IndicatorDefinition {
 }
 
 export interface IndicatorCaptureWindow {
+  source?: "legacy" | "global" | "exception";
+  exceptionReason?: string;
   opensAt: string;
   closesAt: string;
 }

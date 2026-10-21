@@ -53,3 +53,20 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  supabase-preview-integration:
+    name: STB-01 isolated Supabase Preview
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'codex/stb-01-')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STB_GIT_BRANCH: ${{ github.head_ref }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Preview and run transactional integration assertions
+        run: node scripts/ci/indicator-global-preview.mjs

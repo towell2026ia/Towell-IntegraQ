@@ -144,32 +144,8 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function PATCH(request: Request) {
-  try {
-    const resolved = await resolveContext();
-    if (resolved.response) return resolved.response;
-    if (!resolved.context!.administrator) {
-      return NextResponse.json({ error: "Sólo un administrador puede modificar la configuración de captura." }, { status: 403 });
-    }
-    const body = await request.json().catch(() => null) as { captureDaysAfterClose?: unknown } | null;
-    if (!Number.isInteger(body?.captureDaysAfterClose)
-      || Number(body?.captureDaysAfterClose) < 1
-      || Number(body?.captureDaysAfterClose) > 90) {
-      return NextResponse.json({ error: "Los días disponibles deben estar entre 1 y 90." }, { status: 400 });
-    }
-    const stored = await resolved.supabase!.from("indicator_capture_settings").upsert({
-      organization_id: resolved.context!.workspaceId,
-      workspace_mode: resolved.context!.workspaceMode,
-      capture_days_after_close: Number(body!.captureDaysAfterClose),
-      business_timezone: INDICATOR_BUSINESS_TIME_ZONE,
-      updated_by: resolved.context!.userId,
-    }, { onConflict: "organization_id,workspace_mode" });
-    if (stored.error) return databaseError(stored.error);
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    console.error("No fue posible actualizar la configuración de captura.", error);
-    return NextResponse.json({ error: "No fue posible actualizar la configuración de captura." }, { status: 500 });
-  }
+export async function PATCH() {
+  return NextResponse.json({ error: "Usa Configuración → Indicadores → Fechas de captura, con vista previa, motivo y confirmación." }, { status: 409 });
 }
 
 export async function DELETE(request: Request) {
@@ -293,7 +269,7 @@ async function loadRuntimeSnapshot(
   const [rulesQuery, relationsQuery, periodsQuery] = await Promise.all([
     supabase.from("indicator_evaluation_rules").select("indicator_id,compliant_rule,marginal_rule,noncompliant_rule").in("indicator_id", ids),
     supabase.from("indicator_definition_processes").select("indicator_id,process_id").in("indicator_id", ids),
-    supabase.from("indicator_periods").select("id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at").in("indicator_id", ids).order("year"),
+    supabase.from("indicator_periods").select("id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at,capture_rule_source,capture_exception_reason").in("indicator_id", ids).order("year"),
   ]);
   if (rulesQuery.error) throw rulesQuery.error;
   if (relationsQuery.error) throw relationsQuery.error;
@@ -350,8 +326,8 @@ async function loadRuntimeSnapshot(
       const quarter = period.quarter as Quarter;
       schedule[year] = { ...(schedule[year] ?? {}) } as Record<Quarter, string>;
       schedule[year][quarter] = String(period.scheduled_date);
-      captureWindows[year] = { ...(captureWindows[year] ?? {}) } as Record<Quarter, { opensAt: string; closesAt: string }>;
-      captureWindows[year][quarter] = { opensAt: String(period.opens_at), closesAt: String(period.closes_at) };
+      captureWindows[year] = { ...(captureWindows[year] ?? {}) } as Record<Quarter, import("@/lib/indicator-data").IndicatorCaptureWindow>;
+      captureWindows[year][quarter] = { opensAt: String(period.opens_at), closesAt: String(period.closes_at), source: period.capture_rule_source as "legacy" | "global" | "exception", exceptionReason: period.capture_exception_reason ?? undefined };
     }
     return {
       id: row.code,
