@@ -22,11 +22,11 @@ El Gate 0 no está aprobado. Se detuvo el desarrollo funcional antes de modifica
 | Usuarios y permisos preservados | PASS para datos expuestos: perfiles, roles y permisos sin diferencias; dump interno Auth pendiente |
 | RLS | FAIL — no validada con los cuatro actores; la clave administrativa omite RLS |
 | Registros reales perdidos | 0 observados: 125 recursos expuestos idénticos; ninguna escritura productiva |
-| Tests | 0 PASS / 0 FAIL — no ejecutados; desarrollo detenido en Gate 0 |
-| Typecheck / lint / build | FAIL — no ejecutados en esta intervención |
-| CI | FAIL — sin evidencia de ejecución para esta intervención |
+| Tests | 316 PASS / 0 FAIL en CI (65 archivos); pruebas nuevas de STB y aceptación con cuatro actores pendientes |
+| Typecheck / lint / build | PASS en CI para el commit evaluado; no ejecutados localmente |
+| CI | PASS — ejecución 39650134618, commit 151e2fd6e54f6f25ee28c8cd0df27e20cb3d682f; alcance: código existente y primer reporte |
 | Supabase Preview | FAIL — sin ambiente aislado verificado |
-| Netlify | FAIL — sin despliegue Preview validado para esta intervención |
+| Netlify | FAIL — netlify/towell-integraq/deploy-preview reportó failure |
 | Commit y SHA | Base inspeccionada: c9e271808000dbc59b643da442ec3f915dfcaf54; reporte en rama codex/iq-prd-stability-01 |
 | Production modified | NO |
 
@@ -75,3 +75,7 @@ Había cambios locales previos en main, incluidos archivos de administración y 
 5. Validar Netlify Preview. Obtener autorización específica del gate antes de merge a main o migraciones productivas.
 
 **DO NOT RELEASE. STOP: no avanzar a otros módulos.**
+
+Evidencia CI: https://github.com/towell2026ia/Towell-IntegraQ/actions/runs/39650134618. Los 316 tests existentes no acreditan los criterios nuevos de STB-01 a STB-04. Esta actualización sólo modifica el reporte; el SHA evaluado se indica explícitamente y no se atribuye un PASS a commits posteriores sin evidencia.
+
+Evidencia Netlify: https://app.netlify.com/projects/towell-integraq/deploys/6ad8ffc9335f0bb18c5e08f6. PR borrador: https://github.com/towell2026ia/Towell-IntegraQ/pull/3. No hubo merge ni despliegue productivo solicitado.
