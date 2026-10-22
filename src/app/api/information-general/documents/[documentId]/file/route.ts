@@ -6,6 +6,7 @@ import {
   requireGeneralInformationActor,
 } from "@/lib/general-information-server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 
 export async function GET(
   request: Request,
@@ -19,15 +20,16 @@ export async function GET(
     }
     const { documentId } = await params;
     const admin = createAdminClient();
-    const record = await admin.from("file_objects")
+    const access = await createClient();
+    let query = access.from("file_objects")
       .select("id,bucket_id,object_path,original_name,preview_path,preview_status,deleted_at")
       .eq("id", documentId)
       .eq("workspace_id", actor.workspaceId)
-      .eq("resource_type", "general_information_document")
-      .eq("is_current", true)
-      .maybeSingle();
+      .eq("resource_type", "general_information_document");
+    if (!actor.administrator) query = query.eq("is_current", true).is("deleted_at", null);
+    const record = await query.maybeSingle();
     if (record.error) throw record.error;
-    if (!record.data || record.data.deleted_at) throw new GeneralInformationApiError("Documento no disponible.", 404);
+    if (!record.data || (record.data.deleted_at && !actor.administrator)) throw new GeneralInformationApiError("Documento no disponible.", 404);
     const path = disposition === "preview" && record.data.preview_status === "ready" && record.data.preview_path
       ? record.data.preview_path
       : record.data.object_path;
