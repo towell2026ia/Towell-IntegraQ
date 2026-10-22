@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {assertCloud,selectPreview,parentProject,previewBranch,createManagementClient,safeDiagnostic,assertFixtureResult} from '../../../scripts/ci/indicator-global-preview.mjs';
+import {assertCloud,selectPreview,parentProject,previewBranch,createManagementClient,safeDiagnostic,assertFixtureResult,fixtureStages,fixtureDiagnostic,residueParameters} from '../../../scripts/ci/indicator-global-preview.mjs';
 const branch=previewBranch;const good={git_branch:branch,pr_number:4,project_ref:'abcdefghijklmnopqrst',parent_project_ref:parentProject,is_default:false,persistent:false};
 describe('cloud-only Preview gate safeguards',()=>{
   it('rejects local execution before reading credentials or making a request',()=>{expect(()=>assertCloud({})).toThrow('CLOUD_HOSTED_PREVIEW_ONLY');expect(()=>assertCloud({GITHUB_ACTIONS:'true',RUNNER_ENVIRONMENT:'self-hosted',RUNNER_OS:'Linux',STB_GIT_BRANCH:branch})).toThrow();});
@@ -8,7 +8,27 @@ describe('cloud-only Preview gate safeguards',()=>{
   it.each([{project_ref:parentProject},{is_default:true},{persistent:true},{git_branch:'main'},{parent_project_ref:'other'},{pr_number:2},{pr_number:null}])('rejects production or unrelated branches: %j',change=>expect(()=>selectPreview([{...good,...change}],branch,4)).toThrow());
   it('rejects ambiguous branch discovery',()=>expect(()=>selectPreview([good,good],branch,4)).toThrow());
   it('rejects wrapped/malformed responses and a different requested PR',()=>{expect(()=>selectPreview({branches:[good]},branch,4)).toThrow('PREVIEW_BRANCH_RESPONSE_INVALID');expect(()=>selectPreview([good],branch,2)).toThrow('PREVIEW_PR_IDENTITY_INVALID');expect(()=>selectPreview([good],'codex/stb-01-other',4)).toThrow('PREVIEW_PR_IDENTITY_INVALID');});
-  it('never treats an echoed success marker as completed fixture assertions',()=>{expect(()=>assertFixtureResult({message:'STB_01_PREVIEW_PASS'})).toThrow();expect(()=>assertFixtureResult([{status:'STB_01_PREVIEW_PASS',fixture_indicators:51}])).toThrow();expect(()=>assertFixtureResult([{status:'STB_01_PREVIEW_PASS',fixture_indicators:52}])).not.toThrow();});
+  it('requires all real SQL stages, rollback and absence of residues for PASS',()=>{
+    const report={status:'STB_01_PREVIEW_PASS',fixture_indicators:52,completed_stages:fixtureStages,rollback:true,residual_fixture_records:0,ambiguity_reproduced:true};
+    expect(()=>assertFixtureResult({message:'STB_01_PREVIEW_PASS'})).toThrow();
+    for(const change of [{fixture_indicators:51},{completed_stages:fixtureStages.slice(0,-1)},{rollback:false},{residual_fixture_records:1},{ambiguity_reproduced:false},{status:'STB_01_PREVIEW_FAIL'}])expect(()=>assertFixtureResult([{fixture_report:{...report,...change}}])).toThrow();
+    expect(assertFixtureResult([{fixture_report:report}])).toEqual(report);
+  });
+  it('returns only stage, SQLSTATE, a trusted code and classification for SQL failures',()=>{
+    const d=fixtureDiagnostic({failed_stage:fixtureStages[6],sqlstate:'42702',error_code:'private_value',message:'select secret',detail:'password'});
+    expect(d).toEqual({stage:fixtureStages[6],sqlstate:'42702',errorCode:'SQL_AMBIGUOUS_REFERENCE',classification:'AMBIGUOUS_REFERENCE'});
+    expect(fixtureDiagnostic({failed_stage:'private_stage',sqlstate:'secret',error_code:'STB_RESULTS_CHANGED'},new Set(['STB_RESULTS_CHANGED']))).toEqual({stage:'STB_00_SQL_ENVELOPE',sqlstate:'XXXXX',errorCode:'STB_RESULTS_CHANGED',classification:'SQL_EXECUTION'});
+  });
+  it('extracts SQLSTATE from a rejected SQL envelope without exposing its SQL or data',()=>{
+    const d=safeDiagnostic('preview-transactional-fixtures','POST',new Response('',{status:400}),{message:'Failed to run sql query: ERROR: 42702: column reference "private_column" is ambiguous\nQUERY: select secret'});
+    expect(d).toEqual({stage:'STB_00_SQL_ENVELOPE',sqlstate:'42702',errorCode:'SQL_ENVELOPE_FAILURE',classification:'AMBIGUOUS_REFERENCE'});
+  });
+  it('validates fixture identities before the independent parameterized residue request',()=>{
+    const uuid='00000000-0000-0000-0000-000000000001';const report={fixture_organizations:[uuid,uuid],fixture_users:Array(5).fill(uuid),fixture_process:`STB-CI-${uuid}`};
+    expect(residueParameters(report)).toEqual([report.fixture_organizations,report.fixture_users,report.fixture_process]);
+    expect(()=>residueParameters({...report,fixture_process:'select private'})).toThrow('PREVIEW_RESIDUE_SCOPE_INVALID');
+    expect(()=>residueParameters({...report,fixture_users:['secret']})).toThrow();
+  });
   it('identifies an HTTP failure without logging SQL, credentials or response extras',async()=>{
     const token='fixture_secret_token';const query='select highly_sensitive_value from private_table';const log=vi.fn();
     const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({code:'BAD_REQUEST',message:`Invalid token ${token} Authorization: Bearer fixture_other_secret postgres://user:password@host/database ${query}\nLINE 1: ${query}`,detail:query,headers:{Authorization:token}}),{status:400,headers:{'x-request-id':'request-123'}}));
