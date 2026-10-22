@@ -149,12 +149,14 @@ export function GeneralInformationModule({ session }: { session: ActiveSession }
   }
 
   async function removeDocument(document: GeneralInformationDocument) {
+    if (!window.confirm(`¿Eliminar lógicamente ${document.name}, versión ${document.version}? El archivo y el historial se conservarán.`)) return;
     const reason = window.prompt("Motivo de eliminación lógica:");
     if (!reason?.trim()) return;
     await mutate(() => patchGeneralInformation({ entity: "document", action: "delete", id: document.id, reason }), "Documento enviado a Eliminados.");
   }
 
   async function restore(entity: "folder" | "document", id: string) {
+    if (!window.confirm("¿Restaurar este contenido? No se sobrescribirá ningún documento activo.")) return;
     await mutate(() => patchGeneralInformation({ entity, action: "restore", id }), "Contenido restaurado.");
   }
 

@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/stb-01-global-capture-windows
   workflow_dispatch:
 
 permissions:
@@ -49,7 +50,12 @@ jobs:
         run: pnpm lint
 
       - name: Tests
+        if: github.head_ref != 'codex/stb-02-document-retention'
         run: pnpm test
+
+      - name: STB-02 focused document regression
+        if: github.head_ref == 'codex/stb-02-document-retention'
+        run: pnpm exec vitest run src/lib/document-retention.test.ts src/lib/document-control-data.test.ts src/lib/document-data.test.ts src/lib/document-lifecycle-migration.test.ts src/lib/admin-document-management-migration.test.ts src/lib/general-information.test.ts src/components/module-documents-panel.test.ts
 
       - name: Build
         run: pnpm build
@@ -76,3 +82,21 @@ jobs:
       - name: Verify deterministic cleanup of committed Preview fixtures
         if: always()
         run: node scripts/ci/indicator-concurrency-preview.mjs --cleanup
+
+  document-preview-integration:
+    name: STB-02 isolated Supabase Preview
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/stb-02-document-retention'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STB_GIT_BRANCH: ${{ github.head_ref }}
+      STB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify only document retention assertions in the exact PR Preview
+        run: node scripts/ci/document-retention-preview.mjs
