@@ -35,7 +35,7 @@ export function createManagementClient(token,fetchImpl=fetch,log=console.log){
     catch{throw Error('SUPABASE_PREVIEW_TRANSPORT_ERROR');}
     const data=await r.json().catch(()=>null);
     log(JSON.stringify(r.ok?{endpoint,method,status:r.status}:safeDiagnostic(endpoint,method,r,data,token)));
-    if(!r.ok)throw Error(`SUPABASE_PREVIEW_HTTP_${r.status}`);
+    if(!r.ok){const error=Error(`SUPABASE_PREVIEW_HTTP_${r.status}`);error.sqlstate=typeof data?.code==='string'&&/^[0-9A-Z]{5}$/.test(data.code)?data.code:String(data?.message??'').match(/\bERROR:\s*([0-9A-Z]{5}):/)?.[1];throw error;}
     if(data===null)throw Error('SUPABASE_PREVIEW_RESPONSE_INVALID');
     return data;
   };

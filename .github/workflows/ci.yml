@@ -71,3 +71,8 @@ jobs:
           node-version: 22
       - name: Verify Preview and run transactional integration assertions
         run: node scripts/ci/indicator-global-preview.mjs
+      - name: Verify six races in independent authenticated Preview sessions
+        run: node scripts/ci/indicator-concurrency-preview.mjs
+      - name: Verify deterministic cleanup of committed Preview fixtures
+        if: always()
+        run: node scripts/ci/indicator-concurrency-preview.mjs --cleanup
