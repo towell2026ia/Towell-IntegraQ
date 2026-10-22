@@ -95,7 +95,7 @@ begin
   end loop;
 
   -- Force a failure after the rule upsert and prove the transaction leaves no partial publication.
-  execute $create$create function pg_temp.fail_stb_capture() returns trigger language plpgsql as $body$begin if new.id::text=tg_argv[0] then raise exception 'STB_FORCED_PERIOD_FAILURE'; end if;return new;end;$body$create$;
+  execute $create$create function pg_temp.fail_stb_capture() returns trigger language plpgsql as $body$begin if new.id::text=tg_argv[0] then raise exception 'STB_FORCED_PERIOD_FAILURE'; end if;return new;end;$body$ $create$;
   execute format('create trigger stb_forced_capture_failure before update on public.indicator_periods for each row execute function pg_temp.fail_stb_capture(%L)',first_period::text);
   perform set_config('request.jwt.claim.sub',actor::text,true);execute 'set local role authenticated';
   preview:=public.preview_indicator_capture_windows(closed_scope,true);
