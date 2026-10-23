@@ -31,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { HomeImageSlots } from "./home-image-slots";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
@@ -233,14 +234,15 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
       </section>
 
       {sources.session.userType === "Administrador" ? (
-        <section className="home-admin-filter-shell" aria-label="Filtros administrativos">
+        <section className="home-admin-filter-shell" aria-label="Editar inicio">
           <button className="home-filter-toggle" type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen((open) => !open)}>
             <SlidersHorizontal size={17} />
-            <span>Alcance global</span>
+            <span>Editar inicio</span>
             {activeFilterCount ? <strong>{activeFilterCount}</strong> : null}
           </button>
           {filtersOpen ? (
             <div className="home-admin-filters">
+              <button className="button button-secondary" type="button" onClick={() => onNavigate("home-settings")}><FilePenLine size={16} /> Configurar visibilidad de Inicio</button>
               <label>Área<select value={filters.area} onChange={(event) => setFilters((current) => ({ ...current, area: event.target.value }))}><option value="all">Todas</option>{dashboard.filterOptions.areas.map((area) => <option key={area} value={area}>{area}</option>)}</select></label>
               <label>Proceso<select value={filters.processId} onChange={(event) => setFilters((current) => ({ ...current, processId: event.target.value }))}><option value="all">Todos</option>{dashboard.filterOptions.processes.map((process) => <option key={process.id} value={process.id}>{process.id} · {process.name}</option>)}</select></label>
               <label>Responsable<select value={filters.responsible} onChange={(event) => setFilters((current) => ({ ...current, responsible: event.target.value }))}><option value="all">Todos</option>{dashboard.filterOptions.responsibles.map((responsible) => <option key={responsible} value={responsible}>{responsible}</option>)}</select></label>
@@ -252,6 +254,10 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
             </div>
           ) : null}
         </section>
+      ) : null}
+
+      {sources.session.userType === "Administrador" || visibleSections.has("quality-policy") ? (
+        <HomeImageSlots administrator={sources.session.userType === "Administrador"} editing={filtersOpen} />
       ) : null}
 
       {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
