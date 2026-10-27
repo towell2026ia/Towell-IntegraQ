@@ -1,5 +1,6 @@
-import { relationRecord, discardUnpublishedUpload } from "@/lib/document-retention";
 "use client";
+
+import { relationRecord, discardUnpublishedUpload } from "@/lib/document-retention";
 
 import type {
   ControlledDocument,
@@ -313,6 +314,7 @@ export async function obsoleteStoredDocument(documentId: string, reason: string,
 }
 
 export async function softDeleteStoredDocument(documentId: string, reason: string) {
+  if (!reason.trim()) throw new Error("El motivo de eliminación es obligatorio.");
   return callLifecycleRpc(documentId, "soft_delete_document", { p_document_id: documentId, p_reason: reason.trim() });
 }
 

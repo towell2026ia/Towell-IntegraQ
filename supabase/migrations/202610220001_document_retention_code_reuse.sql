@@ -206,20 +206,20 @@ create function public.document_file_scope(p_id uuid) returns boolean language s
    else public.document_actor_scope((select p.organization_id from public.processes p where p.id=f.process_id),f.workspace_mode,f.uploaded_by) end
  else true end)
 $$;
-create function public.guard_retained_document_version() returns trigger language plpgsql security definer set search_path='' as $
+create function public.guard_retained_document_version() returns trigger language plpgsql security definer set search_path='' as $$
 begin
  if auth.uid() is not null and not public.document_scope_visible(new.document_id) then raise exception using errcode='42501',message='DOCUMENT_SCOPE_FORBIDDEN';end if;
  if tg_op='UPDATE' and (new.document_id is distinct from old.document_id or (old.authorized_at is not null and (new.file_id,new.revision) is distinct from (old.file_id,old.revision))) then raise exception using errcode='42501',message='DOCUMENT_VERSION_RETAINED';end if;
  if exists(select 1 from public.controlled_documents d where d.id=new.document_id and d.deleted_at is not null) then raise exception using errcode='22023',message='DOCUMENT_IS_DELETED';end if;
  if auth.uid() is not null and new.file_id is not null and not public.document_file_scope(new.file_id) then raise exception using errcode='42501',message='DOCUMENT_FILE_SCOPE_INVALID';end if;
  return new;
-end;$;
+end;$$;
 create trigger stb2_retained_document_version before insert or update on public.controlled_document_versions for each row execute function public.guard_retained_document_version();
-create function public.guard_document_binary_identity() returns trigger language plpgsql as $
+create function public.guard_document_binary_identity() returns trigger language plpgsql as $$
 begin
  if old.resource_type in ('general_information_document','controlled_document') and (new.bucket_id,new.object_path,new.original_name,new.size_bytes,new.sha256) is distinct from (old.bucket_id,old.object_path,old.original_name,old.size_bytes,old.sha256) then raise exception using errcode='42501',message='DOCUMENT_BINARY_IMMUTABLE';end if;
  return new;
-end;$;
+end;$$;
 create trigger stb2_document_binary_identity before update on public.file_objects for each row execute function public.guard_document_binary_identity();
 
 create policy stb2_file_scope on public.file_objects as restrictive for all to authenticated using(public.document_file_scope(id))
@@ -278,7 +278,7 @@ returns trigger
 language plpgsql
 security definer
 set search_path = ''
-as $
+as $$
 declare event_action text;
 declare workspace uuid;
 declare audit_actor uuid;
@@ -338,7 +338,7 @@ begin
   values (audit_actor, event_action, resource, resource_key, details || jsonb_build_object('workspace_id', workspace, 'workspace_mode', public.current_workspace_mode(), 'reason', case when tg_op='UPDATE' then new.deletion_reason else null end));
   return new;
 end;
-$;
+$$;
 
 
 -- Physical deletion of these records/binaries is never an administrative action.
