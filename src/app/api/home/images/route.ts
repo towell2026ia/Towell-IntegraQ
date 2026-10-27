@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 
-import { homeImageMime, isHomeImageSlot, maximumHomeImageBytes } from "@/lib/home-image-slots";
+import { homeImageMime, isHomeImageSlot, maximumHomeImageBytes, parseHomeImageRevision } from "@/lib/home-image-slots";
+import { HomeImageBodyTooLarge, readHomeImageForm } from "@/lib/home-image-upload";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -23,7 +24,7 @@ export async function GET() {
   const ctx = await context();
   if (!ctx) return fail("Sesión no válida.", 401);
   const admin = ctx.profile.user_type === "administrator";
-  const result = await ctx.client.from("home_image_versions").select("id,slot,revision,object_path,file_name,created_at,reason").order("revision", { ascending: false });
+  const result = await ctx.client.from("home_image_versions").select("id,slot,revision,object_path,file_name,created_at,reason").eq("organization_id", ctx.profile.organization_id).eq("workspace_mode", ctx.profile.workspace_mode ?? "production").order("revision", { ascending: false });
   if (result.error) return fail("No fue posible cargar las imágenes. La configuración puede estar pendiente de habilitarse.", 503);
   const signer = createAdminClient();
   const seen = new Set<string>();
@@ -46,19 +47,27 @@ export async function POST(request: Request) {
   if (request.headers.get("origin") !== new URL(request.url).origin) return fail("Origen no autorizado.", 403);
   const ctx = await context();
   if (!ctx || ctx.profile.user_type !== "administrator") return fail("Solo un administrador puede adjuntar imágenes.", 403);
-  const length = Number(request.headers.get("content-length"));
-  if (length > maximumHomeImageBytes + 65536) return fail("La imagen debe pesar como máximo 5 MB.", 413);
   let form: FormData;
-  try { form = await request.formData(); } catch { return fail("Adjunto no válido.", 400); }
+  try { form = await readHomeImageForm(request); } catch (error) {
+    return error instanceof HomeImageBodyTooLarge
+      ? fail("La imagen debe pesar como máximo 5 MB.", 413)
+      : fail("Adjunto no válido.", 400);
+  }
   const slot = String(form.get("slot") ?? "");
   const reason = String(form.get("reason") ?? "").trim();
   const revisionValue = String(form.get("expectedRevision") ?? "");
-  const expectedRevision = Number(revisionValue);
-  if (!isHomeImageSlot(slot) || !/^\d+$/.test(revisionValue) || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || reason.length < 5 || reason.length > 500 || form.get("confirmed") !== "true") {
+  const expectedRevision = parseHomeImageRevision(revisionValue);
+  if (!isHomeImageSlot(slot) || expectedRevision === null || reason.length < 5 || reason.length > 500 || form.get("confirmed") !== "true") {
     return fail("Indica el motivo y confirma el cambio.", 400);
   }
   const restoreVersion = form.get("restoreVersion");
   const file = form.get("file");
+  const before = await ctx.client.from("home_image_versions").select("id,revision")
+    .eq("organization_id", ctx.profile.organization_id)
+    .eq("workspace_mode", ctx.profile.workspace_mode ?? "production").eq("slot", slot)
+    .order("revision", { ascending: false }).limit(1).maybeSingle();
+  if (before.error) return fail("No fue posible verificar el estado del espacio. No se adjuntó ningún archivo.", 503);
+  if ((before.data?.revision ?? 0) !== expectedRevision) return fail("Otra persona modificó este espacio. Recarga antes de guardar.", 409);
   let path: string | null = null;
   let fileName: string | null = null;
   if (restoreVersion) {
@@ -70,7 +79,7 @@ export async function POST(request: Request) {
     if (!mime) return fail("El archivo debe ser una imagen PNG, JPG o WebP.", 400);
     const extension = mime === "image/png" ? "png" : mime === "image/jpeg" ? "jpg" : "webp";
     path = ctx.profile.organization_id + "/" + (ctx.profile.workspace_mode ?? "production") + "/" + ctx.profile.id + "/" + randomUUID() + "." + extension;
-    fileName = file.name.slice(0, 180);
+    fileName = file.name.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 180) || "imagen." + extension;
     const upload = await createAdminClient().storage.from(bucket).upload(path, bytes, { contentType: mime, upsert: false });
     if (upload.error) return fail("No fue posible adjuntar la imagen. No se cambió la imagen publicada.", 503);
   }

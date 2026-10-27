@@ -42,6 +42,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install SQL parser runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned SQL parser
+        run: python -m pip install pglast==8.7
+
+      - name: Static SQL and PLpgSQL validation (no database)
+        run: python scripts/validate-home-images-sql.py
+
       - name: Typecheck
         run: pnpm typecheck
 

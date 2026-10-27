@@ -25,3 +25,20 @@ export function homeImageMime(bytes: Uint8Array): string | null {
   if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
   return null;
 }
+
+export type HomeImageDraft = {
+  slot: HomeImageSlotId;
+  expectedRevision: number;
+  file?: File;
+  restore?: HomeImageVersion;
+};
+export function createHomeImageDraft(
+  slot: HomeImageSlotId, versions: HomeImageVersion[], file?: File, restore?: HomeImageVersion,
+): HomeImageDraft {
+  return { slot, expectedRevision: Math.max(0, ...versions.filter((version) => version.slot === slot).map((version) => version.revision)), file, restore };
+}
+export function parseHomeImageRevision(value: string): number | null {
+  if (!/^\d+$/.test(value)) return null;
+  const revision = Number(value);
+  return Number.isSafeInteger(revision) && revision >= 0 && revision < 2147483647 ? revision : null;
+}
