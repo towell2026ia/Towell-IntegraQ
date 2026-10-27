@@ -61,3 +61,20 @@ describe("home image publication boundary", () => {
     expect(await response.json()).toEqual({ version: { id: "new", revision: 1, slot: "quality" } });
   });
 });
+
+describe("retained image restoration", () => {
+  it("recovers a previous version by publishing a new revision without uploading or replacing its object", async () => {
+    mocks.before.mockResolvedValue({ data: { id: "current", revision: 2 }, error: null });
+    mocks.rpc.mockResolvedValue({ data: { id: "restored-copy", revision: 3, slot: "quality" }, error: null });
+    const body = new FormData();
+    body.set("slot", "quality"); body.set("expectedRevision", "2"); body.set("reason", "Recuperar imagen anterior");
+    body.set("confirmed", "true"); body.set("restoreVersion", "11111111-1111-4111-8111-111111111111");
+    const response = await POST(new Request("https://preview.test/api/home/images", { method: "POST", headers: { origin: "https://preview.test" }, body }));
+    expect(response.status).toBe(200);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    expect(mocks.rpc).toHaveBeenCalledWith("publish_home_image", expect.objectContaining({
+      expected_revision: 2, restore_version: "11111111-1111-4111-8111-111111111111", new_object_path: null, new_file_name: null,
+    }));
+    expect((await response.json()).version.revision).toBe(3);
+  });
+});

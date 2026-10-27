@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { HomeImageSlots } from "./home-image-slots";
+import { HomeObjectives } from "./home-objectives";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import {
@@ -268,22 +269,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      {visibleSections.has("quality-objectives") ? (
-        <section className="home-dashboard-section home-objectives-section">
-          <SectionHeader eyebrow="Dirección estratégica" title="Objetivos de Calidad" icon={Target} count={dashboard.qualityObjectives.length} />
-          <div className="home-objective-grid">
-            {dashboard.qualityObjectives.length ? dashboard.qualityObjectives.slice(0, 6).map((objective) => (
-              <button key={objective.id} type="button" onClick={() => onNavigate("indicators", objective.id)}>
-                <span>{objective.processName}</span>
-                <strong>{objective.name}</strong>
-                <small>Meta: {objective.target}</small>
-                <em>{objective.leader}</em>
-                <ChevronRight size={16} />
-              </button>
-            )) : <EmptyState icon={Target} text="No hay objetivos configurados para los procesos autorizados." />}
-          </div>
-        </section>
-      ) : null}
+      {visibleSections.has("quality-objectives") ? <HomeObjectives items={dashboard.qualityObjectives} onOpenIndicator={(id) => onNavigate("indicators", id)} /> : null}
 
       {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
       <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>

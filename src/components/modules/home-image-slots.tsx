@@ -54,6 +54,19 @@ export function HomeImageSlots({ editing, administrator }: { editing: boolean; a
     finally { setLoading(false); }
   }
 
+  async function viewVersion(version: HomeImageVersion) {
+    setBusy(true); setError("");
+    try {
+      const response = await fetch("/api/home/images?version=" + encodeURIComponent(version.id), { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "No fue posible consultar la versión.");
+      const historical = payload.versions?.find((item: HomeImageVersion) => item.id === version.id);
+      if (!historical?.url) throw new Error("La versión no está disponible.");
+      setSelected(historical);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible consultar la versión."); }
+    finally { setBusy(false); }
+  }
+
   function prepare(slot: HomeImageSlotId, file?: File, restore?: HomeImageVersion) {
     setNotice(""); setError(""); setConfirmed(false); setReason("");
     if (file && (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > maximumHomeImageBytes || !file.size)) {
@@ -97,7 +110,7 @@ export function HomeImageSlots({ editing, administrator }: { editing: boolean; a
           <strong>{slot.title}</strong>
           {administrator && editing ? <>
             <label className={styles.upload}>{current ? "Cambiar imagen" : "Adjuntar imagen"}<input aria-label={`Adjuntar ${slot.title}`} type="file" accept="image/png,image/jpeg,image/webp" disabled={loading || busy || !ready || mustReload} onChange={(event) => { const file = event.target.files?.[0]; if (file) prepare(slot.id, file); event.target.value = ""; }} /></label>
-            {history.length > 1 ? <details><summary>Historial ({history.length})</summary>{history.slice(1).map((version) => <div className={styles.history} key={version.id}><small>Versión {version.revision} · {version.file_name}</small><button type="button" disabled={busy || !ready || mustReload} onClick={() => prepare(slot.id, undefined, version)}><RotateCcw size={13} /> Recuperar</button></div>)}</details> : null}
+            {history.length > 1 ? <details><summary>Historial ({history.length})</summary>{history.slice(1).map((version) => <div className={styles.history} key={version.id}><small>Versión {version.revision} · {version.file_name}</small><button type="button" disabled={busy} onClick={() => void viewVersion(version)}>Consultar imagen</button><button type="button" disabled={busy || !ready || mustReload} onClick={() => prepare(slot.id, undefined, version)}><RotateCcw size={13} /> Recuperar</button></div>)}</details> : null}
           </> : null}
         </article>;
       })}

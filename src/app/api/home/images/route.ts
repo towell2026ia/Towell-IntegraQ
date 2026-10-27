@@ -20,12 +20,18 @@ async function context() {
   if (profile.error || !profile.data || profile.data.status !== "active" || !profile.data.organization_id) return null;
   return { client, profile: profile.data };
 }
-export async function GET() {
+export async function GET(request: Request) {
   const ctx = await context();
   if (!ctx) return fail("Sesión no válida.", 401);
   const admin = ctx.profile.user_type === "administrator";
-  const result = await ctx.client.from("home_image_versions").select("id,slot,revision,object_path,file_name,created_at,reason").eq("organization_id", ctx.profile.organization_id).eq("workspace_mode", ctx.profile.workspace_mode ?? "production").order("revision", { ascending: false });
+  const requestedVersion = new URL(request.url).searchParams.get("version");
+  if (requestedVersion && !admin) return fail("Solo el administrador puede consultar versiones anteriores.", 403);
+  if (requestedVersion && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedVersion)) return fail("Versión no válida.", 400);
+  let query = ctx.client.from("home_image_versions").select("id,slot,revision,object_path,file_name,created_at,reason").eq("organization_id", ctx.profile.organization_id).eq("workspace_mode", ctx.profile.workspace_mode ?? "production").order("revision", { ascending: false });
+  if (requestedVersion) query = query.eq("id", requestedVersion);
+  const result = await query;
   if (result.error) return fail("No fue posible cargar las imágenes. La configuración puede estar pendiente de habilitarse.", 503);
+  if (requestedVersion && !result.data?.length) return fail("La versión no está disponible en este espacio.", 404);
   const signer = createAdminClient();
   const seen = new Set<string>();
   const versions = [];

@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from pglast import parser
 
-path = Path(__file__).resolve().parents[1] / "supabase/migrations/202610220001_home_image_slots.sql"
+path = Path(__file__).resolve().parents[1] / "supabase/migrations/202610270001_home_image_slots.sql"
 sql = path.read_text(encoding="utf-8")
 statements = json.loads(parser.parse_sql_json(sql))["stmts"]
 functions = json.loads(parser.parse_plpgsql_json(sql))
@@ -26,3 +26,7 @@ for guard in [
     assert guard in lower, f"Missing safety boundary: {guard}"
 print(f"PASS static SQL/PLpgSQL: {len(statements)} statements, {len(functions)} function bodies")
 print("PENDING: schema application, catalog compatibility, transactional behavior, RLS and integration in isolated Preview")
+
+versions = [p.name.split("_", 1)[0] for p in path.parent.glob("*.sql")]
+assert len(versions) == len(set(versions)), "Duplicate migration identifiers"
+assert path.name.split("_", 1)[0] > "202610220001", "Image slots must follow document retention when integrated"
