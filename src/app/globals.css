@@ -7789,3 +7789,15 @@ button:disabled {
   .audit-form-footer .button, .audit-success-actions .button { width: 100%; }
   .audit-success-actions { width: 100%; flex-direction: column; }
 }
+
+/* FIX-02: shared read-only viewers; keep natural orientation and allow navigation. */
+.secure-preview-navigation { flex-wrap: wrap; }
+.secure-preview-viewport { height: min(62vh, 760px); min-height: 240px; }
+.secure-preview-surface canvas { max-width: none; }
+.secure-preview-surface > img { width: auto; height: auto; max-width: none; max-height: none; }
+.secure-sheet-content td { max-width: none; white-space: pre-wrap; overflow: visible; text-overflow: clip; vertical-align: top; }
+.evidence-preview-dialog > .secure-document-viewer, .organization-image-backdrop > section > .secure-document-viewer { min-height: 0; overflow: hidden; }
+
+
+.organization-image-backdrop .secure-preview-viewport { display: block; padding: 18px; }
+.evidence-preview-dialog > .secure-document-viewer, .organization-image-backdrop > section > .secure-document-viewer { overflow: auto; }

@@ -28,7 +28,10 @@ export async function GET(
       .maybeSingle();
     if (record.error) throw record.error;
     if (!record.data || record.data.deleted_at) throw new GeneralInformationApiError("Documento no disponible.", 404);
-    const path = disposition === "preview" && record.data.preview_status === "ready" && record.data.preview_path
+    if (disposition === "preview" && new URL(request.url).searchParams.get("target") === "original" && record.data.preview_status === "ready" && record.data.preview_path && !actor.administrator) {
+      throw new GeneralInformationApiError("La consulta del original está reservada al administrador cuando existe una vista convertida.", 403);
+    }
+    const path = disposition === "preview" && new URL(request.url).searchParams.get("target") !== "original" && record.data.preview_status === "ready" && record.data.preview_path
       ? record.data.preview_path
       : record.data.object_path;
     const signed = await admin.storage.from(record.data.bucket_id || "integraq-private").createSignedUrl(

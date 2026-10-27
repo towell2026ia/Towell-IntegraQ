@@ -33,7 +33,7 @@ export interface AttachmentRecord {
   deletedBy: string | null;
 }
 
-interface AttachmentScope {
+export interface AttachmentScope {
   moduleId: WorkspaceModuleId;
   resourceType: string;
   resourceKey: string;
@@ -51,6 +51,16 @@ export async function listAttachments(scope: AttachmentScope, includeHistory = f
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return (data ?? []).map(mapAttachment);
+}
+
+export async function getReferencedAttachment(id: string, moduleId: WorkspaceModuleId) {
+  const { data, error } = await createClient().from("file_objects").select("*").eq("id", id).eq("module_id", moduleId).is("deleted_at", null).maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapAttachment(data) : null;
+}
+
+export function mergeReferencedAttachment(current: AttachmentRecord[], referenced: AttachmentRecord | null) {
+  return !referenced || current.some((item) => item.id === referenced.id) ? current : [...current, referenced];
 }
 
 export async function uploadAttachment(

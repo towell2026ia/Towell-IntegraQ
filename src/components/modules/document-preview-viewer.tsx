@@ -16,7 +16,9 @@ import {
   useRef,
   useState,
 } from "react";
-import type { PDFDocumentProxy } from "pdfjs-dist";
+import type { PDFDocumentProxy, PDFDocumentLoadingTask, RenderTask } from "pdfjs-dist";
+import type { WorkSheet } from "xlsx";
+import { officeXml, loadPreviewBytes, previewIsPdf, previewScale, sheetWindow, wordPageSize, type PreviewFit } from "@/lib/document-preview";
 
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { getControlledDocumentDownloadUrl } from "@/lib/document-storage";
@@ -30,14 +32,14 @@ interface DocumentPreviewViewerProps {
   code: string;
   version: ControlledDocumentVersion;
   onReadyChange: (ready: boolean) => void;
-  sourceUrl?: () => Promise<string | null>;
+  sourceUrl?: (target: "original" | "preview") => Promise<string | null>;
 }
 
 type PreviewKind = "pdf" | "document" | "spreadsheet" | "image";
-type SpreadsheetData = Record<string, Array<Array<string | number | boolean | null>>>;
+type SpreadsheetData = Record<string, WorkSheet>;
 
 const spreadsheetExtensions = new Set(["xlsx", "xls", "xlsm", "xlsb"]);
-const imageExtensions = new Set(["png", "jpg", "jpeg", "webp"]);
+const imageExtensions = new Set(["png", "jpg", "jpeg", "webp", "gif", "bmp"]);
 
 function fileExtension(fileName: string) {
   return fileName.split(".").at(-1)?.toLocaleLowerCase("en-US") ?? "";
@@ -74,6 +76,16 @@ export const DocumentPreviewViewer = forwardRef<
   const [pdfPage, setPdfPage] = useState(1);
   const [pdfRendering, setPdfRendering] = useState(false);
   const [pdfZoom, setPdfZoom] = useState(1);
+  const [fit, setFit] = useState<PreviewFit>("width");
+  const [viewportSize, setViewportSize] = useState({ width: 760, height: 600 });
+  const [surfaceSize, setSurfaceSize] = useState({ width: 816, height: 1056 });
+  const [pageSize, setPageSize] = useState<{ width: number; minHeight: number } | undefined>();
+  const [sheetHtml, setSheetHtml] = useState("");
+  const [sheetRow, setSheetRow] = useState(0);
+  const [sheetColumn, setSheetColumn] = useState(0);
+  const [sheetEnd, setSheetEnd] = useState({ r: 0, c: 0 });
+  const [retry, setRetry] = useState(0);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const sourceBytesRef = useRef<ArrayBuffer | null>(null);
   const previewSurfaceRef = useRef<HTMLDivElement>(null);
   const pdfCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -81,29 +93,25 @@ export const DocumentPreviewViewer = forwardRef<
   useEffect(() => {
     let active = true;
     let localImageUrl = "";
-    let loadedPdf: PDFDocumentProxy | null = null;
+    let loadingTask: PDFDocumentLoadingTask | null = null;
     onReadyChange(false);
     setLoading(true);
     setError("");
 
     void (async () => {
-      const normalizedPreview = version.previewStatus === "ready" && Boolean(version.previewPath);
-      const signedUrl = sourceUrl
-        ? await sourceUrl()
-        : await getControlledDocumentDownloadUrl(version, normalizedPreview ? "preview" : "original");
-      if (!signedUrl) throw new Error("Este registro todavía no tiene un archivo consultable.");
-      const response = await fetch(signedUrl, { cache: "no-store" });
-      if (!response.ok) throw new Error("No fue posible abrir el archivo privado.");
-      const bytes = await response.arrayBuffer();
+      const normalizedPreview = version.previewStatus === "ready" && Boolean(version.previewPath || sourceUrl);
+      const loaded = await loadPreviewBytes(normalizedPreview, (target) => sourceUrl ? sourceUrl(target) : getControlledDocumentDownloadUrl(version, target));
+      const bytes = loaded.bytes;
       if (!active) return;
       sourceBytesRef.current = bytes;
-      const extension = normalizedPreview ? "pdf" : fileExtension(version.fileName);
+      const extension = previewIsPdf(bytes, version.mimeType) ? "pdf" : fileExtension(version.fileName);
 
       if (extension === "pdf") {
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-        loadedPdf = await pdfjs.getDocument({ data: bytes.slice(0) }).promise;
-        if (!active) return;
+        loadingTask = pdfjs.getDocument({ data: bytes.slice(0) });
+        const loadedPdf = await loadingTask.promise;
+        if (!active) { void loadingTask.destroy(); return; }
         setPdfDocument(loadedPdf);
         setPdfPage(1);
         setKind("pdf");
@@ -114,22 +122,17 @@ export const DocumentPreviewViewer = forwardRef<
         ]);
         const result = await mammoth.convertToHtml({ arrayBuffer: bytes.slice(0) });
         if (!active) return;
+        const metadata = await officeXml(bytes, "word/document.xml").catch(() => undefined);
+        if (!active) return;
+        setPageSize(metadata ? wordPageSize(metadata) : undefined);
         setDocumentHtml(DOMPurify.sanitize(result.value));
         setKind("document");
       } else if (spreadsheetExtensions.has(extension)) {
         const XLSX = await import("xlsx");
-        const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
-        const data = Object.fromEntries(
-          workbook.SheetNames.map((sheetName) => [
-            sheetName,
-            XLSX.utils.sheet_to_json<Array<string | number | boolean | null>>(
-              workbook.Sheets[sheetName],
-              { header: 1, raw: false, defval: null },
-            ),
-          ]),
-        );
+        const workbook = XLSX.read(bytes, { type: "array", cellDates: true, cellStyles: true });
         if (!active) return;
-        setSpreadsheetData(data);
+        setSpreadsheetData(workbook.Sheets);
+        setSheetRow(0); setSheetColumn(0);
         setSheetNames(workbook.SheetNames);
         setActiveSheet(workbook.SheetNames[0] ?? "");
         setKind("spreadsheet");
@@ -143,7 +146,7 @@ export const DocumentPreviewViewer = forwardRef<
         throw new Error(`La vista rápida no admite todavía archivos .${extension || "sin extensión"}.`);
       }
       setLoading(false);
-      onReadyChange(true);
+      if (extension !== "pdf" && !imageExtensions.has(extension)) onReadyChange(true);
     })().catch((loadError) => {
       if (!active) return;
       setError(loadError instanceof Error ? loadError.message : "No fue posible generar la vista rápida.");
@@ -155,34 +158,59 @@ export const DocumentPreviewViewer = forwardRef<
       active = false;
       sourceBytesRef.current = null;
       if (localImageUrl) URL.revokeObjectURL(localImageUrl);
-      if (loadedPdf) void loadedPdf.cleanup();
+      if (loadingTask) void loadingTask.destroy();
     };
-  }, [onReadyChange, sourceUrl, version]);
+  }, [onReadyChange, sourceUrl, version, retry]);
 
   useEffect(() => {
-    if (!pdfDocument || !pdfCanvasRef.current) return;
+    if (loading || !viewportRef.current || !previewSurfaceRef.current) return;
+    const viewport = viewportRef.current, surface = previewSurfaceRef.current;
+    const measure = () => {
+      const width = Math.max(1, viewport.clientWidth - 36), height = Math.max(1, viewport.clientHeight - 36);
+      setViewportSize((old) => old.width === width && old.height === height ? old : { width, height });
+      const natural = { width: surface.scrollWidth || 1, height: surface.scrollHeight || 1 };
+      setSurfaceSize((old) => old.width === natural.width && old.height === natural.height ? old : natural);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport); observer.observe(surface);
+    const frame = requestAnimationFrame(measure);
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+  }, [loading, kind]);
+
+  useEffect(() => {
+    const sheet = spreadsheetData[activeSheet];
+    if (kind !== "spreadsheet" || !sheet) return;
     let active = true;
-    setPdfRendering(true);
+    void Promise.all([import("xlsx"), import("dompurify")]).then(([XLSX, { default: DOMPurify }]) => {
+      const range = XLSX.utils.decode_range(sheet["!ref"] || "A1");
+      const window = sheetWindow(sheetRow, sheetColumn, range.e.r, range.e.c);
+      const html = XLSX.utils.sheet_to_html({ ...sheet, "!ref": XLSX.utils.encode_range(window) }, { header: "", footer: "", editable: false });
+      if (active) { setSheetHtml(DOMPurify.sanitize(html)); setSheetEnd(range.e); }
+    }).catch(() => { if (active) setError("No fue posible mostrar esta hoja."); });
+    return () => { active = false; };
+  }, [activeSheet, spreadsheetData, kind, sheetRow, sheetColumn]);
+
+  useEffect(() => {
+    if (loading || !pdfDocument || !pdfCanvasRef.current) return;
+    let active = true;
+    let task: RenderTask | undefined;
     void pdfDocument.getPage(pdfPage).then(async (page) => {
       if (!active || !pdfCanvasRef.current) return;
-      const viewport = page.getViewport({ scale: 1.35 * pdfZoom });
-      const canvas = pdfCanvasRef.current;
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      await page.render({ canvas, canvasContext: context, viewport }).promise;
-      if (active) setPdfRendering(false);
-    }).catch((renderError) => {
-      if (active) {
-        setPdfRendering(false);
-        setError(renderError instanceof Error ? renderError.message : "No fue posible mostrar esta página.");
-      }
+      setPdfRendering(true);
+      const natural = page.getViewport({ scale: 1 });
+      const scale = previewScale(natural.width, natural.height, viewportSize.width, viewportSize.height, fit, pdfZoom);
+      const viewport = page.getViewport({ scale });
+      const canvas = pdfCanvasRef.current, context = canvas.getContext("2d");
+      if (!context) throw new Error("No fue posible preparar la página.");
+      canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+      task = page.render({ canvas, canvasContext: context, viewport });
+      await task.promise;
+      if (active) { setPdfRendering(false); onReadyChange(true); }
+    }).catch((failure: Error) => {
+      if (active && failure.name !== "RenderingCancelledException") { setPdfRendering(false); setError(failure.message); onReadyChange(false); }
     });
-    return () => {
-      active = false;
-    };
-  }, [pdfDocument, pdfPage, pdfZoom]);
+    return () => { active = false; task?.cancel(); };
+  }, [pdfDocument, pdfPage, pdfZoom, fit, viewportSize, loading, onReadyChange]);
 
   async function capturePreview() {
     const surface = previewSurfaceRef.current;
@@ -239,64 +267,52 @@ export const DocumentPreviewViewer = forwardRef<
     },
   }), [code, kind, version.revision]);
 
-  const activeRows = spreadsheetData[activeSheet] ?? [];
-  const visibleRows = activeRows.slice(0, 250);
-  const visibleColumnCount = Math.min(
-    60,
-    visibleRows.reduce((maximum, row) => Math.max(maximum, row.length), 0),
-  );
-
   return (
     <section className="secure-document-viewer" aria-busy={loading}>
       {loading ? (
         <div className="secure-document-state"><LoaderCircle className="spin" size={28} /><strong>Generando vista de solo lectura</strong><span>El archivo original permanece protegido.</span></div>
       ) : null}
       {error ? (
-        <div className="secure-document-state secure-document-error"><FileWarning size={28} /><strong>No se pudo generar la vista</strong><span>{error}</span></div>
+        <div className="secure-document-state secure-document-error"><FileWarning size={28} /><strong>No se pudo generar la vista</strong><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>Reintentar vista</button></div>
       ) : null}
       {!loading && !error ? (
         <>
-          {kind === "pdf" && pdfDocument ? (
-            <nav className="secure-preview-navigation" aria-label="Páginas del PDF">
+          <nav className="secure-preview-navigation" aria-label="Navegación y ajuste de la vista">
+            {kind === "pdf" && pdfDocument ? <>
               <button type="button" disabled={pdfPage <= 1} onClick={() => setPdfPage((page) => Math.max(1, page - 1))}><ChevronLeft size={15} /> Anterior</button>
               <span>Página {pdfPage} de {pdfDocument.numPages}</span>
               <button type="button" disabled={pdfPage >= pdfDocument.numPages} onClick={() => setPdfPage((page) => Math.min(pdfDocument.numPages, page + 1))}>Siguiente <ChevronRight size={15} /></button>
-              <button type="button" onClick={() => setPdfZoom((value) => Math.max(.5, value - .25))}><ZoomOut size={15} /> Zoom -</button>
-              <span>{Math.round(pdfZoom * 100)}%</span>
-              <button type="button" onClick={() => setPdfZoom((value) => Math.min(3, value + .25))}><ZoomIn size={15} /> Zoom +</button>
-              <button type="button" onClick={() => setPdfZoom(1.45)}><Maximize2 size={15} /> Ajustar ancho</button>
-              <button type="button" onClick={() => setPdfZoom(.85)}><Maximize2 size={15} /> Ajustar página</button>
-            </nav>
-          ) : null}
-          {version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" ? "Preview PDF normalizado" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{version.previewStatus === "ready" ? "La orientación y paginación provienen del motor documental." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
+            </> : null}
+            <button type="button" onClick={() => setPdfZoom((value) => Math.max(.25, value - .25))}><ZoomOut size={15} /> Zoom -</button>
+            <span>{Math.round(pdfZoom * 100)}%</span>
+            <button type="button" onClick={() => setPdfZoom((value) => Math.min(4, value + .25))}><ZoomIn size={15} /> Zoom +</button>
+            <button type="button" onClick={() => { setFit("width"); setPdfZoom(1); }}><Maximize2 size={15} /> Ajustar ancho</button>
+            <button type="button" onClick={() => { setFit("page"); setPdfZoom(1); }}><Maximize2 size={15} /> Ajustar página</button>
+            <button type="button" onClick={() => { setFit("manual"); setPdfZoom(1); }}>Tamaño original</button>
+          </nav>
+          {kind === "document" || kind === "spreadsheet" ? <p className="document-preview-processing">Vista Office simplificada: conserva contenido y tablas cuando es posible; no garantiza estilos, impresión ni cortes de página del original. Se prefiere el PDF convertido cuando está disponible.</p> : null}
+          {kind === "spreadsheet" ? <nav className="secure-preview-navigation" aria-label="Filas y columnas de la hoja">
+            <button type="button" disabled={sheetRow === 0} onClick={() => setSheetRow((row) => Math.max(0, row - 250))}>Filas anteriores</button>
+            <span>Filas {sheetRow + 1}–{Math.min(sheetEnd.r + 1, sheetRow + 250)} de {sheetEnd.r + 1}</span>
+            <button type="button" disabled={sheetRow + 250 > sheetEnd.r} onClick={() => setSheetRow((row) => row + 250)}>Más filas</button>
+            <button type="button" disabled={sheetColumn === 0} onClick={() => setSheetColumn((column) => Math.max(0, column - 60))}>Columnas anteriores</button>
+            <span>Columnas {sheetColumn + 1}–{Math.min(sheetEnd.c + 1, sheetColumn + 60)} de {sheetEnd.c + 1}</span>
+            <button type="button" disabled={sheetColumn + 60 > sheetEnd.c} onClick={() => setSheetColumn((column) => column + 60)}>Más columnas</button>
+          </nav> : null}
+          {version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" && kind === "pdf" ? "Vista PDF disponible" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{kind === "pdf" ? "Se respetan las páginas y orientación del PDF disponible." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
           {kind === "spreadsheet" && sheetNames.length > 1 ? (
             <nav className="secure-preview-navigation secure-sheet-tabs" aria-label="Hojas del libro">
-              {sheetNames.map((sheetName) => <button className={activeSheet === sheetName ? "active" : ""} key={sheetName} type="button" onClick={() => setActiveSheet(sheetName)}>{sheetName}</button>)}
+              {sheetNames.map((sheetName) => <button className={activeSheet === sheetName ? "active" : ""} key={sheetName} type="button" onClick={() => { setActiveSheet(sheetName); setSheetRow(0); setSheetColumn(0); }}>{sheetName}</button>)}
             </nav>
           ) : null}
-          <div className={`secure-preview-viewport secure-preview-${kind}`}>
-            <div className="secure-preview-surface" ref={previewSurfaceRef}>
+          <div className={`secure-preview-viewport secure-preview-${kind}`} ref={viewportRef}>
+            <div className="secure-preview-surface" style={{ zoom: kind === "pdf" ? 1 : previewScale(surfaceSize.width, surfaceSize.height, viewportSize.width, viewportSize.height, fit, pdfZoom) }} ref={previewSurfaceRef}>
               {kind === "pdf" ? <canvas aria-label={`Página ${pdfPage}`} className={pdfRendering ? "rendering" : ""} ref={pdfCanvasRef} /> : null}
-              {kind === "document" ? <article className="secure-docx-content" dangerouslySetInnerHTML={{ __html: documentHtml }} /> : null}
-              {kind === "spreadsheet" ? (
-                <div className="secure-sheet-content">
-                  <table>
-                    <tbody>
-                      {visibleRows.map((row, rowIndex) => (
-                        <tr key={rowIndex}>
-                          {Array.from({ length: visibleColumnCount }, (_, columnIndex) => (
-                            <td key={columnIndex}>{row[columnIndex] == null ? "" : String(row[columnIndex])}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {activeRows.length > visibleRows.length ? <p>Vista rápida limitada a 250 filas. La exportación conserva esta vista.</p> : null}
-                </div>
-              ) : null}
+              {kind === "document" ? <article className="secure-docx-content" style={pageSize} dangerouslySetInnerHTML={{ __html: documentHtml }} /> : null}
+              {kind === "spreadsheet" ? <div className="secure-sheet-content" dangerouslySetInnerHTML={{ __html: sheetHtml }} /> : null}
               {/* La fuente es un blob privado generado en memoria; next/image no puede optimizarlo. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              {kind === "image" ? <img alt={`Vista de ${version.fileName}`} src={imageUrl} /> : null}
+              {kind === "image" ? <img alt={`Vista de ${version.fileName}`} src={imageUrl} onLoad={() => onReadyChange(true)} onError={() => { setError("No fue posible mostrar la imagen."); onReadyChange(false); }} /> : null}
             </div>
           </div>
         </>
