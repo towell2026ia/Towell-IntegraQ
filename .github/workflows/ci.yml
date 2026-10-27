@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - main
+      - codex/stb-01-global-capture-windows
   workflow_dispatch:
 
 permissions:
@@ -42,6 +43,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned static SQL parser on CI runner
+        run: python -m pip install pglast==8.7
+      - name: Validate documentary SQL and integration fixture syntax only
+        run: python scripts/validate-document-retention-sql.py
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -76,3 +85,21 @@ jobs:
       - name: Verify deterministic cleanup of committed Preview fixtures
         if: always()
         run: node scripts/ci/indicator-concurrency-preview.mjs --cleanup
+
+  document-preview-integration:
+    name: STB-02 isolated Supabase Preview
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/stb-02-document-retention' && vars.IQ_FIX_01_SQL_ACCEPTANCE == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STB_GIT_BRANCH: ${{ github.head_ref }}
+      STB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify only document retention assertions in the exact PR Preview
+        run: node scripts/ci/document-retention-preview.mjs

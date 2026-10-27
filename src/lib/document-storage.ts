@@ -1,5 +1,7 @@
 "use client";
 
+import { relationRecord, discardUnpublishedUpload } from "@/lib/document-retention";
+
 import type {
   ControlledDocument,
   ControlledDocumentVersion,
@@ -75,6 +77,9 @@ function errorMessage(error: unknown) {
   if (message.includes("FORBIDDEN") || message.includes("permission")) {
     return "No cuentas con permisos para realizar esta acción.";
   }
+  if (message.includes("DOCUMENT_ACTIVE_CODE_CONFLICT") || message.includes("controlled_documents_live_scope_code_idx")) return "El código ya está ocupado por un documento no eliminado en este espacio. No se sobrescribió ningún documento.";
+  if (message.includes("DOCUMENT_ACTIVE_REFERENCE")) return "El documento está publicado en Inicio. Retira primero su referencia vigente; el historial se conserva.";
+  if (message.includes("DOCUMENT_SCOPE") || message.includes("DOCUMENT_ADMIN_SCOPE")) return "No tienes autorización para este documento o workspace.";
   if (message.includes("VERSION_ALREADY_EXISTS") || message.includes("duplicate key")) {
     return "Esta versión ya existe. Ingresa una versión diferente.";
   }
@@ -82,6 +87,13 @@ function errorMessage(error: unknown) {
   if (message.includes("SUMMARY_REQUIRED")) return "El resumen de cambios es obligatorio.";
   if (message) return message;
   return "No fue posible almacenar el documento.";
+}
+
+async function discardUnpublishedFile(supabase: ReturnType<typeof createClient>, objectPath: string) {
+  await discardUnpublishedUpload(async () => {
+    const registered = await supabase.from("file_objects").select("id").eq("bucket_id", privateBucket).eq("object_path", objectPath).maybeSingle();
+    return { registered: Boolean(registered.data), uncertain: Boolean(registered.error) };
+  }, () => supabase.storage.from(privateBucket).remove([objectPath]));
 }
 
 export async function uploadPendingControlledDocument(
@@ -107,15 +119,9 @@ export async function uploadPendingControlledDocument(
   }
   await assertDocumentAdministrator(supabase, userData.user.id);
   const normalizedCode = input.code.trim().toLocaleUpperCase("es-MX");
-  const { data: existingDocument, error: existingDocumentError } = await supabase
-    .from("controlled_documents")
-    .select("id")
-    .eq("code", normalizedCode)
-    .maybeSingle();
-  if (existingDocumentError) throw new Error(errorMessage(existingDocumentError));
-  if (existingDocument) {
-    throw new Error(`Ya existe un documento con el código ${normalizedCode}.`);
-  }
+  const { data: available, error: availableError } = await supabase.rpc("document_code_available", { p_code: normalizedCode, p_process: input.processId });
+  if (availableError) throw new Error(errorMessage(availableError));
+  if (!available) throw new Error("El código ya está ocupado por un documento no eliminado en este espacio.");
 
   const uploadedAt = new Date().toISOString();
   const sha256 = await sha256For(input.file);
@@ -136,80 +142,21 @@ export async function uploadPendingControlledDocument(
     });
   if (storageError) throw new Error(errorMessage(storageError));
 
-  const { data: validatorProfile } = await supabase
-    .from("profiles")
-    .select("id, full_name")
-    .eq("position_id", validator.positionId)
-    .eq("status", "active")
-    .limit(1)
-    .maybeSingle();
-  const { data: fileObject, error: fileObjectError } = await supabase
-    .from("file_objects")
-    .insert({
-      bucket_id: privateBucket,
-      object_path: storageObjectPath,
-      original_name: input.file.name,
-      mime_type: input.file.type || "application/octet-stream",
-      size_bytes: input.file.size,
-      sha256,
-      process_id: input.processId,
-      module_id: "documents",
-      audience: "internal",
-      resource_type: "controlled_document",
-      category: databaseDocumentTypeId,
-      uploaded_by: userData.user.id,
-    })
-    .select("id")
-    .single();
-  if (fileObjectError || !fileObject) {
-    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
-    throw new Error(errorMessage(fileObjectError));
-  }
-
-  const { data: storedDocument, error: documentError } = await supabase
-    .from("controlled_documents")
-    .insert({
-      process_id: input.processId,
-      document_type_id: databaseDocumentTypeId,
-      code: normalizedCode,
-      title: input.name.trim(),
-      owner_id: validatorProfile?.id ?? userData.user.id,
-      created_by: userData.user.id,
-    })
-    .select("id")
-    .single();
-  if (documentError || !storedDocument) {
-    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
-    throw new Error(errorMessage(documentError));
-  }
-
-  await supabase
-    .from("file_objects")
-    .update({ resource_id: storedDocument.id })
-    .eq("id", fileObject.id);
-  const { data: storedVersion, error: versionError } = await supabase
-    .from("controlled_document_versions")
-    .insert({
-      document_id: storedDocument.id,
-      revision: input.revision,
-      status: "draft",
-      file_id: fileObject.id,
-      file_name: input.file.name,
-      change_reason: "Carga manual pendiente de autorización por la jefatura del área",
-      uploaded_by: userData.user.id,
-      validator_id: validatorProfile?.id ?? null,
-    })
-    .select("id")
-    .single();
-  if (versionError || !storedVersion) {
-    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
-    throw new Error(errorMessage(versionError));
-  }
-
-  const { error: submitError } = await supabase.rpc("submit_document_version", {
-    requested_version_id: storedVersion.id,
+  const { data: actor } = await supabase.from("profiles").select("organization_id,workspace_mode").eq("id", userData.user.id).single();
+  const { data: validatorProfile } = await supabase.from("profiles").select("id,full_name")
+    .eq("position_id", validator.positionId).eq("status", "active")
+    .eq("organization_id", actor?.organization_id).eq("workspace_mode", actor?.workspace_mode).limit(1).maybeSingle();
+  const { data: saved, error: publishError } = await supabase.rpc("register_controlled_file", {
+    p_document: { process_id: input.processId, document_type_id: databaseDocumentTypeId, code: normalizedCode, title: input.name.trim(), revision: input.revision, owner_id: validatorProfile?.id ?? userData.user.id, validator_id: validatorProfile?.id ?? null },
+    p_file: { object_path: storageObjectPath, original_name: input.file.name, mime_type: input.file.type || "application/octet-stream", size_bytes: input.file.size, sha256 },
   });
-  if (submitError) throw new Error(errorMessage(submitError));
+  if (publishError || !saved) {
+    await discardUnpublishedFile(supabase, storageObjectPath);
+    throw new Error(errorMessage(publishError));
+  }
+  const storedDocument = { id: saved.document_id as string };
+  const storedVersion = { id: saved.version_id as string };
+  const fileObject = { id: saved.file_id as string };
 
   return {
     id: storedDocument.id,
@@ -274,49 +221,19 @@ export async function uploadNewControlledDocumentVersion(
     });
   if (storageError) throw new Error(errorMessage(storageError));
 
-  const { data: fileObject, error: fileObjectError } = await supabase
-    .from("file_objects")
-    .insert({
-      bucket_id: privateBucket,
-      object_path: storageObjectPath,
-      original_name: input.file.name,
-      mime_type: input.file.type || "application/octet-stream",
-      size_bytes: input.file.size,
-      sha256,
-      process_id: input.document.processId,
-      module_id: "documents",
-      audience: "internal",
-      resource_type: "controlled_document",
-      resource_id: input.document.id,
-      category: databaseDocumentTypeIds[input.document.documentTypeId] ?? input.document.documentTypeId,
-      uploaded_by: userData.user.id,
-    })
-    .select("id")
-    .single();
-  if (fileObjectError || !fileObject) {
-    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
-    throw new Error(errorMessage(fileObjectError));
-  }
-
-  const { error: versionError } = await supabase.rpc("create_document_version", {
-    p_document_id: input.document.id,
-    p_revision: input.revision,
-    p_file_id: fileObject.id,
-    p_file_name: input.file.name,
-    p_change_reason: input.changeReason.trim(),
-    p_change_summary: input.changeSummary.trim(),
-    p_comments: input.comments?.trim() || null,
-    p_version_id: versionId,
+  const { data: saved, error: versionError } = await supabase.rpc("register_controlled_file", {
+    p_existing: input.document.id,
+    p_document: { revision: input.revision, change_reason: input.changeReason.trim(), change_summary: input.changeSummary.trim(), comments: input.comments?.trim() || null },
+    p_file: { object_path: storageObjectPath, original_name: input.file.name, mime_type: input.file.type || "application/octet-stream", size_bytes: input.file.size, sha256 },
   });
-  if (versionError) {
-    await supabase.storage.from(privateBucket).remove([storageObjectPath]);
-    if (String(versionError.message).includes("VERSION_ALREADY_EXISTS")) {
-      throw new Error("Esta versión ya existe. Ingresa una versión diferente.");
-    }
+  if (versionError || !saved) {
+    await discardUnpublishedFile(supabase, storageObjectPath);
     throw new Error(errorMessage(versionError));
   }
+  const fileObject = { id: saved.file_id as string };
+
   return {
-    id: versionId,
+    id: saved.version_id as string,
     revision: input.revision,
     status: "draft",
     fileName: input.file.name,
@@ -397,6 +314,7 @@ export async function obsoleteStoredDocument(documentId: string, reason: string,
 }
 
 export async function softDeleteStoredDocument(documentId: string, reason: string) {
+  if (!reason.trim()) throw new Error("El motivo de eliminación es obligatorio.");
   return callLifecycleRpc(documentId, "soft_delete_document", { p_document_id: documentId, p_reason: reason.trim() });
 }
 
@@ -599,7 +517,7 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
     const documentTypeId = clientDocumentTypeIds[row.document_type_id];
     if (!documentTypeId) return [];
     const defaultValidator = documentValidatorByProcess[row.process_id]?.name ?? "Jefatura del área";
-    const lifecycle = row.lifecycle[0];
+    const lifecycle = relationRecord(row.lifecycle);
     return [{
       id: row.id,
       processId: row.process_id,
