@@ -89,9 +89,9 @@ begin
     raise exception 'ACCESS_STALE' using errcode='40001';
   end if;
   -- This endpoint only edits access. Identity, type, company, status and files are immutable here.
-  if requested_account->>'userType' is distinct from case target.user_type
+  if requested_account->>'userType' is distinct from (case target.user_type
     when 'administrator' then 'Administrador' when 'internal' then 'Usuario interno'
-    when 'customer' then 'Cliente' when 'supplier' then 'Proveedor' end
+    when 'customer' then 'Cliente' when 'supplier' then 'Proveedor' end)
     or requested_account->>'status' is distinct from target.status::text then
     raise exception 'ACCESS_IDENTITY_PRESERVED';
   end if;
