@@ -62,7 +62,7 @@ using (public.is_internal_user() or (
   customer_visible and active and certificate_file_id is not null and public.fix03_can_read_file(certificate_file_id)
 ));
 
--- Permission replacement is a single transaction. Lock the target profile and
+-- Explicit permission changes share one transaction; existing assignment rows are preserved. Lock the target profile and
 -- reject stale editors. Failure at any validation/write/audit rolls everything back.
 create or replace function public.save_user_access(
   requested_user_id uuid, expected_revision timestamptz, requested_account jsonb
@@ -119,6 +119,7 @@ begin
         where d->>'processId'=old.process_id and d->>'role'=old.document_role::text))
     or exists (select 1 from public.user_module_permissions old where old.user_id=target.id and old.can_view
       and old.module_id<>'home'
+      and not coalesce(case old.module_id when 'access' then specific->>'usuarios.ver'='false' when 'customers' then specific->>'clientes.acceder'='false' when 'suppliers' then specific->>'proveedores.acceder'='false' when 'customer-portal' then specific->>'portal_clientes.acceder'='false' when 'supplier-portal' then specific->>'portal_proveedores.acceder'='false' else false end,false)
       and not exists (select 1 from jsonb_array_elements_text(requested_account->'assignedModuleIds') m where m=old.module_id)
       and not exists (select 1 from jsonb_array_elements(requested_account->'moduleActionPermissions') a where a->>'moduleId'=old.module_id))
     or exists (select 1 from public.user_module_action_permissions old where old.user_id=target.id
