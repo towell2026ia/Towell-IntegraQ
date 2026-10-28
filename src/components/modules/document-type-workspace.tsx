@@ -10,7 +10,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { DocumentPreviewViewer, type DocumentPreviewViewerHandle } from "@/components/modules/document-preview-viewer";
 import type { ProcessCatalogItem } from "@/lib/configuration-data";
 import {
-  approveDocumentVersion, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
+  approveDocumentVersion, getDocumentPermissions, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
   rejectDocumentVersion, restoreControlledDocument, softDeleteControlledDocument,
   submitDocumentVersion, type ControlledDocument, type ControlledDocumentStatus,
   type DocumentAuditEventType, type DocumentPermissions,
@@ -69,7 +69,8 @@ export function DocumentTypeWorkspace({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
-  const selected = (id: string | null) => documents.find((item) => item.id === id) ?? null;
+  const visibleDocuments = documents.filter((document) => getDocumentPermissions(session, document.processId).view);
+  const selected = (id: string | null) => visibleDocuments.find((item) => item.id === id) ?? null;
   const preview = selected(previewId);
   const history = selected(historyId);
   const rejecting = selected(rejectId);
@@ -85,7 +86,7 @@ export function DocumentTypeWorkspace({
 
   async function approvePendingDocument(document: ControlledDocument) {
     const pending = document.versions.find((version) => version.status === "pending");
-    if (!pending || reviewingId) return;
+    if (!pending || reviewingId || !getDocumentPermissions(session, document.processId).validate) return;
     setReviewingId(pending.id);
     try {
       await reviewStoredDocumentVersion(pending.id, "approve");
@@ -98,7 +99,7 @@ export function DocumentTypeWorkspace({
 
   async function rejectPendingDocument(document: ControlledDocument, reason: string) {
     const pending = document.versions.find((version) => version.status === "pending");
-    if (!pending) return;
+    if (!pending || !getDocumentPermissions(session, document.processId).validate) return;
     await reviewStoredDocumentVersion(pending.id, "reject", reason);
     onChangeDocument(rejectDocumentVersion(document, reason, now()));
     setRejectId(null);
@@ -107,7 +108,7 @@ export function DocumentTypeWorkspace({
 
   async function submitWorkingVersion(document: ControlledDocument) {
     const working = getWorkingVersion(document);
-    if (!working) return;
+    if (!working || !getDocumentPermissions(session, document.processId).submit) return;
     try {
       await submitStoredDocumentVersion(working.id);
       onChangeDocument(submitDocumentVersion(document, now()));
@@ -124,11 +125,12 @@ export function DocumentTypeWorkspace({
       {permissions.upload ? <button className="button button-primary" type="button" onClick={() => setUploadOpen(true)}><Upload size={16} /> Cargar</button> : null}
     </header>
     {notice ? <div className="document-action-notice" role="status"><Check size={15} /> {notice}</div> : null}
-    <div className="document-control-summary"><span><strong>{documents.length}</strong> documentos</span><span><Clock3 size={14} /> La fecha de modificación se registra automáticamente</span></div>
+    <div className="document-control-summary"><span><strong>{visibleDocuments.length}</strong> documentos</span><span><Clock3 size={14} /> La fecha de modificación se registra automáticamente</span></div>
     <div className="document-control-table-wrap"><table className="document-control-table">
       <thead><tr><th>Vista</th><th>Documento</th><th>Código</th><th>Revisión</th><th>Cargó</th><th>Validador</th><th>Fecha de modificación</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>
-        {documents.map((document) => {
+        {visibleDocuments.map((document) => {
+          const permissions = getDocumentPermissions(session, document.processId);
           const version = getWorkingVersion(document);
           if (!version) return null;
           const current = document.versions.find((item) => item.status === "current");
@@ -155,18 +157,18 @@ export function DocumentTypeWorkspace({
             </div></td>
           </tr>;
         })}
-        {!documents.length ? <tr className="document-empty-row"><td colSpan={9}><FileText size={22} /><strong>Sin {documentType.name.toLocaleLowerCase("es-MX")} en {process.name}</strong><span>La tabla pertenece únicamente a {process.id} y conserva sus propias columnas de control.</span></td></tr> : null}
+        {!visibleDocuments.length ? <tr className="document-empty-row"><td colSpan={9}><FileText size={22} /><strong>Sin {documentType.name.toLocaleLowerCase("es-MX")} en {process.name}</strong><span>La tabla pertenece únicamente a {process.id} y conserva sus propias columnas de control.</span></td></tr> : null}
       </tbody>
     </table></div>
 
-    {uploadOpen ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
-    {preview ? <DocumentPreviewModal document={preview} canDownload={permissions.download} onClose={() => setPreviewId(null)} /> : null}
-    {history && permissions.history ? <DocumentHistoryModal document={history} canRestore={permissions.restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, now())); announce("Documento restaurado correctamente."); }} /> : null}
-    {rejecting ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
-    {editing ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${Date.now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
-    {versioning ? <NewVersionModal document={versioning} session={session} onClose={() => setVersionId(null)} onCreate={async (version) => { onChangeDocument({ ...versioning, versions: [version, ...versioning.versions], activity: [{ id: `${versioning.id}-version-${Date.now()}`, eventType: "VERSION_CREATED", performedBy: session.name, performedAt: version.modifiedAt, reason: version.changeReason, versionId: version.id }, ...(versioning.activity ?? [])] }); setVersionId(null); announce("Nueva versión creada correctamente."); }} /> : null}
-    {obsoleting ? <LifecycleReasonModal mode="obsolete" document={obsoleting} documents={documents} onClose={() => setObsoleteId(null)} onConfirm={async (reason, replacementId) => { await obsoleteStoredDocument(obsoleting.id, reason, replacementId); onChangeDocument(obsoleteControlledDocument(obsoleting, session.name, reason, now(), replacementId)); setObsoleteId(null); announce("Documento marcado como obsoleto."); }} /> : null}
-    {deleting ? <LifecycleReasonModal mode="delete" document={deleting} documents={documents} onClose={() => setDeleteId(null)} onConfirm={async (reason) => { await softDeleteStoredDocument(deleting.id, reason); onChangeDocument(softDeleteControlledDocument(deleting, session.name, reason, now())); setDeleteId(null); announce("Documento eliminado de las vistas operativas. El historial permanece conservado."); }} /> : null}
+    {uploadOpen && permissions.upload ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
+    {preview ? <DocumentPreviewModal document={preview} canDownload={getDocumentPermissions(session, preview.processId).download} onClose={() => setPreviewId(null)} /> : null}
+    {history && getDocumentPermissions(session, history.processId).history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, now())); announce("Documento restaurado correctamente."); }} /> : null}
+    {rejecting && getDocumentPermissions(session, rejecting.processId).validate ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
+    {editing && getDocumentPermissions(session, editing.processId).edit ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
+    {versioning && getDocumentPermissions(session, versioning.processId).version ? <NewVersionModal document={versioning} session={session} onClose={() => setVersionId(null)} onCreate={async (version) => { onChangeDocument({ ...versioning, versions: [version, ...versioning.versions], activity: [{ id: `${versioning.id}-version-${now()}`, eventType: "VERSION_CREATED", performedBy: session.name, performedAt: version.modifiedAt, reason: version.changeReason, versionId: version.id }, ...(versioning.activity ?? [])] }); setVersionId(null); announce("Nueva versión creada correctamente."); }} /> : null}
+    {obsoleting && getDocumentPermissions(session, obsoleting.processId).obsolete ? <LifecycleReasonModal mode="obsolete" document={obsoleting} documents={documents} onClose={() => setObsoleteId(null)} onConfirm={async (reason, replacementId) => { await obsoleteStoredDocument(obsoleting.id, reason, replacementId); onChangeDocument(obsoleteControlledDocument(obsoleting, session.name, reason, now(), replacementId)); setObsoleteId(null); announce("Documento marcado como obsoleto."); }} /> : null}
+    {deleting && getDocumentPermissions(session, deleting.processId).delete ? <LifecycleReasonModal mode="delete" document={deleting} documents={documents} onClose={() => setDeleteId(null)} onConfirm={async (reason) => { await softDeleteStoredDocument(deleting.id, reason); onChangeDocument(softDeleteControlledDocument(deleting, session.name, reason, now())); setDeleteId(null); announce("Documento eliminado de las vistas operativas. El historial permanece conservado."); }} /> : null}
   </>;
 }
 

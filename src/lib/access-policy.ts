@@ -41,6 +41,8 @@ export function canAccessModule(
     );
   }
 
+  if (module === "documents") return Boolean(session.assignedModuleIds?.includes(module)) || Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === module && permission.action === "view"));
+
   const requiredSpecificPermission = module === "customers"
     ? "clientes.acceder"
     : module === "suppliers"

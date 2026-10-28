@@ -137,3 +137,11 @@ export function getPrimaryDocumentProcessId(processId: string) {
     )?.processId ?? processId
   );
 }
+
+/** Folder visibility never grants access to its parent or sibling documents. */
+export function getAuthorizedDocumentProcessIds(
+  processId: string,
+  canRead: (processId: string) => boolean,
+) {
+  return getDocumentProcessIds(processId).filter(canRead);
+}

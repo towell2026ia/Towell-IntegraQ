@@ -5,11 +5,13 @@ vi.mock("@/lib/supabase/server",()=>mock);
 import { getAuthenticatedSession } from "./auth-session";
 let profile:Record<string,unknown>|null, overrides:Array<Record<string,unknown>>;
 let fail:boolean;
+let processes:Array<Record<string,unknown>>=[];
 beforeEach(()=>{
   profile={external_id:"u",full_name:"Existing",user_type:"internal",status:"active",workspace_mode:"production"};
+  processes=[];
   overrides=[{allowed:true,permission:{code:"clientes.acceder"}}];fail=false;
   mock.createClient.mockResolvedValue({auth:{getClaims:async()=>({data:{claims:{sub:"auth-u",app_metadata:{user_type:"administrator",workspace_mode:"demo"}}}})},from:(table:string)=>{
-    const result=()=>({data:table==="profiles"?profile:table==="user_permission_overrides"?overrides:table==="user_module_permissions"?[{module_id:"customers",can_view:true}]:[],error:fail&&table==="user_permission_overrides"?{message:"denied"}:null});
+    const result=()=>({data:table==="profiles"?profile:table==="user_process_permissions"?processes:table==="user_permission_overrides"?overrides:table==="user_module_permissions"?[{module_id:"customers",can_view:true}]:[],error:fail&&table==="user_permission_overrides"?{message:"denied"}:null});
     const chain:Record<string,ReturnType<typeof vi.fn>>={};
     for(const name of ["select","eq"])chain[name]=vi.fn(()=>chain);
     chain.maybeSingle=vi.fn(async()=>result());chain.then=vi.fn((resolve:(value:unknown)=>unknown)=>Promise.resolve(result()).then(resolve));
@@ -32,4 +34,13 @@ describe("fresh persisted session permissions",()=>{
   });
   it("does not resurrect an administrator from JWT metadata when the profile is missing",async()=>{profile=null;expect(await getAuthenticatedSession()).toBeNull();});
   it("fails closed when current permissions cannot be loaded",async()=>{fail=true;expect(await getAuthenticatedSession()).toBeNull();});
+});
+
+it("reloads actual process assignments and roles on a new login/session", async () => {
+  processes=[{process_id:"P-19",document_role:"viewer"}];
+  expect(await getAuthenticatedSession()).toMatchObject({assignedProcessIds:["P-19"],documentAccess:[{processId:"P-19",role:"viewer"}]});
+  processes=[{process_id:"P-08",document_role:"authorizer"}];
+  expect(await getAuthenticatedSession()).toMatchObject({assignedProcessIds:["P-08"],documentAccess:[{processId:"P-08",role:"authorizer"}]});
+  processes=[];
+  expect((await getAuthenticatedSession())?.assignedProcessIds).toEqual([]);
 });

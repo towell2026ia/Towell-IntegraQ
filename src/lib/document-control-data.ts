@@ -185,7 +185,8 @@ export function getDocumentPermissions(
   if (isAdministrator(session)) return administratorPermissions;
   if (!canAccessProcess(session, processId)) return noPermissions;
 
-  const assignment = assignments.find(
+  // Persisted sessions must not inherit hard-coded demo users or positions.
+  const assignment = (session.authUserId ? [] : assignments).find(
     (item) => item.userId === session.userId && item.processId === processId,
   );
   if (assignment) {
@@ -202,12 +203,12 @@ export function getDocumentPermissions(
 
   const inheritedAccess =
     session.documentAccess?.find((item) => item.processId === processId) ??
-    getPositionDocumentAccess(session.positionId, processId);
+    (session.authUserId ? undefined : getPositionDocumentAccess(session.positionId, processId));
   return inheritedAccess
     ? restrictDocumentMutationsToAdministrator(
         getDocumentPermissionsForRole(inheritedAccess.role),
       )
-    : noPermissions;
+    : getDocumentPermissionsForRole("viewer");
 }
 
 function restrictDocumentMutationsToAdministrator(
