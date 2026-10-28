@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { effectiveSpecificPermissions, synchronizeSpecificPermissions } from "./access-permissions";
+import { rolePermissionDefaults, changedSpecificPermissions, effectiveSpecificPermissions, synchronizeSpecificPermissions } from "./access-permissions";
 import { canAccessModule, canAccessCompanyRecord } from "./access-policy";
 import { canPerformModuleAction } from "./module-permissions";
 import { canUseSupplierApi } from "./portal-security";
@@ -10,6 +10,18 @@ import type { ActiveSession } from "./session-data";
 const user: ActiveSession = { userId:"u",name:"U",shortName:"U",initials:"U",position:"P",department:"D",company:"C",userType:"Usuario interno",assignedProcessIds:[],assignedModuleIds:["customers","suppliers","access"],moduleActionPermissions:[{moduleId:"customers",action:"manage"},{moduleId:"access",action:"manage"}] };
 const external = (kind: "customer" | "supplier"): ActiveSession => ({ ...user,userType:kind === "customer" ? "Cliente":"Proveedor",workspaceMode:"production",specificPermissions:{[kind === "customer" ? "portal_clientes.acceder":"portal_proveedores.acceder"]:true},externalParty:{kind,companyId:"company-a",companyName:"A"} });
 describe("FIX-03 effective permissions and portal isolation",()=>{
+  it("sends only explicit changes and preserves unrelated existing permissions",()=>{
+    expect(changedSpecificPermissions({"clientes.ver":true,"portal_clientes.acceder":true},{"clientes.ver":true,"portal_clientes.acceder":false})).toEqual({"portal_clientes.acceder":false});
+  });
+  it("preserves an active inherited portal grant within its company",()=>{
+    const assignments=[{user_id:"a",organization_id:"company-a",status:"active",role:{status:"active",scope_type:"company",grants:[{allowed:true,permission:{code:"portal_clientes.acceder",status:"active"}}]}}];
+    expect(rolePermissionDefaults("a","company-a",assignments)).toEqual({"portal_clientes.acceder":true});
+    expect(rolePermissionDefaults("a","company-b",assignments)).toEqual({});
+  });
+  it("never resurrects an expired or foreign role assignment",()=>{
+    const role={status:"active",scope_type:"global",grants:[{allowed:true,permission:{code:"usuarios.ver",status:"active"}}]};
+    expect(rolePermissionDefaults("a",undefined,[{user_id:"b",status:"active",role},{user_id:"a",status:"active",ends_at:"2020-01-01",role}])).toEqual({});
+  });
   it("shows current legacy grants while preserving an explicit revocation",()=>{
     expect(effectiveSpecificPermissions(user)).toMatchObject({"clientes.administrar":true,"usuarios.administrar_permisos":true,"portal_clientes.acceder":false});
     const denied={...user,specificPermissions:{"clientes.administrar":false,"proveedores.acceder":false}};

@@ -1,4 +1,4 @@
-import { effectiveSpecificPermissions } from "@/lib/access-permissions";
+import { effectiveSpecificPermissions, rolePermissionDefaults } from "@/lib/access-permissions";
 import { NextResponse } from "next/server";
 
 import { processCatalog } from "@/lib/configuration-data";
@@ -105,6 +105,7 @@ async function listAccounts() {
     permissionOverridesResult,
     externalSitesResult,
     authUsersResult,
+    roleAssignmentsResult,
   ] = await Promise.all([
     admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at,updated_at").eq("workspace_mode", actor.workspaceMode).order("full_name"),
     admin.from("positions").select("id,name,branch"),
@@ -114,6 +115,7 @@ async function listAccounts() {
     admin.from("user_permission_overrides").select("user_id,allowed,permission:permissions(code)"),
     admin.from("external_company_sites").select("id,code,name,company_id"),
     admin.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+    admin.from("user_roles").select("user_id,organization_id,status,starts_at,ends_at,role:roles(status,scope_type,grants:role_permissions(allowed,permission:permissions(code,status)))"),
   ]);
 
   const firstError = [
@@ -125,6 +127,7 @@ async function listAccounts() {
     permissionOverridesResult.error,
     externalSitesResult.error,
     authUsersResult.error,
+    roleAssignmentsResult.error,
   ].find(Boolean);
   if (firstError) {
     return NextResponse.json({ error: firstError.message }, { status: 500 });
@@ -199,7 +202,7 @@ async function listAccounts() {
       documentAccess,
       continuousImprovementRole:
         profile.continuous_improvement_role ?? undefined,
-      specificPermissions: effectiveSpecificPermissions({ userType: userTypeFromDatabase[profile.user_type], assignedModuleIds, moduleActionPermissions, specificPermissions: Object.fromEntries((permissionOverridesResult.data ?? []).filter((r) => r.user_id === profile.id).map((r) => { const rel = Array.isArray(r.permission) ? r.permission[0] : r.permission; return [rel?.code, r.allowed]; })) }),
+      specificPermissions: effectiveSpecificPermissions({ userType: userTypeFromDatabase[profile.user_type], assignedModuleIds, moduleActionPermissions, specificPermissions: { ...rolePermissionDefaults(profile.id, profile.external_party_id ?? undefined, roleAssignmentsResult.data ?? []), ...Object.fromEntries((permissionOverridesResult.data ?? []).filter((r) => r.user_id === profile.id).map((r) => { const rel = Array.isArray(r.permission) ? r.permission[0] : r.permission; return [rel?.code, r.allowed]; })) } }),
       accessRevision: profile.updated_at,
       createdAt: profile.created_at,
     } satisfies UserAccessAccount;
@@ -499,11 +502,11 @@ function isUuid(value: string | undefined) {
 async function updateExistingAccess(account: UserAccessAccount) {
   if (!isUuid(account.authUserId) || !account.accessRevision || !Array.isArray(account.documentAccess) || !Array.isArray(account.moduleActionPermissions) || !Array.isArray(account.assignedModuleIds)) return NextResponse.json({ error: "Recarga los permisos actuales antes de guardar." }, { status: 400 });
   const supabase = await createClient();
-  const result = await supabase.rpc("save_user_access", { requested_user_id: account.authUserId, expected_revision: account.accessRevision, requested_account: { ...account, specificPermissions: account.specificPermissions ?? {} } });
+  const result = await supabase.rpc("save_user_access", { requested_user_id: account.authUserId, expected_revision: account.accessRevision, requested_account: { ...account, specificPermissions: account.specificPermissions ?? {}, permissionChanges: account.permissionChanges ?? {} } });
   if (result.error) {
     const stale = result.error.message.includes("ACCESS_STALE");
     const missing = result.error.code === "PGRST202" || result.error.code === "42883";
-    return NextResponse.json({ error: stale ? "Los permisos cambiaron. Recarga el usuario antes de editar." : missing ? "El servicio de permisos no está disponible. No se guardaron cambios." : "No se guardaron los cambios de acceso. Revisa autorización y datos." }, { status: stale ? 409 : missing ? 503 : 403 });
+    return NextResponse.json({ error: stale ? "Los permisos cambiaron. Recarga el usuario antes de editar." : result.error.message.includes("ACCESS_EXISTING_ASSIGNMENT_PRESERVED") ? "Se conservaron las asignaciones existentes. Esta operación requiere revisión y no se aplicó ningún cambio." : missing ? "El servicio de permisos no está disponible. No se guardaron cambios." : "No se guardaron los cambios de acceso. Revisa autorización y datos." }, { status: stale ? 409 : missing ? 503 : 403 });
   }
   return NextResponse.json({ ok: true, userId: account.authUserId, message: "Permisos actualizados y auditados. El correo de autenticación se conserva." });
 }

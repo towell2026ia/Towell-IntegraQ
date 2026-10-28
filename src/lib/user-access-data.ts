@@ -25,6 +25,7 @@ export interface UserAccessAccount {
   id: string;
   authUserId?: string;
   accessRevision?: string;
+  permissionChanges?: SpecificPermissionState;
   fullName: string;
   email: string;
   userType: UserType;

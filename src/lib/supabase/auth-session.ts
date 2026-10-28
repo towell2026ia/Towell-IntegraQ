@@ -142,6 +142,12 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     }),
   );
 
+  if (rawUserType === "customer" || rawUserType === "supplier") {
+    const key = rawUserType === "customer" ? "portal_clientes.acceder" : "portal_proveedores.acceder";
+    const effective = await supabase.rpc("has_permission", { requested_permission: key, requested_company_id: profile.external_party_id });
+    if (effective.error) return null;
+    specificPermissions[key] = effective.data === true;
+  }
   return {
     userId: profile?.external_id || claims.sub,
     authUserId: claims.sub,

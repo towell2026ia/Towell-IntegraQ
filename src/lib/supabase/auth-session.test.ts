@@ -14,7 +14,7 @@ beforeEach(()=>{
     for(const name of ["select","eq"])chain[name]=vi.fn(()=>chain);
     chain.maybeSingle=vi.fn(async()=>result());chain.then=vi.fn((resolve:(value:unknown)=>unknown)=>Promise.resolve(result()).then(resolve));
     return chain;
-  }});
+  },rpc:vi.fn().mockResolvedValue({data:true,error:null})});
 });
 describe("fresh persisted session permissions",()=>{
   it("uses the active database profile instead of stale app metadata",async()=>{
@@ -24,6 +24,11 @@ describe("fresh persisted session permissions",()=>{
     expect((await getAuthenticatedSession())?.specificPermissions?.["clientes.acceder"]).toBe(true);
     overrides=[{allowed:false,permission:{code:"clientes.acceder"}}];
     expect((await getAuthenticatedSession())?.specificPermissions?.["clientes.acceder"]).toBe(false);
+  });
+  it("preserves the current company portal grant inherited through a database role",async()=>{
+    profile={...profile,user_type:"customer",external_party_kind:"customer",external_party_id:"company-a",external_party_name:"A"};
+    overrides=[];
+    expect((await getAuthenticatedSession())?.specificPermissions?.["portal_clientes.acceder"]).toBe(true);
   });
   it("does not resurrect an administrator from JWT metadata when the profile is missing",async()=>{profile=null;expect(await getAuthenticatedSession()).toBeNull();});
   it("fails closed when current permissions cannot be loaded",async()=>{fail=true;expect(await getAuthenticatedSession()).toBeNull();});

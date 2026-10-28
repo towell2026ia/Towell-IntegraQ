@@ -3,24 +3,6 @@ begin;
 
 -- External access requires a persisted allow, the correct company, an active
 -- real account and production mode. No role default or stale menu can bypass it.
-create or replace function public.has_external_organization_scope(
-  requested_kind public.organization_kind, requested_organization_id uuid
-) returns boolean language sql stable security definer set search_path = '' as $$
-  select exists (
-    select 1 from public.profiles p
-    join public.organizations o on o.id = p.external_party_id and o.active
-    join public.user_permission_overrides u on u.user_id = p.id and u.allowed
-    join public.permissions k on k.id = u.permission_id and k.status = 'active'
-    where p.id = auth.uid() and p.status = 'active' and p.workspace_mode = 'production'
-      and p.user_type::text = requested_kind::text
-      and p.external_party_kind = requested_kind and o.kind = requested_kind
-      and (p.external_site_id is null or exists (select 1 from public.external_company_sites site where site.id=p.external_site_id and site.company_id=p.external_party_id and site.active))
-      and p.external_party_id = requested_organization_id
-      and k.code = case requested_kind when 'customer' then 'portal_clientes.acceder'
-        when 'supplier' then 'portal_proveedores.acceder' else '' end
-  );
-$$;
-
 create or replace function public.has_module_permission(
   requested_module_id text, requested_action public.module_permission_action default 'view'
 ) returns boolean language sql stable security definer set search_path = '' as $$
@@ -59,6 +41,7 @@ returns boolean language sql stable security definer set search_path = '' as $$
       or (f.deleted_at is null and p.user_type in ('customer','supplier')
         and f.audience in ('shared',p.user_type::text)
         and public.has_external_organization_scope(p.external_party_kind, f.external_organization_id)
+        and public.has_permission(case p.user_type when 'customer' then 'portal_clientes.acceder' else 'portal_proveedores.acceder' end,null,null,null,null,false,f.external_organization_id)
         and (p.external_site_id is null or f.external_site_id is null or p.external_site_id=f.external_site_id))
     )
   );
@@ -87,14 +70,10 @@ create or replace function public.save_user_access(
 declare
   actor public.profiles%rowtype;
   target public.profiles%rowtype;
-  company public.organizations%rowtype;
-  pos public.positions%rowtype;
   before_state jsonb;
   after_state jsonb;
   item jsonb;
   key text;
-  desired_type public.app_user_type;
-  desired_modules text[];
   specific jsonb;
 begin
   select * into actor from public.profiles where id=auth.uid() and status='active' for update;
@@ -109,102 +88,89 @@ begin
   if expected_revision is null or target.updated_at is distinct from expected_revision then
     raise exception 'ACCESS_STALE' using errcode='40001';
   end if;
-  desired_type := case requested_account->>'userType' when 'Administrador' then 'administrator'::public.app_user_type
-    when 'Usuario interno' then 'internal'::public.app_user_type when 'Cliente' then 'customer'::public.app_user_type
-    when 'Proveedor' then 'supplier'::public.app_user_type else null end;
-  if desired_type is null or coalesce(length(trim(requested_account->>'fullName')),0)=0
-    or requested_account->>'status' not in ('active','inactive')
-    or jsonb_typeof(requested_account->'documentAccess') is distinct from 'array'
+  -- This endpoint only edits access. Identity, type, company, status and files are immutable here.
+  if requested_account->>'userType' is distinct from case target.user_type
+    when 'administrator' then 'Administrador' when 'internal' then 'Usuario interno'
+    when 'customer' then 'Cliente' when 'supplier' then 'Proveedor' end
+    or requested_account->>'status' is distinct from target.status::text then
+    raise exception 'ACCESS_IDENTITY_PRESERVED';
+  end if;
+  if actor.user_type <> 'administrator' and (target.id=actor.id or target.user_type='administrator') then
+    raise exception 'ACCESS_FORBIDDEN' using errcode='42501';
+  end if;
+  if jsonb_typeof(requested_account->'documentAccess') is distinct from 'array'
     or jsonb_typeof(requested_account->'moduleActionPermissions') is distinct from 'array'
     or jsonb_typeof(requested_account->'assignedModuleIds') is distinct from 'array'
-    or jsonb_typeof(requested_account->'specificPermissions') is distinct from 'object' then
+    or jsonb_typeof(requested_account->'permissionChanges') is distinct from 'object' then
     raise exception 'ACCESS_INVALID';
   end if;
-  if actor.user_type <> 'administrator' and (
-    target.id=actor.id or target.user_type='administrator' or desired_type<>target.user_type
-    or (requested_account->>'status')::public.account_status <> target.status
-    or requested_account->'specificPermissions'->>'usuarios.administrar_permisos'='true'
-  ) then raise exception 'ACCESS_FORBIDDEN' using errcode='42501'; end if;
-  if target.id=actor.id and (desired_type<>actor.user_type or requested_account->>'status'<>'active') then
-    raise exception 'ACCESS_SELF_LOCKOUT';
-  end if;
-  before_state := jsonb_build_object('profile',to_jsonb(target),
+  specific := requested_account->'permissionChanges';
+  before_state := jsonb_build_object(
+    'profile',to_jsonb(target),
     'processes',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_process_permissions x where user_id=target.id),
     'modules',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_module_permissions x where user_id=target.id),
     'actions',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_module_action_permissions x where user_id=target.id),
     'overrides',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_permission_overrides x where user_id=target.id));
-  if desired_type in ('customer','supplier') then
-    select * into company from public.organizations where id=(requested_account->>'companyId')::uuid and kind::text=desired_type::text;
-    if company.id is null or (not company.active and (company.id is distinct from target.external_party_id or requested_account->'specificPermissions'->>(case desired_type when 'customer' then 'portal_clientes.acceder' else 'portal_proveedores.acceder' end)='true')) then raise exception 'ACCESS_COMPANY_INVALID'; end if;
-    if nullif(requested_account->>'siteId','') is not null and not exists (
-      select 1 from public.external_company_sites where id=(requested_account->>'siteId')::uuid and company_id=company.id and active
-    ) then raise exception 'ACCESS_SITE_INVALID'; end if;
-  else
-    select * into pos from public.positions where id=nullif(requested_account->>'positionId','');
-    if nullif(requested_account->>'positionId','') is not null and pos.id is null then raise exception 'ACCESS_POSITION_INVALID'; end if;
-  end if;
-  specific := requested_account->'specificPermissions';
+  -- There is no logical-deletion flag for these legacy assignment rows.
+  -- Never remove or overwrite them. Unsupported removals fail before any write.
+  if target.user_type='internal' and (
+    exists (select 1 from public.user_process_permissions old where old.user_id=target.id
+      and not exists (select 1 from jsonb_array_elements(requested_account->'documentAccess') d
+        where d->>'processId'=old.process_id and d->>'role'=old.document_role::text))
+    or exists (select 1 from public.user_module_permissions old where old.user_id=target.id and old.can_view
+      and old.module_id<>'home'
+      and not exists (select 1 from jsonb_array_elements_text(requested_account->'assignedModuleIds') m where m=old.module_id)
+      and not exists (select 1 from jsonb_array_elements(requested_account->'moduleActionPermissions') a where a->>'moduleId'=old.module_id))
+    or exists (select 1 from public.user_module_action_permissions old where old.user_id=target.id
+      and not exists (select 1 from jsonb_array_elements(requested_account->'moduleActionPermissions') a
+        where a->>'moduleId'=old.module_id and a->>'action'=old.action::text)
+      and not (old.module_id in ('access','customers','suppliers','customer-portal','supplier-portal') and specific<>'{}'::jsonb))
+  ) then raise exception 'ACCESS_EXISTING_ASSIGNMENT_PRESERVED'; end if;
   for key in select jsonb_object_keys(specific) loop
     if key not in ('usuarios.ver','usuarios.crear','usuarios.editar','usuarios.desactivar','usuarios.administrar_permisos','clientes.acceder','clientes.ver','clientes.crear','clientes.editar','clientes.administrar','portal_clientes.acceder','proveedores.acceder','proveedores.ver','proveedores.crear','proveedores.editar','proveedores.administrar','portal_proveedores.acceder','organigrama.ver','evidencias.ver')
       or jsonb_typeof(specific->key)<>'boolean'
-      or not exists (select 1 from public.permissions where code=key and status='active')
-      then raise exception 'ACCESS_PERMISSION_INVALID'; end if;
-    if actor.user_type<>'administrator' and specific->>key='true'
-      and not public.has_permission(key) then raise exception 'ACCESS_CANNOT_DELEGATE'; end if;
-    if desired_type in ('customer','supplier') and specific->>key='true'
-      and key not in (case desired_type when 'customer' then 'portal_clientes.acceder' else 'portal_proveedores.acceder' end,'evidencias.ver')
+      or not exists (select 1 from public.permissions where code=key and status='active') then
+      raise exception 'ACCESS_PERMISSION_INVALID';
+    end if;
+    if actor.user_type<>'administrator' and specific->>key='true' and
+      (key='usuarios.administrar_permisos' or not public.has_permission(key)) then
+      raise exception 'ACCESS_CANNOT_DELEGATE';
+    end if;
+    if target.user_type in ('customer','supplier') and specific->>key='true'
+      and key not in (case target.user_type when 'customer' then 'portal_clientes.acceder' else 'portal_proveedores.acceder' end,'evidencias.ver')
       then raise exception 'ACCESS_EXTERNAL_PERMISSION_INVALID'; end if;
   end loop;
-  update public.profiles set full_name=trim(requested_account->>'fullName'),
-    user_type=desired_type, status=(requested_account->>'status')::public.account_status,
-    position_id=pos.id, position_name=pos.name, department=pos.branch,
-    organization_id=case when desired_type in ('customer','supplier') then null else coalesce(pos.organization_id,target.organization_id) end,
-    external_party_kind=case when desired_type in ('customer','supplier') then company.kind else null end,
-    external_party_id=company.id, external_party_name=company.name,
-    external_site_id=case when desired_type in ('customer','supplier') then nullif(requested_account->>'siteId','')::uuid else null end,
-    company=case when desired_type in ('customer','supplier') then company.name else 'Towell' end,
-    continuous_improvement_role=case when desired_type='administrator' then 'manager'::public.improvement_role
-      when desired_type='internal' then coalesce(requested_account->>'continuousImprovementRole','submitter')::public.improvement_role else null end,
-    updated_at=clock_timestamp()
-  where id=target.id;
-  -- Only target access rows are replaced. Never delete profiles, files or business data.
-  delete from public.user_process_permissions where user_id=target.id;
-  delete from public.user_module_action_permissions where user_id=target.id;
-  delete from public.user_module_permissions where user_id=target.id;
-  if desired_type='internal' then
+  if target.user_type='internal' then
     for item in select value from jsonb_array_elements(requested_account->'documentAccess') loop
       if actor.user_type<>'administrator' and not public.has_process_document_role(item->>'processId',(item->>'role')::public.document_access_role) then raise exception 'ACCESS_CANNOT_DELEGATE'; end if;
       insert into public.user_process_permissions(user_id,process_id,document_role,source)
-      values(target.id,item->>'processId',(item->>'role')::public.document_access_role,'direct');
+      values(target.id,item->>'processId',(item->>'role')::public.document_access_role,'direct') on conflict do nothing;
     end loop;
-    select array_agg(distinct m) into desired_modules from (
-      select jsonb_array_elements_text(requested_account->'assignedModuleIds') m union select 'home'
-      union select value->>'moduleId' from jsonb_array_elements(requested_account->'moduleActionPermissions')
-    ) q;
-    insert into public.user_module_permissions(user_id,module_id,can_view,source)
-      select target.id,m,true,'direct' from unnest(desired_modules) m;
-    if actor.user_type<>'administrator' and exists (
-      select 1 from unnest(desired_modules) m where m<>'home' and not public.has_module_permission(m,'view')
-    ) then raise exception 'ACCESS_CANNOT_DELEGATE'; end if;
     for item in select value from jsonb_array_elements(requested_account->'moduleActionPermissions') loop
       if actor.user_type<>'administrator' and not public.has_module_permission(item->>'moduleId',(item->>'action')::public.module_permission_action) then raise exception 'ACCESS_CANNOT_DELEGATE'; end if;
+      insert into public.user_module_permissions(user_id,module_id,can_view,source)
+        values(target.id,item->>'moduleId',true,'direct') on conflict do nothing;
       insert into public.user_module_action_permissions(user_id,module_id,action,source)
-      values(target.id,item->>'moduleId',(item->>'action')::public.module_permission_action,'direct') on conflict do nothing;
+        values(target.id,item->>'moduleId',(item->>'action')::public.module_permission_action,'direct') on conflict do nothing;
     end loop;
-  elsif desired_type in ('customer','supplier') and specific->>(case desired_type when 'customer' then 'portal_clientes.acceder' else 'portal_proveedores.acceder' end)='true' then
-    insert into public.user_module_permissions(user_id,module_id,can_view,source)
-    values(target.id,case desired_type when 'customer' then 'customer-portal' else 'supplier-portal' end,true,'direct');
   end if;
+  -- Only checkbox values explicitly changed and confirmed by the administrator.
+  -- All unrelated overrides, inherited grants and assignment rows remain intact.
   for key in select jsonb_object_keys(specific) loop
     insert into public.user_permission_overrides(user_id,permission_id,allowed,granted_by)
       select target.id,id,(specific->>key)::boolean,actor.id from public.permissions where code=key and status='active'
-    on conflict(user_id,permission_id) do update set allowed=excluded.allowed,granted_by=excluded.granted_by;
+    on conflict(user_id,permission_id) do update set allowed=excluded.allowed,granted_by=excluded.granted_by
+      where user_permission_overrides.allowed is distinct from excluded.allowed;
   end loop;
-  -- Audit persistence is mandatory; a failure rolls back the whole access update.
-  after_state := jsonb_build_object('profile',(select to_jsonb(p) from public.profiles p where id=target.id),'account',requested_account - 'email');
+  after_state := jsonb_build_object(
+    'profile',(select to_jsonb(p) from public.profiles p where id=target.id),
+    'processes',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_process_permissions x where user_id=target.id),
+    'modules',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_module_permissions x where user_id=target.id),
+    'actions',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_module_action_permissions x where user_id=target.id),
+    'overrides',(select coalesce(jsonb_agg(to_jsonb(x)),'[]') from public.user_permission_overrides x where user_id=target.id));
   insert into public.audit_log(actor_id,action,resource_type,resource_id,previous_value,new_value,metadata)
     values(actor.id,'user.access_updated','profile',target.id::text,before_state,after_state,
-      jsonb_build_object('workspace_mode',actor.workspace_mode,'reason','Administrator confirmed access changes'));
+      jsonb_build_object('workspace_mode',actor.workspace_mode,'explicit_permission_changes',specific));
   return jsonb_build_object('ok',true,'userId',target.id,'revision',(select updated_at from public.profiles where id=target.id));
 end;
 $$;

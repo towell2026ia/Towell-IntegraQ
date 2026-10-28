@@ -1,5 +1,5 @@
 "use client";
-import { effectiveSpecificPermissions, specificPermissionModuleAction, synchronizeSpecificPermissions } from "@/lib/access-permissions";
+import { changedSpecificPermissions, effectiveSpecificPermissions, specificPermissionModuleAction, synchronizeSpecificPermissions } from "@/lib/access-permissions";
 
 import {
   Building2,
@@ -527,6 +527,7 @@ export function UserAccountModal({ account, companies, onCompaniesChange, positi
       await onSave(account ? {
         ...prepared,
         accessRevision: account.accessRevision,
+        permissionChanges: changedSpecificPermissions(effectiveSpecificPermissions(account), specificPermissions),
         id: account.id,
         authUserId: account.authUserId,
         status: account.status,
@@ -543,13 +544,13 @@ export function UserAccountModal({ account, companies, onCompaniesChange, positi
         <header><div><span>Usuario · Puesto · Permisos</span><h3 id="user-account-title">{account ? "Editar usuario" : "Nuevo usuario"}</h3></div><button className="icon-button" type="button" title="Cerrar" aria-label="Cerrar" onClick={onClose}><X size={17} /></button></header>
         <form onSubmit={submit}>
           <div className="user-account-form-grid">
-            <label className="wide">Nombre completo<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
+            <label className="wide">Nombre completo<input required readOnly={Boolean(account)} value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
             <label className="wide">Correo de acceso<input required type="email" readOnly={Boolean(account)} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-            <label>Tipo de usuario<select value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
-            {internal ? <label>Puesto del organigrama<select required={!account} value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
-            {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => { setCompanyId(event.target.value); setSiteId(""); }}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label> : null}
-            {!internal ? <label>Sucursal (opcional)<select disabled={!companyId || !siteCatalog.length} value={siteId} onChange={(event) => setSiteId(event.target.value)}><option value="">Toda la empresa</option>{siteCatalog.map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label> : null}
-            {!internal ? <div className="wide external-company-create-toggle"><button className="button button-secondary" type="button" onClick={() => setShowCompanyCreator((current) => !current)}><Plus size={14} /> Crear empresa</button><small>Registra la empresa sin salir del alta de usuario.</small></div> : null}
+            <label>Tipo de usuario<select disabled={Boolean(account)} value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
+            {internal ? <label>Puesto del organigrama<select disabled={Boolean(account)} required={!account} value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
+            {!internal ? <label>Empresa vinculada<select disabled={Boolean(account)} required value={companyId} onChange={(event) => { setCompanyId(event.target.value); setSiteId(""); }}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label> : null}
+            {!internal ? <label>Sucursal (opcional)<select disabled={Boolean(account) || !companyId || !siteCatalog.length} value={siteId} onChange={(event) => setSiteId(event.target.value)}><option value="">Toda la empresa</option>{siteCatalog.map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label> : null}
+            {!internal && !account ? <div className="wide external-company-create-toggle"><button className="button button-secondary" type="button" onClick={() => setShowCompanyCreator((current) => !current)}><Plus size={14} /> Crear empresa</button><small>Registra la empresa sin salir del alta de usuario.</small></div> : null}
           </div>
 
           {!internal && showCompanyCreator ? <QuickCompanyCreator kind={companyKind} onCancel={() => setShowCompanyCreator(false)} onError={setCompanyCreatorError} onSaved={async (company) => { await onCompaniesChange(); setCompanyId(company.id); setSiteId(company.sites[0]?.id ?? ""); setShowCompanyCreator(false); }} /> : null}

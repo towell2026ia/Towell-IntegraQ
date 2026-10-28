@@ -93,13 +93,13 @@ export async function POST(request: Request) {
     const uploaded = await admin.storage.from(privateBucket).upload(objectPath, bytes, { contentType: mimeType, cacheControl: "3600", upsert: false });
     if (uploaded.error) return NextResponse.json({ error: "No fue posible cargar el archivo de evaluación." }, { status: 500 });
     const insertedFile = await admin.from("file_objects").insert({ id: sourceFileId, bucket_id: privateBucket, object_path: objectPath, original_name: file.name, mime_type: mimeType, size_bytes: file.size, sha256: createHash("sha256").update(bytes).digest("hex"), module_id: "suppliers", external_organization_id: supplierId, external_site_id: siteId, audience: portalVisible ? "supplier" : "internal", resource_type: resourceType, resource_id: assessmentId, resource_key: companyResult.data.code, category: `supplier-assessment:${sourceFileId}`, uploaded_by: session.authUserId, preview_status: "pending" }).select("id").single();
-    if (insertedFile.error) { await admin.storage.from(privateBucket).remove([objectPath]); return NextResponse.json({ error: "No fue posible registrar el archivo de evaluación." }, { status: 500 }); }
+    if (insertedFile.error) { /* Preserve the binary on an uncertain registration response. */ return NextResponse.json({ error: "No fue posible registrar el archivo de evaluación." }, { status: 500 }); }
   }
 
   const inserted = await admin.from("supplier_assessments").insert({ id: assessmentId, supplier_id: supplierId, site_id: siteId, assessment_type: assessmentType, assessment_date: assessmentDate, evaluator_name: text(form, "evaluatorName"), score, classification: text(form, "classification"), observations: text(form, "observations"), source_file_id: sourceFileId, portal_visible: portalVisible, created_by: session.authUserId, updated_by: session.authUserId }).select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").single();
   if (inserted.error || !inserted.data) {
-    if (sourceFileId) await admin.from("file_objects").delete().eq("id", sourceFileId);
-    if (objectPath) await admin.storage.from(privateBucket).remove([objectPath]);
+    // Preserve registered metadata on an uncertain response.
+    // Preserve the binary; recovery requires a separately authorized action.
     return NextResponse.json({ error: "No fue posible registrar la evaluación." }, { status: 500 });
   }
   const sourceFile = sourceFileId && file instanceof File ? new Map([[sourceFileId, { id: sourceFileId, original_name: file.name, mime_type: extensionMime[file.name.split(".").pop()?.toLocaleLowerCase("en-US") ?? ""], size_bytes: file.size }]]) : new Map<string, FileRow>();

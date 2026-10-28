@@ -58,13 +58,13 @@ export async function POST(request: Request) {
     uploaded_by: userId, preview_status: mimeType.startsWith("image/") || mimeType === "application/pdf" ? "not_required" : "pending",
   }).select("id,original_name,mime_type,size_bytes,uploaded_by,created_at").single();
   if (inserted.error || !inserted.data) {
-    await admin.storage.from(privateBucket).remove([objectPath]);
+    /* Preserve the binary on an uncertain registration response. */
     return NextResponse.json({ error: "No fue posible registrar la evidencia." }, { status: 500 });
   }
   const linked = await admin.from("supplier_rncp_action_evidence").insert({ action_id: actionId, file_id: fileId, created_by: userId });
   if (linked.error) {
-    await admin.from("file_objects").delete().eq("id", fileId);
-    await admin.storage.from(privateBucket).remove([objectPath]);
+    // Preserve metadata; the link response may be uncertain.
+    /* Preserve the binary on an uncertain registration response. */
     return NextResponse.json({ error: "No fue posible vincular la evidencia a la acción." }, { status: 500 });
   }
   return NextResponse.json({ evidence: { id: inserted.data.id, fileName: inserted.data.original_name, mimeType: inserted.data.mime_type, sizeBytes: inserted.data.size_bytes, uploadedBy: inserted.data.uploaded_by, uploadedAt: inserted.data.created_at } }, { status: 201 });

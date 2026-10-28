@@ -36,3 +36,22 @@ export function specificActionPermission(moduleId: WorkspaceModuleId, action: st
   const suffix = action === "view" ? (family === "usuarios" ? "ver" : "acceder") : action === "create" ? "crear" : action === "update" ? "editar" : action === "manage" ? (family === "usuarios" ? "administrar_permisos" : "administrar") : null;
   return suffix ? `${family}.${suffix}` as SpecificPermissionKey : null;
 }
+
+export function changedSpecificPermissions(before: SpecificPermissionState, after: SpecificPermissionState): SpecificPermissionState {
+  return Object.fromEntries(editableSpecificPermissionKeys.filter((key) => before[key] !== after[key]).map((key) => [key, Boolean(after[key])]));
+}
+
+export function rolePermissionDefaults(userId: string, companyId: string | undefined, assignments: unknown[], now = Date.now()): SpecificPermissionState {
+  const state: SpecificPermissionState = {};
+  for (const raw of assignments) {
+    const assignment = raw as { user_id?: string; organization_id?: string; status?: string; starts_at?: string; ends_at?: string; role?: { status?: string; scope_type?: string; grants?: { allowed?: boolean; permission?: { code?: string; status?: string } }[] } };
+    if (assignment.user_id !== userId || assignment.status !== "active" || (assignment.starts_at && Date.parse(assignment.starts_at) > now) || (assignment.ends_at && Date.parse(assignment.ends_at) < now)) continue;
+    const role = assignment.role;
+    if (role?.status !== "active" || !(role.scope_type === "global" || (role.scope_type === "company" && companyId && assignment.organization_id === companyId))) continue;
+    for (const grant of role.grants ?? []) {
+      const code = grant.permission?.code as SpecificPermissionKey;
+      if (grant.allowed && grant.permission?.status === "active" && editableSpecificPermissionKeys.includes(code)) state[code] = true;
+    }
+  }
+  return state;
+}
