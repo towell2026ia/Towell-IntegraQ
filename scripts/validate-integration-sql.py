@@ -20,7 +20,14 @@ for item in manifest["pending"]:
     functions = json.loads(parser.parse_plpgsql_json(sql))
     for entry in statements:
         stmt = entry["stmt"]
-        assert not (set(stmt) & {"UpdateStmt", "DeleteStmt", "TruncateStmt", "DoStmt", "CallStmt", "SelectStmt"}), "Automatic existing-record mutation"
+        assert not (set(stmt) & {"UpdateStmt", "DeleteStmt", "TruncateStmt", "CallStmt", "SelectStmt"}), "Automatic existing-record mutation"
+        if "DoStmt" in stmt:
+            # The entire source file is hash-pinned above. Its sole reviewed DO
+            # only adds two existing tables to supabase_realtime, conditionally.
+            assert item["path"].endswith("202610210003_indicator_global_capture_windows.sql")
+            assert sql.count("do $ begin") == 1
+            assert "alter publication supabase_realtime add table public.indicator_periods" in sql
+            assert "alter publication supabase_realtime add table public.indicator_capture_rules" in sql
         if "InsertStmt" in stmt:
             insert = stmt["InsertStmt"]
             assert (insert["relation"].get("schemaname"), insert["relation"]["relname"]) == ("storage", "buckets")
