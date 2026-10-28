@@ -55,6 +55,9 @@ jobs:
           python scripts/validate-fix03-sql.py
           python scripts/validate-integration-sql.py
 
+      - name: Report RELEASE-FIX-01 compatibility (not publication approval)
+        run: node scripts/audit-release-fix-01.mjs
+
       - name: Typecheck
         run: pnpm typecheck
 

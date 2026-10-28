@@ -1,0 +1,1120 @@
+{
+  "observedOn": "2026-10-28",
+  "source": "Supabase list_tables and list_migrations metadata only; no execute_sql",
+  "baseCommit": "42e52534b1832758a810a2457a402e17e790b2d0",
+  "tables": [
+    "public.organizations",
+    "public.processes",
+    "public.positions",
+    "public.workspace_modules",
+    "public.position_process_permissions",
+    "public.position_module_permissions",
+    "public.profiles",
+    "public.user_process_permissions",
+    "public.user_module_permissions",
+    "public.audit_log",
+    "public.position_module_action_permissions",
+    "public.user_module_action_permissions",
+    "public.file_objects",
+    "public.document_types",
+    "public.controlled_documents",
+    "public.controlled_document_versions",
+    "public.document_workflow_events",
+    "public.form_definitions",
+    "public.form_fields",
+    "public.form_records",
+    "public.form_dashboard_definitions",
+    "public.form_dashboard_insights",
+    "public.form_import_jobs",
+    "public.indicator_definitions",
+    "public.indicator_evaluation_rules",
+    "public.indicator_periods",
+    "public.indicator_results",
+    "public.risk_registers",
+    "public.risk_items",
+    "public.risk_reviews",
+    "public.certifications",
+    "public.audit_programs",
+    "public.audit_templates",
+    "public.audit_template_items",
+    "public.audits",
+    "public.audit_participants",
+    "public.audit_responses",
+    "public.audit_findings",
+    "public.audit_finding_actions",
+    "public.quality_cases",
+    "public.corrective_actions",
+    "public.corrective_action_a3",
+    "public.corrective_action_plans",
+    "public.corrective_action_effectiveness_reviews",
+    "public.supplier_quality_profiles",
+    "public.supplier_quality_evaluations",
+    "public.supplier_rncp_reports",
+    "public.supplier_rncp_actions",
+    "public.measurement_assets",
+    "public.measurement_asset_standards",
+    "public.measurement_events",
+    "public.improvement_projects",
+    "public.improvement_project_members",
+    "public.improvement_score_criteria",
+    "public.improvement_phases",
+    "public.improvement_tools",
+    "public.improvement_actions",
+    "public.kaizen_reports",
+    "public.management_reviews",
+    "public.management_review_sources",
+    "public.management_review_sections",
+    "public.management_review_decisions",
+    "public.management_review_approvals",
+    "public.ai_runs",
+    "public.notifications",
+    "public.integration_outbox",
+    "public.corrective_action_participants",
+    "public.organization_sources",
+    "public.strategy_cycles",
+    "public.strategic_axes",
+    "public.strategic_axis_processes",
+    "public.strategic_axis_indicators",
+    "public.strategy_import_batches",
+    "public.strategy_import_candidates",
+    "public.risk_treatments",
+    "public.swot_registers",
+    "public.swot_items",
+    "public.swot_contributions",
+    "public.risk_item_processes",
+    "public.risk_item_swot_sources",
+    "public.risk_item_indicators",
+    "public.risk_assessments",
+    "public.risk_actions",
+    "public.risk_effectiveness_reviews",
+    "public.ai_activity_log",
+    "public.areas",
+    "public.document_processes",
+    "public.audit_processes",
+    "public.improvement_source_links",
+    "public.management_review_source_links",
+    "public.data_migration_runs",
+    "public.migration_conflicts",
+    "public.migration_report",
+    "public.roles",
+    "public.permissions",
+    "public.role_permissions",
+    "public.user_roles",
+    "public.delegations",
+    "public.approval_requests",
+    "public.domain_events",
+    "public.audit_series",
+    "public.audit_standard_links",
+    "public.audit_documents",
+    "public.audit_code_sequences",
+    "public.document_lifecycle",
+    "public.document_audit_log",
+    "public.home_sections",
+    "public.home_section_processes",
+    "public.home_section_users",
+    "public.indicator_definition_processes",
+    "public.user_permission_overrides",
+    "public.workspace_data",
+    "public.document_folders",
+    "public.document_upload_batches",
+    "public.indicator_capture_settings",
+    "public.external_company_sites",
+    "public.file_upload_policies",
+    "public.supplier_rncp_action_evidence",
+    "public.supplier_assessments",
+    "public.home_institutional_items"
+  ],
+  "contracts": [
+    {
+      "name": "public.profiles",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "external_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "full_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "short_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "initials",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "position_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "position_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "department",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "company",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "site",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "user_type",
+          "type": "app_user_type",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "account_status",
+          "nullable": false
+        },
+        {
+          "name": "continuous_improvement_role",
+          "type": "improvement_role",
+          "nullable": true
+        },
+        {
+          "name": "external_party_kind",
+          "type": "organization_kind",
+          "nullable": true
+        },
+        {
+          "name": "external_party_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "external_party_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "area_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "workspace_mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "external_site_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.audit_log",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "actor_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resource_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "user_name_snapshot",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "module",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "entity_code_snapshot",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "previous_value",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "new_value",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "origin",
+          "type": "activity_origin",
+          "nullable": false
+        },
+        {
+          "name": "ip_address",
+          "type": "inet",
+          "nullable": true
+        },
+        {
+          "name": "user_agent",
+          "type": "text",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.file_objects",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "bucket_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "object_path",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "original_name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "size_bytes",
+          "type": "int8",
+          "nullable": true
+        },
+        {
+          "name": "sha256",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "process_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "module_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "external_organization_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "audience",
+          "type": "file_audience",
+          "nullable": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resource_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "category",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "uploaded_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "resource_key",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "version",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "is_current",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "replaces_file_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "preview_path",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "preview_status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "preview_generated_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "preview_error",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "deleted_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "folder_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "display_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "reference_type",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "external_origin",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "validity_status",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "valid_from",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "valid_until",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "observations",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "batch_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "deletion_reason",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "updated_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "external_site_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.controlled_documents",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "process_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "document_type_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "active",
+          "type": "bool",
+          "nullable": false
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "area_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "owner_name_snapshot",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "deleted_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "deletion_reason",
+          "type": "text",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.indicator_periods",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "indicator_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "year",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "quarter",
+          "type": "quarter_code",
+          "nullable": false
+        },
+        {
+          "name": "scheduled_date",
+          "type": "date",
+          "nullable": false
+        },
+        {
+          "name": "opens_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "closes_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "public.document_audit_log",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "document_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "document_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "previous_state",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "new_state",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "performed_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "performed_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "public.document_folders",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "parent_folder_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "archived_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "deleted_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "deletion_reason",
+          "type": "text",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.document_upload_batches",
+      "rls": true,
+      "primaryKeys": [
+        "id"
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "batch_code",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "workspace_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "folder_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "total_count",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "success_count",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "failure_count",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "failures",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "public.indicator_capture_settings",
+      "rls": true,
+      "primaryKeys": [
+        "organization_id",
+        "workspace_mode"
+      ],
+      "columns": [
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "workspace_mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "capture_days_after_close",
+          "type": "int4",
+          "nullable": false
+        },
+        {
+          "name": "business_timezone",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "updated_by",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "appliedMigrations": [
+    {
+      "version": "202608230001",
+      "name": "identity_and_access"
+    },
+    {
+      "version": "202608230002",
+      "name": "platform_core"
+    },
+    {
+      "version": "202608230003",
+      "name": "documents_forms_indicators_risks"
+    },
+    {
+      "version": "202608230004",
+      "name": "quality_audits_and_portals"
+    },
+    {
+      "version": "202608230005",
+      "name": "metrology_improvement_management"
+    },
+    {
+      "version": "202608230006",
+      "name": "granular_user_permissions"
+    },
+    {
+      "version": "202608240001",
+      "name": "organization_source"
+    },
+    {
+      "version": "202609010001",
+      "name": "rename_p11_human_resources"
+    },
+    {
+      "version": "202609010002",
+      "name": "add_quality_management_systems_process"
+    },
+    {
+      "version": "202609030001",
+      "name": "strategy_risks_and_opportunities"
+    },
+    {
+      "version": "202609070001",
+      "name": "expand_organization_levels"
+    },
+    {
+      "version": "202609070002",
+      "name": "ai_core_foundations"
+    },
+    {
+      "version": "202609070003",
+      "name": "data_integrity_relationships"
+    },
+    {
+      "version": "202609070004",
+      "name": "access_traceability_approvals"
+    },
+    {
+      "version": "202609140001",
+      "name": "audit_occurrences"
+    },
+    {
+      "version": "202609180001",
+      "name": "audit_periodic_schedule"
+    },
+    {
+      "version": "202609220001",
+      "name": "document_lifecycle_master_list"
+    },
+    {
+      "version": "202609240001",
+      "name": "home_process_visibility"
+    },
+    {
+      "version": "202609240002",
+      "name": "transversal_evidence_permissions"
+    },
+    {
+      "version": "202609240003",
+      "name": "organization_chart_current_version"
+    },
+    {
+      "version": "202609240004",
+      "name": "permission_audit_actor"
+    },
+    {
+      "version": "202609240005",
+      "name": "admin_only_document_management"
+    },
+    {
+      "version": "202609240006",
+      "name": "demo_workspace_isolation"
+    },
+    {
+      "version": "202609250001",
+      "name": "production_hardening"
+    },
+    {
+      "version": "202609250002",
+      "name": "profile_workspace_assignment"
+    },
+    {
+      "version": "202609250003",
+      "name": "workspace_soft_delete_guard"
+    },
+    {
+      "version": "202609270001",
+      "name": "general_information_repository"
+    },
+    {
+      "version": "202610070001",
+      "name": "indicator_runtime_source_of_truth"
+    },
+    {
+      "version": "202610070002",
+      "name": "indicator_capture_permissions"
+    },
+    {
+      "version": "202610070003",
+      "name": "indicator_capture_windows"
+    },
+    {
+      "version": "202610080002",
+      "name": "external_company_master"
+    },
+    {
+      "version": "202610080003",
+      "name": "rncp_lifecycle"
+    },
+    {
+      "version": "202610080004",
+      "name": "supplier_portal_evidence"
+    },
+    {
+      "version": "202610080005",
+      "name": "supplier_dashboard_indexes"
+    },
+    {
+      "version": "202610080006",
+      "name": "supplier_assessment_results"
+    },
+    {
+      "version": "202610080007",
+      "name": "home_institutional_information"
+    },
+    {
+      "version": "202610090001",
+      "name": "indicator_rule_expression_engine"
+    },
+    {
+      "version": "202610120001",
+      "name": "indicator_evidence_storage_permissions"
+    }
+  ]
+}
