@@ -29,18 +29,19 @@ export function canAccessModule(
   module: WorkspaceModuleId,
 ) {
   if (isAdministrator(session)) return true;
-  if (module === "documents") return true;
 
   const externalKind = getExternalKindForSession(session);
   if (externalKind) {
     const permission = externalKind === "customer"
       ? "portal_clientes.acceder"
       : "portal_proveedores.acceder";
-    if (session.specificPermissions?.[permission] === false) return false;
+    if (session.specificPermissions?.[permission] !== true) return false;
     return (
       hasValidExternalScope(session) && module === EXTERNAL_PORTALS[externalKind]
     );
   }
+
+  if (module === "documents") return Boolean(session.assignedModuleIds?.includes(module)) || Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === module && permission.action === "view"));
 
   const requiredSpecificPermission = module === "customers"
     ? "clientes.acceder"
@@ -51,12 +52,15 @@ export function canAccessModule(
         : module === "supplier-portal"
           ? "portal_proveedores.acceder"
           : null;
+  if (module === "customers" && session.specificPermissions?.["clientes.ver"] === false) return false;
+  if (module === "suppliers" && session.specificPermissions?.["proveedores.ver"] === false) return false;
   if (requiredSpecificPermission) {
     const configured = session.specificPermissions?.[requiredSpecificPermission];
-    if (configured === false) return false;
+    if (configured === false || ((module === "customer-portal" || module === "supplier-portal") && configured !== true)) return false;
     if (configured === true) return Boolean(session.assignedModuleIds?.includes(module));
   }
 
+  if (module === "access") return session.specificPermissions?.["usuarios.ver"] !== false && (Boolean(session.assignedModuleIds?.includes(module)) || Object.entries(session.specificPermissions ?? {}).some(([key, allowed]) => key.startsWith("usuarios.") && allowed));
   return (
     module === "home" || Boolean(session.assignedModuleIds?.includes(module))
   );
@@ -90,6 +94,7 @@ export function canAccessCompanyRecord(
 ) {
   if (isAdministrator(session)) return true;
   return (
+    canAccessModule(session, EXTERNAL_PORTALS[kind]) &&
     getExternalKindForSession(session) === kind &&
     session.externalParty?.kind === kind &&
     session.externalParty.companyId === companyId &&

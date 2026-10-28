@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { A3ActionReport } from "@/components/modules/a3-action-report";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
@@ -57,10 +57,28 @@ function CustomerPortal({
 }) {
   const [view, setView] = useState<"actions" | "audits" | "certifications">("actions");
   const [selectedActionId, setSelectedActionId] = useState("");
-  const portalData = getCustomerPortalData(company.companyId, actions);
+  const [liveData, setLiveData] = useState<ReturnType<typeof getCustomerPortalData>>({ actions: [], audits: [], certifications: [] });
+  const [loadError, setLoadError] = useState("");
+  useEffect(() => {
+    if (company.demo) return;
+    let active = true;
+    const refresh = () => { void fetch("/api/portals/customer", { cache: "no-store" }).then(async (response) => { if (!response.ok) throw new Error("No fue posible consultar el portal autorizado."); return response.json(); }).then((data) => { if (active) { setLiveData(data); setLoadError(""); } }).catch((error: Error) => { if (active) { setLiveData({ actions: [], audits: [], certifications: [] }); setLoadError(error.message); } }); };
+    refresh(); window.addEventListener("focus", refresh);
+    return () => { active = false; window.removeEventListener("focus", refresh); };
+  }, [company.companyId, company.demo]);
+  const portalData = company.demo ? getCustomerPortalData(company.companyId, actions, true) : liveData;
+  async function openCertificate(fileId: string) {
+    try {
+      const response = await fetch("/api/portals/files/" + encodeURIComponent(fileId), { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok || typeof payload.signedUrl !== "string") throw new Error("Archivo no disponible para esta cuenta.");
+      window.open(payload.signedUrl, "_blank", "noopener,noreferrer");
+    } catch (error) { setLoadError(error instanceof Error ? error.message : "No fue posible abrir el archivo."); }
+  }
   const selectedAction = portalData.actions.find((action) => action.id === selectedActionId);
   return (
     <>
+      {loadError ? <p className="form-error" role="alert">{loadError}</p> : null}
       <PortalHeading title="Portal del cliente" account={company.companyName} description="Reclamos, acciones, auditorías externas y certificaciones autorizadas." />
       <div className="quality-view-tabs portal-tabs" aria-label="Vistas del portal del cliente">
         <button className={view === "actions" ? "active" : ""} type="button" onClick={() => setView("actions")}>Mis reclamos y acciones</button>
@@ -83,7 +101,7 @@ function CustomerPortal({
         </section>
       ) : null}
       {view === "audits" ? <PortalTable title="Calendario de auditorías externas"><table className="quality-table"><thead><tr><th>Evento</th><th>Fecha</th><th>Alcance</th><th>Estado</th></tr></thead><tbody>{portalData.audits.map((audit) => <tr key={audit.id}><td><strong>{audit.id}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}</tbody></table>{portalData.audits.length === 0 ? <PortalEmpty message="No hay auditorías compartidas con esta empresa." /> : null}</PortalTable> : null}
-      {view === "certifications" ? <PortalTable title="Certificaciones y certificados vigentes"><table className="quality-table"><thead><tr><th>Certificación</th><th>Documento</th><th>Vigente hasta</th><th>Estado</th></tr></thead><tbody>{portalData.certifications.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td>{item.certificate}</td><td>{formatDate(item.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}</tbody></table>{portalData.certifications.length === 0 ? <PortalEmpty message="No hay certificados compartidos con esta empresa." /> : null}</PortalTable> : null}
+      {view === "certifications" ? <PortalTable title="Certificaciones y certificados vigentes"><table className="quality-table"><thead><tr><th>Certificación</th><th>Documento</th><th>Vigente hasta</th><th>Estado</th></tr></thead><tbody>{portalData.certifications.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td>{item.certificate}{item.fileId ? <button type="button" className="evidence-link" onClick={() => void openCertificate(item.fileId!)}>Ver archivo</button> : null}</td><td>{formatDate(item.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}</tbody></table>{portalData.certifications.length === 0 ? <PortalEmpty message="No hay certificados compartidos con esta empresa." /> : null}</PortalTable> : null}
     </>
   );
 }
@@ -95,9 +113,9 @@ function SupplierPortal({ company }: { company: PortalCompany }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const rncpDirectory = useRncpReports();
-  const assessmentDirectory = useSupplierAssessments();
-  const reports = rncpDirectory.reports.filter((report) => !report.deletedAt);
+  const rncpDirectory = useRncpReports(!company.demo);
+  const assessmentDirectory = useSupplierAssessments(!company.demo);
+  const reports = rncpDirectory.reports.filter((report) => !report.deletedAt && report.supplierId === company.companyId && (!company.siteId || !report.siteId || report.siteId === company.siteId));
   const selectedReport = reports.find((report) => report.id === selectedReportId) ?? reports[0];
   const nextCommitment = reports.filter((report) => report.responseDueDate && report.status !== "closed").sort((left, right) => (left.responseDueDate ?? "").localeCompare(right.responseDueDate ?? ""))[0];
 
@@ -152,7 +170,7 @@ function SupplierPortal({ company }: { company: PortalCompany }) {
         </section>
       ) : null}
       {view === "audits" ? (
-        <section className="supplier-portal-audit"><header><div><h3>Auditorías y evaluaciones autorizadas</h3><p>Resultados publicados por Calidad para esta empresa y sucursal.</p></div><FileCheck2 size={19} /></header>{assessmentDirectory.loading ? <PortalEmpty message="Consultando resultados autorizados…" /> : <div className="quality-table-wrap"><table className="quality-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Resultado</th><th>Clasificación</th><th>Archivo</th></tr></thead><tbody>{assessmentDirectory.assessments.map((assessment) => <tr key={assessment.id}><td>{formatDate(assessment.assessmentDate)}</td><td>{supplierAssessmentTypeLabel(assessment.assessmentType)}</td><td><strong>{assessment.score === undefined ? "Sin puntuación" : `${assessment.score}%`}</strong></td><td>{assessment.classification ?? "Sin clasificación"}</td><td>{assessment.sourceFile ? <button className="evidence-link" onClick={() => void openAssessmentFile(assessment.id)} type="button"><FileText size={14} /> Ver archivo</button> : "Sin archivo"}</td></tr>)}</tbody></table>{!assessmentDirectory.assessments.length ? <PortalEmpty message="No hay resultados autorizados para esta empresa y sucursal." /> : null}</div>}{error || assessmentDirectory.error ? <div className="form-error" role="alert">{error || assessmentDirectory.error}</div> : null}</section>
+        <section className="supplier-portal-audit"><header><div><h3>Auditorías y evaluaciones autorizadas</h3><p>Resultados publicados por Calidad para esta empresa y sucursal.</p></div><FileCheck2 size={19} /></header>{assessmentDirectory.loading ? <PortalEmpty message="Consultando resultados autorizados…" /> : <div className="quality-table-wrap"><table className="quality-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Resultado</th><th>Clasificación</th><th>Archivo</th></tr></thead><tbody>{assessmentDirectory.assessments.filter((assessment) => assessment.supplierId === company.companyId && (!company.siteId || !assessment.siteId || assessment.siteId === company.siteId)).map((assessment) => <tr key={assessment.id}><td>{formatDate(assessment.assessmentDate)}</td><td>{supplierAssessmentTypeLabel(assessment.assessmentType)}</td><td><strong>{assessment.score === undefined ? "Sin puntuación" : `${assessment.score}%`}</strong></td><td>{assessment.classification ?? "Sin clasificación"}</td><td>{assessment.sourceFile ? <button className="evidence-link" onClick={() => void openAssessmentFile(assessment.id)} type="button"><FileText size={14} /> Ver archivo</button> : "Sin archivo"}</td></tr>)}</tbody></table>{!assessmentDirectory.assessments.length ? <PortalEmpty message="No hay resultados autorizados para esta empresa y sucursal." /> : null}</div>}{error || assessmentDirectory.error ? <div className="form-error" role="alert">{error || assessmentDirectory.error}</div> : null}</section>
       ) : null}
       {view === "plans" ? (
         <SupplierRncpResponse error={error || rncpDirectory.error} files={files} onAddFiles={addFiles} onOpenEvidence={openEvidence} onSelectReport={setSelectedReportId} notice={notice} onSubmit={submitPlan} report={selectedReport} reports={reports} saving={saving} />
@@ -182,6 +200,7 @@ function PortalAccessDenied() {
 }
 
 function formatDate(value: string) {
+  if (!value) return "Sin fecha";
   return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 }
 

@@ -1,3 +1,4 @@
+import { canUseSupplierApi } from "@/lib/portal-security";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
@@ -22,6 +23,7 @@ const openActionStatuses = new Set(["pending", "in_progress", "submitted", "reje
 export async function GET(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   if (!canPerformModuleAction(session, "suppliers", "view")) return NextResponse.json({ error: "No tienes permiso para consultar proveedores." }, { status: 403 });
   const query = new URL(request.url).searchParams;
   const filters = readFilters(query);

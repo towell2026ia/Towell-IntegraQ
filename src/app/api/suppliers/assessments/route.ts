@@ -1,3 +1,5 @@
+import { createClient } from "@/lib/supabase/server";
+import { canUseSupplierApi } from "@/lib/portal-security";
 import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
@@ -20,10 +22,11 @@ type FileRow = { id: string; original_name: string; mime_type: string | null; si
 export async function GET() {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-  const internalAccess = canPerformModuleAction(session, "suppliers", "view");
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
+  const internalAccess = session.userType !== "Proveedor" && canPerformModuleAction(session, "suppliers", "view");
   const supplierAccess = session.userType === "Proveedor" && session.externalParty?.kind === "supplier";
   if (!internalAccess && !supplierAccess) return NextResponse.json({ error: "No tienes permiso para consultar evaluaciones de proveedores." }, { status: 403 });
-  const admin = createAdminClient();
+  const admin = await createClient();
   let builder = admin.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").order("assessment_date", { ascending: false }).order("created_at", { ascending: false });
   if (supplierAccess) {
     builder = builder.eq("supplier_id", session.externalParty!.companyId).eq("portal_visible", true);
@@ -50,6 +53,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   if (!canPerformModuleAction(session, "suppliers", "update")) return NextResponse.json({ error: "No tienes permiso para registrar evaluaciones." }, { status: 403 });
   if (!session.authUserId) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const form = await request.formData().catch(() => null);
@@ -89,13 +93,13 @@ export async function POST(request: Request) {
     const uploaded = await admin.storage.from(privateBucket).upload(objectPath, bytes, { contentType: mimeType, cacheControl: "3600", upsert: false });
     if (uploaded.error) return NextResponse.json({ error: "No fue posible cargar el archivo de evaluación." }, { status: 500 });
     const insertedFile = await admin.from("file_objects").insert({ id: sourceFileId, bucket_id: privateBucket, object_path: objectPath, original_name: file.name, mime_type: mimeType, size_bytes: file.size, sha256: createHash("sha256").update(bytes).digest("hex"), module_id: "suppliers", external_organization_id: supplierId, external_site_id: siteId, audience: portalVisible ? "supplier" : "internal", resource_type: resourceType, resource_id: assessmentId, resource_key: companyResult.data.code, category: `supplier-assessment:${sourceFileId}`, uploaded_by: session.authUserId, preview_status: "pending" }).select("id").single();
-    if (insertedFile.error) { await admin.storage.from(privateBucket).remove([objectPath]); return NextResponse.json({ error: "No fue posible registrar el archivo de evaluación." }, { status: 500 }); }
+    if (insertedFile.error) { /* Preserve the binary on an uncertain registration response. */ return NextResponse.json({ error: "No fue posible registrar el archivo de evaluación." }, { status: 500 }); }
   }
 
   const inserted = await admin.from("supplier_assessments").insert({ id: assessmentId, supplier_id: supplierId, site_id: siteId, assessment_type: assessmentType, assessment_date: assessmentDate, evaluator_name: text(form, "evaluatorName"), score, classification: text(form, "classification"), observations: text(form, "observations"), source_file_id: sourceFileId, portal_visible: portalVisible, created_by: session.authUserId, updated_by: session.authUserId }).select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").single();
   if (inserted.error || !inserted.data) {
-    if (sourceFileId) await admin.from("file_objects").delete().eq("id", sourceFileId);
-    if (objectPath) await admin.storage.from(privateBucket).remove([objectPath]);
+    // Preserve registered metadata on an uncertain response.
+    // Preserve the binary; recovery requires a separately authorized action.
     return NextResponse.json({ error: "No fue posible registrar la evaluación." }, { status: 500 });
   }
   const sourceFile = sourceFileId && file instanceof File ? new Map([[sourceFileId, { id: sourceFileId, original_name: file.name, mime_type: extensionMime[file.name.split(".").pop()?.toLocaleLowerCase("en-US") ?? ""], size_bytes: file.size }]]) : new Map<string, FileRow>();

@@ -1,3 +1,5 @@
+import { canAccessModule } from "./access-policy";
+import { specificActionPermission } from "./access-permissions";
 import type { WorkspaceModuleId } from "@/lib/navigation";
 import type {
   ActiveSession,
@@ -154,6 +156,9 @@ export function canPerformModuleAction(
   action: ModulePermissionAction,
 ) {
   if (isAdministrator(session)) return true;
+  if (session.userType !== "Usuario interno" || !canAccessModule(session, moduleId)) return false;
+  const specific = specificActionPermission(moduleId, action);
+  if (specific && typeof session.specificPermissions?.[specific] === "boolean") return session.specificPermissions[specific] === true;
   if (action === "view" && session.assignedModuleIds?.includes(moduleId)) {
     return true;
   }

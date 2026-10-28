@@ -18,6 +18,7 @@ export function useRncpReports(enabled = true) {
       setReports(result.reports);
       return result.reports;
     } catch (cause) {
+      setReports([]);
       setError(cause instanceof Error ? cause.message : "No fue posible consultar los RNCP.");
       return [];
     } finally {

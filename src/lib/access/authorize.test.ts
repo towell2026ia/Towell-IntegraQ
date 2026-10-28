@@ -21,13 +21,13 @@ describe("authorize", () => {
   });
 
   it("isolates customers and suppliers by company id", () => {
-    const customer: ActiveSession = { ...internal, userType: "Cliente", assignedProcessIds: [], moduleActionPermissions: [], externalParty: { kind: "customer", companyId: "customer-a", companyName: "A" } };
+    const customer: ActiveSession = { ...internal, userType: "Cliente", specificPermissions: {"portal_clientes.acceder":true}, assignedProcessIds: [], moduleActionPermissions: [], externalParty: { kind: "customer", companyId: "customer-a", companyName: "A" } };
     expect(authorize({ user: customer, permission: "documents.file.read", record: { companyId: "customer-a" } }).allowed).toBe(true);
     expect(authorize({ user: customer, permission: "documents.file.read", record: { companyId: "customer-b" } }).reason).toBe("OUTSIDE_SCOPE");
   });
 
   it("limits a site-scoped supplier while retaining company-wide records", () => {
-    const supplier: ActiveSession = { ...internal, userType: "Proveedor", assignedProcessIds: [], moduleActionPermissions: [], externalParty: { kind: "supplier", companyId: "anahuac", companyName: "Anáhuac", siteId: "035-a" } };
+    const supplier: ActiveSession = { ...internal, userType: "Proveedor", specificPermissions: {"portal_proveedores.acceder":true}, assignedProcessIds: [], moduleActionPermissions: [], externalParty: { kind: "supplier", companyId: "anahuac", companyName: "Anáhuac", siteId: "035-a" } };
     expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac" } }).allowed).toBe(true);
     expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac", siteId: "035-a" } }).allowed).toBe(true);
     expect(authorize({ user: supplier, permission: "documents.file.read", record: { companyId: "anahuac", siteId: "035-oe" } }).reason).toBe("OUTSIDE_SCOPE");
