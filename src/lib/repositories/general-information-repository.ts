@@ -83,7 +83,8 @@ export function uploadGeneralInformation(
 export async function getGeneralInformationFileUrl(
   documentId: string,
   disposition: "preview" | "download",
+  target: "original" | "preview" = "preview",
 ) {
-  const response = await fetch(`/api/information-general/documents/${encodeURIComponent(documentId)}/file?disposition=${disposition}`, { cache: "no-store" });
+  const response = await fetch(`/api/information-general/documents/${encodeURIComponent(documentId)}/file?target=${target}&disposition=${disposition}`, { cache: "no-store" });
   return readJson<{ signedUrl: string }>(response);
 }

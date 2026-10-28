@@ -37,8 +37,8 @@ describe("access policy", () => {
     expect(canAccessModule(baseSession, "suppliers")).toBe(false);
   });
 
-  it("allows every authenticated internal user to open Información General", () => {
-    expect(canAccessModule({ ...baseSession, assignedModuleIds: [] }, "documents")).toBe(true);
+  it("requires a module assignment for Información General", () => {
+    expect(canAccessModule({ ...baseSession, assignedModuleIds: [] }, "documents")).toBe(false);
   });
 
   it("denies clients and suppliers explicitly even when a legacy menu assignment remains", () => {
@@ -64,6 +64,7 @@ describe("access policy", () => {
     const customer: ActiveSession = {
       ...baseSession,
       userType: "Cliente",
+      specificPermissions: {"portal_clientes.acceder":true},
       company: "Cliente corporativo A",
       externalParty: {
         kind: "customer",
@@ -73,7 +74,7 @@ describe("access policy", () => {
     };
 
     expect(canAccessModule(customer, "customer-portal")).toBe(true);
-    expect(canAccessModule(customer, "documents")).toBe(true);
+    expect(canAccessModule(customer, "documents")).toBe(false);
     expect(canAccessModule(customer, "home")).toBe(false);
     expect(canAccessModule(customer, "customers")).toBe(false);
     expect(canAccessModule(customer, "supplier-portal")).toBe(false);
@@ -81,7 +82,7 @@ describe("access policy", () => {
     expect(resolveAuthorizedModule(customer, "indicators")).toBe(
       "customer-portal",
     );
-    expect(resolveAuthorizedModule(customer, "documents")).toBe("documents");
+    expect(resolveAuthorizedModule(customer, "documents")).toBe("customer-portal");
     expect(canAccessCompanyRecord(customer, "customer", "customer-001")).toBe(true);
     expect(canAccessCompanyRecord(customer, "customer", "customer-002")).toBe(false);
   });
@@ -90,6 +91,7 @@ describe("access policy", () => {
     const supplier: ActiveSession = {
       ...baseSession,
       userType: "Proveedor",
+      specificPermissions: {"portal_proveedores.acceder":true},
       company: "United Dragon",
       externalParty: {
         kind: "supplier",
@@ -99,7 +101,7 @@ describe("access policy", () => {
     };
 
     expect(canAccessModule(supplier, "supplier-portal")).toBe(true);
-    expect(canAccessModule(supplier, "documents")).toBe(true);
+    expect(canAccessModule(supplier, "documents")).toBe(false);
     expect(canAccessModule(supplier, "suppliers")).toBe(false);
     expect(canAccessModule(supplier, "corrective-actions")).toBe(false);
     expect(canAccessModule(supplier, "customer-portal")).toBe(false);
@@ -118,7 +120,7 @@ describe("access policy", () => {
     };
     expect(canAccessModule(invalidCustomer, "customer-portal")).toBe(false);
     expect(resolveAuthorizedModule(invalidCustomer, "documents")).toBe(
-      "documents",
+      "customer-portal",
     );
   });
 });

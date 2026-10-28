@@ -17,6 +17,7 @@ import {
   safeGeneralInformationObjectName,
 } from "@/lib/general-information-server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 
 export const maxDuration = 60;
 
@@ -30,7 +31,7 @@ export async function GET(request: Request) {
     if (["deleted", "history", "audit"].includes(view) && !actor.administrator) {
       throw new GeneralInformationApiError("La administración documental está reservada al administrador.", 403);
     }
-    const admin = createAdminClient();
+    const admin = await createClient();
     let folderQuery = admin.from("document_folders")
       .select("id,workspace_id,name,description,parent_folder_id,archived_at,created_at,updated_at,deleted_at,deletion_reason")
       .eq("workspace_id", actor.workspaceId)
@@ -81,6 +82,8 @@ export async function GET(request: Request) {
       const result = await admin.from("audit_log")
         .select("id,action,resource_type,resource_id,created_at,metadata,actor:profiles!audit_log_actor_id_fkey(full_name)")
         .in("resource_type", ["document_folder", "general_information_document", "document_upload_batch"])
+        .eq("metadata->>workspace_id", actor.workspaceId)
+        .eq("metadata->>workspace_mode", actor.workspaceMode)
         .order("created_at", { ascending: false })
         .limit(200);
       if (result.error) throw result.error;
@@ -116,7 +119,7 @@ export async function POST(request: Request) {
     if (!body || body.action !== "createFolder" || typeof body.name !== "string" || !body.name.trim()) {
       throw new GeneralInformationApiError("Datos de carpeta inválidos.", 400);
     }
-    const admin = createAdminClient();
+    const admin = await createClient();
     const parentFolderId = typeof body.parentFolderId === "string" && body.parentFolderId ? body.parentFolderId : null;
     if (parentFolderId) await requireFolder(admin, parentFolderId, actor.workspaceId);
     const created = await admin.from("document_folders").insert({
@@ -143,7 +146,7 @@ export async function PATCH(request: Request) {
     if (!body || typeof body.action !== "string" || typeof body.id !== "string") {
       throw new GeneralInformationApiError("Solicitud inválida.", 400);
     }
-    const admin = createAdminClient();
+    const admin = await createClient();
     if (body.entity === "folder") {
       const folder = await requireFolder(admin, body.id, actor.workspaceId, true);
       if (body.action === "delete") {
@@ -174,10 +177,12 @@ export async function PATCH(request: Request) {
     } else if (body.entity === "document") {
       const document = await requireDocument(admin, body.id, actor.workspaceId, true);
       if (body.action === "delete") {
-        await updateDocument(admin, String(document.id), { deleted_at: new Date().toISOString(), deleted_by: actor.id, deletion_reason: requiredReason(body.reason), is_current: false, updated_by: actor.id });
+        const result = await admin.rpc("general_document_lifecycle", { p_id: document.id, p_action: "delete", p_reason: requiredReason(body.reason) });
+        if (result.error) throw result.error;
       } else if (body.action === "restore") {
         await requireFolder(admin, String(document.folder_id), actor.workspaceId);
-        await updateDocument(admin, String(document.id), { deleted_at: null, deleted_by: null, deletion_reason: null, is_current: true, updated_by: actor.id });
+        const result = await admin.rpc("general_document_lifecycle", { p_id: document.id, p_action: "restore" });
+        if (result.error) throw result.error;
       } else if (body.action === "update" || body.action === "move") {
         const folderId = typeof body.folderId === "string" ? body.folderId : String(document.folder_id);
         await requireFolder(admin, folderId, actor.workspaceId);
@@ -223,12 +228,13 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
     throw new GeneralInformationApiError("Cada archivo requiere metadata.", 400);
   }
   const admin = createAdminClient();
+  const access = await createClient();
   const folderIds = [...new Set(manifest.map((item) => item.folderId))];
-  await Promise.all(folderIds.map((folderId) => requireFolder(admin, folderId, actor.workspaceId)));
+  await Promise.all(folderIds.map((folderId) => requireFolder(access, folderId, actor.workspaceId)));
   const replaceDocumentId = String(form.get("replaceDocumentId") || "") || null;
   if (replaceDocumentId && files.length !== 1) throw new GeneralInformationApiError("El reemplazo admite un archivo por operación.", 400);
   const batchCode = `${files.length > 1 ? "BULK" : "UPLOAD"}-${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14)}-${randomUUID().slice(0, 4).toUpperCase()}`;
-  const batch = await admin.from("document_upload_batches").insert({
+  const batch = await access.from("document_upload_batches").insert({
     batch_code: batchCode,
     workspace_id: actor.workspaceId,
     folder_id: manifest.every((item) => item.folderId === manifest[0].folderId) ? manifest[0].folderId : null,
@@ -246,7 +252,7 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
       const metadata = normalizeMetadata(manifest[index]);
       const bytes = Buffer.from(await file.arrayBuffer());
       const sha256 = createHash("sha256").update(bytes).digest("hex");
-      const candidates = await admin.from("file_objects")
+      const candidates = await access.from("file_objects")
         .select("id,sha256,original_name,size_bytes")
         .eq("workspace_id", actor.workspaceId)
         .eq("folder_id", metadata.folderId)
@@ -262,7 +268,7 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
       }
 
       let previous: Record<string, unknown> | null = null;
-      if (replaceDocumentId) previous = await requireDocument(admin, replaceDocumentId, actor.workspaceId);
+      if (replaceDocumentId) previous = await requireDocument(access, replaceDocumentId, actor.workspaceId);
       const documentId = randomUUID();
       const objectPath = `${actor.workspaceId}/information-general/${metadata.folderId}/${documentId}/${safeGeneralInformationObjectName(file.name)}`;
       const stored = await admin.storage.from("integraq-private").upload(objectPath, bytes, {
@@ -271,14 +277,7 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
         upsert: false,
       });
       if (stored.error) throw stored.error;
-      if (previous) {
-        const previousUpdate = await admin.from("file_objects").update({ is_current: false, updated_by: actor.id }).eq("id", previous.id);
-        if (previousUpdate.error) {
-          await admin.storage.from("integraq-private").remove([objectPath]);
-          throw previousUpdate.error;
-        }
-      }
-      const inserted = await admin.from("file_objects").insert({
+      const publication = await access.rpc("publish_general_document", { p_file: {
         id: documentId,
         bucket_id: "integraq-private",
         object_path: objectPath,
@@ -300,12 +299,14 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
         replaces_file_id: previous?.id ?? null,
         preview_status: file.type === "application/pdf" || file.type.startsWith("image/") ? "not_required" : "pending",
         ...metadataToRow(metadata, actor.id),
-      }).select(documentSelect).single();
-      if (inserted.error) {
-        if (previous) await admin.from("file_objects").update({ is_current: true, updated_by: actor.id }).eq("id", previous.id);
-        await admin.storage.from("integraq-private").remove([objectPath]);
-        throw inserted.error;
+      }, p_replaces: previous?.id ?? null });
+      if (publication.error) {
+        const registered = await access.from("file_objects").select("id").eq("id", documentId).maybeSingle();
+        if (!registered.error && !registered.data) await admin.storage.from("integraq-private").remove([objectPath]);
+        if (!registered.data) throw publication.error;
       }
+      const inserted = await access.from("file_objects").select(documentSelect).eq("id", documentId).single();
+      if (inserted.error) throw inserted.error;
       results.push({ index, ok: true, document: mapGeneralInformationDocument(inserted.data as unknown as Record<string, unknown>) });
     } catch (fileError) {
       results.push({ index, ok: false, error: fileError instanceof Error ? fileError.message : "UPLOAD_FAILED" });
@@ -314,7 +315,7 @@ async function uploadDocuments(request: Request, actor: { id: string; workspaceI
   const successCount = results.filter((result) => result.ok).length;
   const failureCount = results.length - successCount;
   const status = successCount === 0 ? "failed" : failureCount ? "partial" : "completed";
-  const batchUpdate = await admin.from("document_upload_batches").update({
+  const batchUpdate = await access.from("document_upload_batches").update({
     success_count: successCount,
     failure_count: failureCount,
     status,

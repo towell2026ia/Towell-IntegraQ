@@ -179,6 +179,8 @@ export interface HomeDashboardData {
   };
   qualityObjectives: Array<{
     id: string;
+    objective?: string;
+    indicatorName: string;
     name: string;
     processId: string;
     processName: string;
@@ -744,6 +746,8 @@ export function buildHomeDashboard(
     },
     qualityObjectives: indicators.map((indicator) => ({
       id: indicator.id,
+      objective: indicator.qualityObjective?.trim() || undefined,
+      indicatorName: indicator.name,
       name: indicator.qualityObjective || indicator.name,
       processId: indicator.processId,
       processName: getIndicatorProcessIds(indicator)

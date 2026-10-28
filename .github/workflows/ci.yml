@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - main
+      - codex/integration-client-fixes
   pull_request:
     branches:
       - main
+      - codex/stb-01-global-capture-windows
   workflow_dispatch:
 
 permissions:
@@ -42,6 +44,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Static SQL validation without a database
+        run: |
+          python -m pip install pglast==8.7
+          python scripts/validate-document-retention-sql.py
+          python scripts/validate-home-images-sql.py
+          python scripts/validate-fix03-sql.py
+          python scripts/validate-integration-sql.py
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -53,3 +66,44 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  supabase-preview-integration:
+    name: STB-01 isolated Supabase Preview
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'codex/stb-01-')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STB_GIT_BRANCH: ${{ github.head_ref }}
+      STB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify Preview and run transactional integration assertions
+        run: node scripts/ci/indicator-global-preview.mjs
+      - name: Verify six races in independent authenticated Preview sessions
+        run: node scripts/ci/indicator-concurrency-preview.mjs
+      - name: Verify deterministic cleanup of committed Preview fixtures
+        if: always()
+        run: node scripts/ci/indicator-concurrency-preview.mjs --cleanup
+
+  document-preview-integration:
+    name: STB-02 isolated Supabase Preview
+    if: github.event_name == 'pull_request' && github.head_ref == 'codex/stb-02-document-retention' && vars.IQ_FIX_01_SQL_ACCEPTANCE == 'true'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STB_GIT_BRANCH: ${{ github.head_ref }}
+      STB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify only document retention assertions in the exact PR Preview
+        run: node scripts/ci/document-retention-preview.mjs

@@ -10,7 +10,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { DocumentPreviewViewer, type DocumentPreviewViewerHandle } from "@/components/modules/document-preview-viewer";
 import type { ProcessCatalogItem } from "@/lib/configuration-data";
 import {
-  approveDocumentVersion, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
+  approveDocumentVersion, getDocumentPermissions, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
   rejectDocumentVersion, restoreControlledDocument, softDeleteControlledDocument,
   submitDocumentVersion, type ControlledDocument, type ControlledDocumentStatus,
   type DocumentAuditEventType, type DocumentPermissions,
@@ -69,7 +69,8 @@ export function DocumentTypeWorkspace({
   const [uploadOpen, setUploadOpen] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
-  const selected = (id: string | null) => documents.find((item) => item.id === id) ?? null;
+  const visibleDocuments = documents.filter((document) => getDocumentPermissions(session, document.processId).view);
+  const selected = (id: string | null) => visibleDocuments.find((item) => item.id === id) ?? null;
   const preview = selected(previewId);
   const history = selected(historyId);
   const rejecting = selected(rejectId);
@@ -85,7 +86,7 @@ export function DocumentTypeWorkspace({
 
   async function approvePendingDocument(document: ControlledDocument) {
     const pending = document.versions.find((version) => version.status === "pending");
-    if (!pending || reviewingId) return;
+    if (!pending || reviewingId || !getDocumentPermissions(session, document.processId).validate) return;
     setReviewingId(pending.id);
     try {
       await reviewStoredDocumentVersion(pending.id, "approve");
@@ -98,7 +99,7 @@ export function DocumentTypeWorkspace({
 
   async function rejectPendingDocument(document: ControlledDocument, reason: string) {
     const pending = document.versions.find((version) => version.status === "pending");
-    if (!pending) return;
+    if (!pending || !getDocumentPermissions(session, document.processId).validate) return;
     await reviewStoredDocumentVersion(pending.id, "reject", reason);
     onChangeDocument(rejectDocumentVersion(document, reason, now()));
     setRejectId(null);
@@ -107,7 +108,7 @@ export function DocumentTypeWorkspace({
 
   async function submitWorkingVersion(document: ControlledDocument) {
     const working = getWorkingVersion(document);
-    if (!working) return;
+    if (!working || !getDocumentPermissions(session, document.processId).submit) return;
     try {
       await submitStoredDocumentVersion(working.id);
       onChangeDocument(submitDocumentVersion(document, now()));
@@ -124,11 +125,12 @@ export function DocumentTypeWorkspace({
       {permissions.upload ? <button className="button button-primary" type="button" onClick={() => setUploadOpen(true)}><Upload size={16} /> Cargar</button> : null}
     </header>
     {notice ? <div className="document-action-notice" role="status"><Check size={15} /> {notice}</div> : null}
-    <div className="document-control-summary"><span><strong>{documents.length}</strong> documentos</span><span><Clock3 size={14} /> La fecha de modificación se registra automáticamente</span></div>
+    <div className="document-control-summary"><span><strong>{visibleDocuments.length}</strong> documentos</span><span><Clock3 size={14} /> La fecha de modificación se registra automáticamente</span></div>
     <div className="document-control-table-wrap"><table className="document-control-table">
       <thead><tr><th>Vista</th><th>Documento</th><th>Código</th><th>Revisión</th><th>Cargó</th><th>Validador</th><th>Fecha de modificación</th><th>Estado</th><th>Acciones</th></tr></thead>
       <tbody>
-        {documents.map((document) => {
+        {visibleDocuments.map((document) => {
+          const permissions = getDocumentPermissions(session, document.processId);
           const version = getWorkingVersion(document);
           if (!version) return null;
           const current = document.versions.find((item) => item.status === "current");
@@ -144,29 +146,29 @@ export function DocumentTypeWorkspace({
               {permissions.submit && ["draft", "rejected"].includes(version.status) ? <button type="button" title="Enviar a validación" aria-label="Enviar a validación" onClick={() => void submitWorkingVersion(document)}><Send size={15} /></button> : null}
               {permissions.validate && version.status === "pending" ? <><button className="approve" type="button" title="Aprobar y publicar" aria-label="Aprobar y publicar" disabled={reviewingId === version.id} onClick={() => void approvePendingDocument(document)}><Check size={15} /></button><button className="reject" type="button" title="Rechazar con observación" aria-label="Rechazar con observación" onClick={() => setRejectId(document.id)}><XCircle size={15} /></button></> : null}
               {permissions.history ? <button type="button" title="Historial" aria-label="Historial" onClick={() => setHistoryId(document.id)}><History size={15} /></button> : null}
-              {documentAdvancedActionsEnabled && (permissions.version || permissions.obsolete || permissions.delete) ? <div className="document-more-actions">
+              {(permissions.delete || (documentAdvancedActionsEnabled && (permissions.version || permissions.obsolete))) ? <div className="document-more-actions">
                 <button type="button" title="Más acciones" aria-label="Más acciones" aria-expanded={menuId === document.id} onClick={() => setMenuId(menuId === document.id ? null : document.id)}><MoreVertical size={15} /></button>
                 {menuId === document.id ? <div className="document-actions-menu">
-                  {permissions.version ? <button type="button" disabled={!canCreateVersion} onClick={() => { setVersionId(document.id); setMenuId(null); }}>Nueva versión</button> : null}
-                  {permissions.obsolete ? <button type="button" disabled={!current} onClick={() => { setObsoleteId(document.id); setMenuId(null); }}>Obsoletizar</button> : null}
+                  {documentAdvancedActionsEnabled && permissions.version ? <button type="button" disabled={!canCreateVersion} onClick={() => { setVersionId(document.id); setMenuId(null); }}>Nueva versión</button> : null}
+                  {documentAdvancedActionsEnabled && permissions.obsolete ? <button type="button" disabled={!current} onClick={() => { setObsoleteId(document.id); setMenuId(null); }}>Obsoletizar</button> : null}
                   {permissions.delete ? <button className="danger" type="button" onClick={() => { setDeleteId(document.id); setMenuId(null); }}>Eliminar</button> : null}
                 </div> : null}
               </div> : null}
             </div></td>
           </tr>;
         })}
-        {!documents.length ? <tr className="document-empty-row"><td colSpan={9}><FileText size={22} /><strong>Sin {documentType.name.toLocaleLowerCase("es-MX")} en {process.name}</strong><span>La tabla pertenece únicamente a {process.id} y conserva sus propias columnas de control.</span></td></tr> : null}
+        {!visibleDocuments.length ? <tr className="document-empty-row"><td colSpan={9}><FileText size={22} /><strong>Sin {documentType.name.toLocaleLowerCase("es-MX")} en {process.name}</strong><span>La tabla pertenece únicamente a {process.id} y conserva sus propias columnas de control.</span></td></tr> : null}
       </tbody>
     </table></div>
 
-    {uploadOpen ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
-    {preview ? <DocumentPreviewModal document={preview} canDownload={permissions.download} onClose={() => setPreviewId(null)} /> : null}
-    {history && permissions.history ? <DocumentHistoryModal document={history} canRestore={permissions.restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, now())); announce("Documento restaurado correctamente."); }} /> : null}
-    {rejecting ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
-    {editing ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${Date.now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
-    {versioning ? <NewVersionModal document={versioning} session={session} onClose={() => setVersionId(null)} onCreate={async (version) => { onChangeDocument({ ...versioning, versions: [version, ...versioning.versions], activity: [{ id: `${versioning.id}-version-${Date.now()}`, eventType: "VERSION_CREATED", performedBy: session.name, performedAt: version.modifiedAt, reason: version.changeReason, versionId: version.id }, ...(versioning.activity ?? [])] }); setVersionId(null); announce("Nueva versión creada correctamente."); }} /> : null}
-    {obsoleting ? <LifecycleReasonModal mode="obsolete" document={obsoleting} documents={documents} onClose={() => setObsoleteId(null)} onConfirm={async (reason, replacementId) => { await obsoleteStoredDocument(obsoleting.id, reason, replacementId); onChangeDocument(obsoleteControlledDocument(obsoleting, session.name, reason, now(), replacementId)); setObsoleteId(null); announce("Documento marcado como obsoleto."); }} /> : null}
-    {deleting ? <LifecycleReasonModal mode="delete" document={deleting} documents={documents} onClose={() => setDeleteId(null)} onConfirm={async (reason) => { await softDeleteStoredDocument(deleting.id, reason); onChangeDocument(softDeleteControlledDocument(deleting, session.name, reason, now())); setDeleteId(null); announce("Documento eliminado de las vistas operativas. El historial permanece conservado."); }} /> : null}
+    {uploadOpen && permissions.upload ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
+    {preview ? <DocumentPreviewModal document={preview} canDownload={getDocumentPermissions(session, preview.processId).download} onClose={() => setPreviewId(null)} /> : null}
+    {history && getDocumentPermissions(session, history.processId).history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, now())); announce("Documento restaurado correctamente."); }} /> : null}
+    {rejecting && getDocumentPermissions(session, rejecting.processId).validate ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
+    {editing && getDocumentPermissions(session, editing.processId).edit ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
+    {versioning && getDocumentPermissions(session, versioning.processId).version ? <NewVersionModal document={versioning} session={session} onClose={() => setVersionId(null)} onCreate={async (version) => { onChangeDocument({ ...versioning, versions: [version, ...versioning.versions], activity: [{ id: `${versioning.id}-version-${now()}`, eventType: "VERSION_CREATED", performedBy: session.name, performedAt: version.modifiedAt, reason: version.changeReason, versionId: version.id }, ...(versioning.activity ?? [])] }); setVersionId(null); announce("Nueva versión creada correctamente."); }} /> : null}
+    {obsoleting && getDocumentPermissions(session, obsoleting.processId).obsolete ? <LifecycleReasonModal mode="obsolete" document={obsoleting} documents={documents} onClose={() => setObsoleteId(null)} onConfirm={async (reason, replacementId) => { await obsoleteStoredDocument(obsoleting.id, reason, replacementId); onChangeDocument(obsoleteControlledDocument(obsoleting, session.name, reason, now(), replacementId)); setObsoleteId(null); announce("Documento marcado como obsoleto."); }} /> : null}
+    {deleting && getDocumentPermissions(session, deleting.processId).delete ? <LifecycleReasonModal mode="delete" document={deleting} documents={documents} onClose={() => setDeleteId(null)} onConfirm={async (reason) => { await softDeleteStoredDocument(deleting.id, reason); onChangeDocument(softDeleteControlledDocument(deleting, session.name, reason, now())); setDeleteId(null); announce("Documento eliminado de las vistas operativas. El historial permanece conservado."); }} /> : null}
   </>;
 }
 
@@ -190,7 +192,7 @@ function NewVersionModal({ document, session, onClose, onCreate }: { document: C
 
 function LifecycleReasonModal({ mode, document, documents, onClose, onConfirm }: { mode: "obsolete" | "delete"; document: ControlledDocument; documents: ControlledDocument[]; onClose: () => void; onConfirm: (reason: string, replacementId?: string) => Promise<void> }) {
   const [reason, setReason] = useState(""); const [replacementId, setReplacementId] = useState(""); const [submitting, setSubmitting] = useState(false); const [error, setError] = useState(""); const version = document.versions.find((item) => item.status === "current") ?? getWorkingVersion(document); const obsolete = mode === "obsolete";
-  return <ModalShell title={obsolete ? "Declarar documento obsoleto" : "Eliminar documento"} eyebrow={document.code} onClose={onClose} className="document-reject-modal"><form onSubmit={(event) => { event.preventDefault(); setSubmitting(true); setError(""); void onConfirm(reason, replacementId || undefined).catch((caught) => { setError(caught instanceof Error ? caught.message : "No fue posible completar la acción."); setSubmitting(false); }); }}><div className="document-lifecycle-copy"><ShieldCheck size={21} /><p>{obsolete ? "El documento dejará de mostrarse como vigente, pero permanecerá disponible en el historial." : "Esta acción retirará el documento de las vistas operativas. El registro y sus archivos permanecerán conservados para trazabilidad y auditoría."}</p></div><div className="document-modal-grid"><label>Código<input readOnly value={document.code} /></label><label>Versión<input readOnly value={`Rev. ${version?.revision ?? "—"}`} /></label><label className="wide">Nombre<input readOnly value={document.name} /></label><label className="wide">Motivo {obsolete ? "de obsolescencia" : "de eliminación"}<textarea required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{obsolete ? <label className="wide">Documento que lo sustituye (opcional)<select value={replacementId} onChange={(event) => setReplacementId(event.target.value)}><option value="">Ninguno</option>{documents.filter((item) => item.id !== document.id).map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label> : null}</div>{error ? <p className="document-upload-error" role="alert">{error}</p> : null}<ModalFooter onClose={onClose} submitting={submitting} submitLabel={obsolete ? "Obsoletizar" : "Eliminar"} icon={obsolete ? <History size={16} /> : <XCircle size={16} />} disabled={!reason.trim()} danger={!obsolete} /></form></ModalShell>;
+  return <ModalShell title={obsolete ? "Declarar documento obsoleto" : "Eliminar documento"} eyebrow={document.code} onClose={onClose} className="document-reject-modal"><form onSubmit={(event) => { event.preventDefault(); if (submitting || !reason.trim()) return; if (!obsolete && !window.confirm("¿Eliminar " + document.code + "? Motivo: " + reason.trim() + ". Se conservarán archivos, versiones e historial.")) return; setSubmitting(true); setError(""); void onConfirm(reason.trim(), replacementId || undefined).catch((caught) => { setError(caught instanceof Error ? caught.message : "No fue posible completar la acción."); setSubmitting(false); }); }}><div className="document-lifecycle-copy"><ShieldCheck size={21} /><p>{obsolete ? "El documento dejará de mostrarse como vigente, pero permanecerá disponible en el historial." : "Esta acción retirará el documento de las vistas operativas. El registro y sus archivos permanecerán conservados para trazabilidad y auditoría."}</p></div><div className="document-modal-grid"><label>Código<input readOnly value={document.code} /></label><label>Versión<input readOnly value={`Rev. ${version?.revision ?? "—"}`} /></label><label className="wide">Nombre<input readOnly value={document.name} /></label><label className="wide">Motivo {obsolete ? "de obsolescencia" : "de eliminación"}<textarea required value={reason} onChange={(event) => setReason(event.target.value)} /></label>{obsolete ? <label className="wide">Documento que lo sustituye (opcional)<select value={replacementId} onChange={(event) => setReplacementId(event.target.value)}><option value="">Ninguno</option>{documents.filter((item) => item.id !== document.id).map((item) => <option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label> : null}</div>{error ? <p className="document-upload-error" role="alert">{error}</p> : null}<ModalFooter onClose={onClose} submitting={submitting} submitLabel={obsolete ? "Obsoletizar" : "Eliminar"} icon={obsolete ? <History size={16} /> : <XCircle size={16} />} disabled={!reason.trim()} danger={!obsolete} /></form></ModalShell>;
 }
 
 function DocumentPreviewModal({ document, canDownload, onClose }: { document: ControlledDocument; canDownload: boolean; onClose: () => void }) {
@@ -202,7 +204,7 @@ function DocumentPreviewModal({ document, canDownload, onClose }: { document: Co
 
 export function DocumentHistoryModal({ document, canRestore, onClose, onRestore }: { document: ControlledDocument; canRestore: boolean; onClose: () => void; onRestore: () => Promise<void> }) {
   const [restoring, setRestoring] = useState(false); const [error, setError] = useState("");
-  return <ModalShell title="Historial" eyebrow={document.code} onClose={onClose} className="document-history-modal"><div className="document-history-sections"><section><h4>Versiones</h4><div className="document-history-list">{[...document.versions].sort((a, b) => b.revision - a.revision).map((version) => <article key={version.id}><span className="document-history-revision">Rev. {version.revision}</span><div><strong>{version.fileName}</strong><small>{version.changeReason}</small>{version.changeSummary ? <small>{version.changeSummary}</small> : null}<small>{version.uploadedBy} · {formatDate(version.modifiedAt)}</small></div><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span></article>)}</div></section><section><h4>Actividad</h4><div className="document-activity-list">{(document.activity ?? []).map((event) => <article key={event.id}><span>{formatDate(event.performedAt)}</span><strong>{event.performedBy}</strong><span>{eventLabels[event.eventType]}</span>{event.reason ? <small>{event.reason}</small> : null}</article>)}{!document.activity?.length ? <p>La actividad ampliada aparecerá al sincronizar la migración.</p> : null}</div></section>{document.lifecycle?.isDeleted ? <section className="document-restore-panel"><div><strong>Documento eliminado</strong><span>Motivo: {document.lifecycle.deleteReason}</span><span>Usuario: {document.lifecycle.deletedBy}</span><span>Fecha: {document.lifecycle.deletedAt ? formatDate(document.lifecycle.deletedAt) : "—"}</span></div>{canRestore ? <button className="button button-secondary" type="button" disabled={restoring} onClick={() => { setRestoring(true); setError(""); void onRestore().catch((caught) => { setError(caught instanceof Error ? caught.message : "No fue posible restaurar."); setRestoring(false); }); }}><RotateCcw size={16} /> {restoring ? "Restaurando…" : "Restaurar"}</button> : null}</section> : null}{error ? <p className="document-upload-error" role="alert">{error}</p> : null}</div></ModalShell>;
+  return <ModalShell title="Historial" eyebrow={document.code} onClose={onClose} className="document-history-modal"><div className="document-history-sections"><section><h4>Versiones</h4><div className="document-history-list">{[...document.versions].sort((a, b) => b.revision - a.revision).map((version) => <article key={version.id}><span className="document-history-revision">Rev. {version.revision}</span><div><strong>{version.fileName}</strong><button type="button" className="button button-secondary" onClick={() => { void getControlledDocumentDownloadUrl(version).then((url) => { if (url) window.open(url, "_blank", "noopener,noreferrer"); }).catch(() => setError("No fue posible consultar el archivo histórico.")); }}>Consultar archivo</button><small>{version.changeReason}</small>{version.changeSummary ? <small>{version.changeSummary}</small> : null}<small>{version.uploadedBy} · {formatDate(version.modifiedAt)}</small></div><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span></article>)}</div></section><section><h4>Actividad</h4><div className="document-activity-list">{(document.activity ?? []).map((event) => <article key={event.id}><span>{formatDate(event.performedAt)}</span><strong>{event.performedBy}</strong><span>{eventLabels[event.eventType]}</span>{event.reason ? <small>{event.reason}</small> : null}</article>)}{!document.activity?.length ? <p>La actividad ampliada aparecerá al sincronizar la migración.</p> : null}</div></section>{document.lifecycle?.isDeleted ? <section className="document-restore-panel"><div><strong>Documento eliminado</strong><span>Motivo: {document.lifecycle.deleteReason}</span><span>Usuario: {document.lifecycle.deletedBy}</span><span>Fecha: {document.lifecycle.deletedAt ? formatDate(document.lifecycle.deletedAt) : "—"}</span></div>{canRestore ? <button className="button button-secondary" type="button" disabled={restoring} onClick={() => { if (!window.confirm("¿Restaurar este documento? Se bloqueará si su código ya está ocupado; no se sobrescribirá otro documento.")) return; setRestoring(true); setError(""); void onRestore().catch((caught) => { setError(caught instanceof Error ? caught.message : "No fue posible restaurar."); setRestoring(false); }); }}><RotateCcw size={16} /> {restoring ? "Restaurando…" : "Restaurar"}</button> : null}</section> : null}{error ? <p className="document-upload-error" role="alert">{error}</p> : null}</div></ModalShell>;
 }
 
 function RejectDocumentModal({ document, onClose, onReject }: { document: ControlledDocument; onClose: () => void; onReject: (reason: string) => Promise<void> }) {

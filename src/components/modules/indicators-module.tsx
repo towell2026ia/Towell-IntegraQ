@@ -52,12 +52,12 @@ import {
   matchesIndicatorArea,
 } from "@/lib/indicator-access";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { IndicatorCaptureSettings } from "@/components/modules/indicator-capture-settings";
 import { EvidenceManager } from "@/components/evidence/evidence-manager";
 import type { AttachmentRecord } from "@/lib/attachment-storage";
 import type { IndicatorResultInput } from "@/lib/indicators/indicator-types";
 import {
   buildDefaultCaptureWindows,
-  businessDateBoundary,
   formatBusinessDate,
   formatBusinessDateInput,
   formatBusinessWindow,
@@ -65,7 +65,7 @@ import {
   type IndicatorWindowState,
 } from "@/lib/indicators/indicator-windows";
 
-type IndicatorView = "dashboard" | "sheet" | "pending" | "catalog" | "submission";
+type IndicatorView = "capture-settings" | "dashboard" | "sheet" | "pending" | "catalog" | "submission";
 
 interface SubmissionSelection {
   indicatorId: string;
@@ -113,13 +113,12 @@ export function IndicatorsModule({
   onDefinitionSave,
   onRefresh,
   onResultSave,
-  onSettingsSave,
   saving,
   session,
 }: IndicatorsModuleProps) {
   const canManageCatalog = canManageIndicatorCatalog(session);
   const focusedIndicator = definitions.find((indicator) => indicator.id === focusId);
-  const [view, setView] = useState<IndicatorView>("dashboard");
+  const [view, setView] = useState<IndicatorView>(focusId === "capture-settings" && canManageCatalog ? "capture-settings" : "dashboard");
   const [year, setYear] = useState(2026);
   const [area, setArea] = useState(
     getDefaultIndicatorArea(session, focusedIndicator?.area),
@@ -161,6 +160,8 @@ export function IndicatorsModule({
     void onRefresh();
   }
 
+  if (view === "capture-settings" && canManageCatalog) return <><button className="button button-secondary" onClick={() => setView("catalog")} type="button">Volver al catálogo</button><IndicatorCaptureSettings onChanged={onRefresh} connected={!!session.authUserId} /></>;
+
   return (
     <>
       <section className="module-heading indicator-module-heading">
@@ -196,7 +197,7 @@ export function IndicatorsModule({
       {view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={changeYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
       {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={changeYear} query={query} results={results} year={year} /> : null}
       {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={changeYear} query={query} quarter={pendingQuarter} results={results} session={session} year={year} /> : null}
-      {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager captureDaysAfterClose={captureDaysAfterClose} definitions={definitions} key={`catalog-${captureDaysAfterClose}`} onBack={() => setView("dashboard")} onDefinitionDelete={onDefinitionDelete} onDefinitionSave={onDefinitionSave} onSettingsSave={onSettingsSave} saving={saving} year={year} /> : null}
+      {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager captureDaysAfterClose={captureDaysAfterClose} definitions={definitions} key={`catalog-${captureDaysAfterClose}`} onBack={() => setView("dashboard")} onDefinitionDelete={onDefinitionDelete} onDefinitionSave={onDefinitionSave} onCaptureSettings={() => setView("capture-settings")} saving={saving} year={year} /> : null}
       {view === "submission" && submission && accessibleDefinitions.some((indicator) => indicator.id === submission.indicatorId) ? (
         <IndicatorSubmission
           indicator={accessibleDefinitions.find((item) => item.id === submission.indicatorId) ?? accessibleDefinitions[0]}
@@ -349,7 +350,7 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
   );
 }
 
-function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => Promise<void>; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
+export function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => Promise<void>; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
   const [evidence, setEvidence] = useState<AttachmentRecord[]>([]);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -415,13 +416,15 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
         {administrativeOutsideWindow ? <label><span>Motivo de modificación administrativa</span><textarea name="adminOverrideReason" placeholder="Ej. Corrección autorizada de captura T3." required rows={3} /></label> : null}
         <EvidenceManager
           moduleId="indicators"
+          referencedFileId={record?.evidenceFileId}
+          viewLabel="Ver evidencia"
           onChange={setEvidence}
           permissions={{ read: true, add: editable, replace: editable, delete: administrativeOverride, history: true }}
           processId={evidenceProcessId}
           resourceKey={`${indicator.id}:${year}:${quarter}`}
           resourceType="indicator_result"
         />
-        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>El registro anterior sólo conservaba el nombre; vuelve a adjuntar el binario una vez para habilitar Ver y Descargar.</small></span></div> : null}
+        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>No se pudo resolver el archivo con los permisos actuales. La referencia se conserva; no es necesario volver a cargar una evidencia existente.</small></span></div> : null}
         {record ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Último registro manual</strong><small>{record.submittedBy} · {formatTimestamp(record.submittedAt)}</small></span></div> : null}
         {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
         <footer><p>{saved ? <><CheckCircle2 size={15} /> Resultado guardado y confirmado</> : <><CircleAlert size={15} /> No se cargará información automáticamente.</>}</p><button className="button button-primary" disabled={!editable || saving} type="submit">{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Guardar resultado</button></footer>
@@ -430,12 +433,11 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
   );
 }
 
-function IndicatorCatalogManager({ captureDaysAfterClose, definitions, onBack, onDefinitionDelete, onDefinitionSave, onSettingsSave, saving, year }: { captureDaysAfterClose: number; definitions: ConfiguredIndicator[]; onBack: () => void; onDefinitionDelete: (indicatorId: string) => Promise<void>; onDefinitionSave: (indicator: ConfiguredIndicator) => Promise<void>; onSettingsSave: (days: number) => Promise<void>; saving: boolean; year: number }) {
+function IndicatorCatalogManager({ captureDaysAfterClose, definitions, onBack, onDefinitionDelete, onDefinitionSave, onCaptureSettings, saving, year }: { captureDaysAfterClose: number; definitions: ConfiguredIndicator[]; onBack: () => void; onDefinitionDelete: (indicatorId: string) => Promise<void>; onDefinitionSave: (indicator: ConfiguredIndicator) => Promise<void>; onCaptureSettings: () => void; saving: boolean; year: number }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ConfiguredIndicator | "new" | null>(null);
   const [deleting, setDeleting] = useState<ConfiguredIndicator | null>(null);
   const [saveError, setSaveError] = useState("");
-  const [defaultDays, setDefaultDays] = useState(captureDaysAfterClose);
   const filtered = definitions.filter((indicator) => !query.trim() || [indicator.id, indicator.area, indicator.name, indicator.leader].some((value) => value.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))));
 
   async function saveIndicator(indicator: ConfiguredIndicator) {
@@ -459,20 +461,12 @@ function IndicatorCatalogManager({ captureDaysAfterClose, definitions, onBack, o
     }
   }
 
-  async function saveDefaultDays() {
-    setSaveError("");
-    try {
-      await onSettingsSave(defaultDays);
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : "No fue posible guardar la configuración general.");
-    }
-  }
 
   return (
     <section className="indicator-workspace-panel indicator-catalog-panel">
       <header className="indicator-catalog-header"><button className="icon-button" type="button" title="Volver al dashboard" onClick={onBack}><ArrowLeft size={18} /></button><div><p className="module-kicker">Configuración administrativa</p><h3>Catálogo de indicadores</h3><p>Altas, responsables, métricas y fechas trimestrales de captura.</p></div><button className="button button-primary" type="button" onClick={() => setEditing("new")}><Plus size={17} /> Nuevo indicador</button></header>
       {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
-      <div className="indicator-catalog-search indicator-default-window"><label><span>Días disponibles después del cierre</span><input max="90" min="1" onChange={(event) => setDefaultDays(Number(event.target.value))} type="number" value={defaultDays} /></label><span>Regla general para periodos nuevos · America/Mexico_City</span><button className="button button-secondary" disabled={saving || defaultDays < 1 || defaultDays > 90} onClick={() => void saveDefaultDays()} type="button"><Save size={16} /> Guardar regla general</button></div>
+      <div className="indicator-catalog-search indicator-default-window"><p>Administra ventanas globales y excepciones con vista previa, motivo e historial.</p><button className="button button-secondary" type="button" onClick={onCaptureSettings}>Fechas de captura</button></div>
       <div className="indicator-catalog-search"><label className="panel-search indicator-search"><Search size={16} /><input aria-label="Buscar en catálogo" onChange={(event) => setQuery(event.target.value)} placeholder="Buscar indicador, proceso o responsable" value={query} /></label><span>{filtered.length} indicadores</span></div>
       <div className="indicator-catalog-groups">
         {groupIndicators(filtered).map((group) => <section className="indicator-catalog-group" key={group.area}><header><div><strong>{group.area}</strong><small>{group.items[0]?.processId}</small></div><span>{group.items.length}</span></header>{group.items.map((indicator) => <div className="indicator-catalog-row" key={indicator.id}><code>{indicator.id}</code><span><strong>{indicator.name}</strong><small>{indicator.leader} · {indicator.metric}</small><span className="indicator-rule-summary"><i className="rule-compliant">Cumple {indicator.evaluationRules.compliant}</i><i className="rule-marginal">Marginal {indicator.evaluationRules.marginal}</i><i className="rule-noncompliant">No cumple {indicator.evaluationRules.noncompliant}</i></span></span><span><small>{quarterLabels.Q3} {year}</small><strong>{formatScheduleDate(getIndicatorScheduleDate(indicator, year, "Q3"))}</strong></span><button className="icon-button" type="button" title={`Editar ${indicator.name}`} onClick={() => setEditing(indicator)}><Pencil size={16} /></button><button className="icon-button danger" type="button" title={`Eliminar ${indicator.name}`} onClick={() => setDeleting(indicator)}><Trash2 size={16} /></button></div>)}</section>)}
@@ -496,10 +490,7 @@ function IndicatorEditor({ captureDaysAfterClose, definitions, indicator, onClos
     const schedule = structuredClone(indicator?.schedule ?? { "2025": buildQuarterSchedule(2025), "2026": buildQuarterSchedule(2026) });
     schedule[String(year)] = Object.fromEntries(quarters.map((quarter) => [quarter, String(form.get(`schedule-${quarter}`))])) as Record<Quarter, string>;
     const captureWindows = structuredClone(indicator?.captureWindows ?? {});
-    captureWindows[String(year)] = Object.fromEntries(quarters.map((quarter) => [quarter, {
-      opensAt: businessDateBoundary(String(form.get(`opens-${quarter}`)), "start"),
-      closesAt: businessDateBoundary(String(form.get(`closes-${quarter}`)), "end"),
-    }])) as Record<Quarter, { opensAt: string; closesAt: string }>;
+    captureWindows[String(year)] = indicator?.captureWindows?.[String(year)] ?? buildDefaultCaptureWindows(year, captureDaysAfterClose);
     void onSave({
       id: indicator?.id ?? nextId,
       sourceRow: indicator?.sourceRow ?? 0,
@@ -537,7 +528,7 @@ function IndicatorEditor({ captureDaysAfterClose, definitions, indicator, onClos
         <form onSubmit={submit}>
           <div className="indicator-editor-grid"><label><span>Proceso o área</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>Proceso principal</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Procesos relacionados</span><input defaultValue={indicator ? getIndicatorProcessIds(indicator).join(", ") : ""} name="processIds" placeholder="Ej. P-13, P-15" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>Métrica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. ≥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><textarea defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective" rows={2} /></label><label className="span-2"><span>Descripción</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
           <fieldset className="indicator-rules-fieldset"><legend>Reglas de evaluación</legend><div><label className="rule-compliant"><span>Cumple</span><input defaultValue={defaultRules.compliant} name="rule-compliant" placeholder=">=90" required /></label><label className="rule-marginal"><span>Marginal</span><input defaultValue={defaultRules.marginal} name="rule-marginal" placeholder=">=85.5,<90" required /></label><label className="rule-noncompliant"><span>No cumple</span><input defaultValue={defaultRules.noncompliant} name="rule-noncompliant" placeholder="<85.5" required /></label></div><p>Usa operadores &gt;, &gt;=, &lt;, &lt;= o =. Separa condiciones simultáneas con coma y alternativas con punto y coma.</p></fieldset>
-          <fieldset className="indicator-schedule-fieldset"><legend>Calendario de captura · {year}</legend><div>{quarters.map((quarter) => { const window = defaultWindows[quarter]; const state = getIndicatorWindowState(window); return <label key={quarter}><span>{quarterLabels[quarter]}</span><small>Periodo evaluado</small><input defaultValue={defaults[quarter]} name={`schedule-${quarter}`} required type="date" /><small>Apertura</small><input defaultValue={formatBusinessDateInput(window.opensAt)} name={`opens-${quarter}`} required type="date" /><small>Cierre</small><input defaultValue={formatBusinessDateInput(window.closesAt)} name={`closes-${quarter}`} required type="date" /><em className={`indicator-window-state ${state}`}>{windowStateLabels[state]}</em></label>; })}</div><p>Edita apertura y cierre para crear una excepción por indicador. La zona horaria de negocio es America/Mexico_City.</p></fieldset>
+          <fieldset className="indicator-schedule-fieldset"><legend>Calendario de captura · {year}</legend><div>{quarters.map((quarter) => { const window = defaultWindows[quarter]; const state = getIndicatorWindowState(window); return <label key={quarter}><span>{quarterLabels[quarter]}</span><small>Periodo evaluado</small><input defaultValue={defaults[quarter]} name={`schedule-${quarter}`} required type="date" /><small>Apertura</small><input defaultValue={formatBusinessDateInput(window.opensAt)} name={`opens-${quarter}`} readOnly required type="date" /><small>Cierre</small><input defaultValue={formatBusinessDateInput(window.closesAt)} name={`closes-${quarter}`} readOnly required type="date" /><em className={`indicator-window-state ${state}`}>{windowStateLabels[state]}</em></label>; })}</div><p>Las ventanas se heredan de la regla global. Para una excepción con motivo, usa Configuración → Indicadores → Fechas de captura.</p></fieldset>
           <footer><button className="button button-secondary" disabled={saving} type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} Guardar indicador</button></footer>
         </form>
       </section>

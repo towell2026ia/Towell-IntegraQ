@@ -1,3 +1,4 @@
+import { canAccessModule } from "../access-policy";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 import { legacyPermissionCode } from "./permissions";
@@ -9,6 +10,7 @@ export function authorize(input: AuthorizationInput): AuthorizationResult {
   if (!user) return denied(permission, "UNAUTHORIZED");
   if (isAdministrator(user) && !input.disallowAdminOverride) return { allowed: true, scope: "global", reason: null, origin: "admin_override", permission };
 
+  if (user.externalParty && !canAccessModule(user, user.externalParty.kind === "customer" ? "customer-portal" : "supplier-portal")) return denied(permission, "FORBIDDEN");
   const grants = [...deriveLegacyGrants(user, permission), ...(input.grants ?? [])]
     .filter((grant) => grant.permission === permission && isGrantActive(grant, now));
   if (!grants.length) return denied(permission, "FORBIDDEN");

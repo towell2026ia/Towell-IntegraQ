@@ -1,3 +1,4 @@
+import { canUseSupplierApi, canReadSupplierRecord } from "@/lib/portal-security";
 import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
@@ -16,6 +17,7 @@ const extensionMime: Record<string, string> = {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   if (session.userType !== "Proveedor") return NextResponse.json({ error: "Sólo el proveedor puede adjuntar evidencias desde este portal." }, { status: 403 });
   const form = await request.formData().catch(() => null);
   const actionId = form?.get("actionId");
@@ -34,8 +36,8 @@ export async function POST(request: Request) {
   if (!policyResult.data.allowed_mime_types.includes(mimeType)) return NextResponse.json({ error: "Formato no permitido. Usa JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX." }, { status: 400 });
   if (file.size > policyResult.data.max_size_bytes) return NextResponse.json({ error: `El archivo supera el máximo de ${formatMegabytes(policyResult.data.max_size_bytes)} MB.` }, { status: 400 });
 
-  const reportResult = await supabase.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,status,deleted_at").eq("id", actionResult.data.report_id).maybeSingle();
-  if (reportResult.error || !reportResult.data || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
+  const reportResult = await supabase.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,status,deleted_at,portal_visible").eq("id", actionResult.data.report_id).maybeSingle();
+  if (reportResult.error || !reportResult.data || !canReadSupplierRecord(session, reportResult.data.supplier_id, reportResult.data.site_id) || !reportResult.data.portal_visible || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
     return NextResponse.json({ error: "La RNCP no admite nuevas evidencias." }, { status: 400 });
   }
   const userId = session.authUserId;
@@ -56,13 +58,13 @@ export async function POST(request: Request) {
     uploaded_by: userId, preview_status: mimeType.startsWith("image/") || mimeType === "application/pdf" ? "not_required" : "pending",
   }).select("id,original_name,mime_type,size_bytes,uploaded_by,created_at").single();
   if (inserted.error || !inserted.data) {
-    await admin.storage.from(privateBucket).remove([objectPath]);
+    /* Preserve the binary on an uncertain registration response. */
     return NextResponse.json({ error: "No fue posible registrar la evidencia." }, { status: 500 });
   }
   const linked = await admin.from("supplier_rncp_action_evidence").insert({ action_id: actionId, file_id: fileId, created_by: userId });
   if (linked.error) {
-    await admin.from("file_objects").delete().eq("id", fileId);
-    await admin.storage.from(privateBucket).remove([objectPath]);
+    // Preserve metadata; the link response may be uncertain.
+    /* Preserve the binary on an uncertain registration response. */
     return NextResponse.json({ error: "No fue posible vincular la evidencia a la acción." }, { status: 500 });
   }
   return NextResponse.json({ evidence: { id: inserted.data.id, fileName: inserted.data.original_name, mimeType: inserted.data.mime_type, sizeBytes: inserted.data.size_bytes, uploadedBy: inserted.data.uploaded_by, uploadedAt: inserted.data.created_at } }, { status: 201 });

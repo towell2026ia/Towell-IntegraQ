@@ -1,4 +1,5 @@
 import "server-only";
+import { canAccessModule } from "@/lib/access-policy";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -19,30 +20,31 @@ export interface GeneralInformationActor {
 export async function requireGeneralInformationActor(requireAdministrator = false) {
   const session = await getAuthenticatedSession();
   if (!session?.authUserId) throw new GeneralInformationApiError("Sesión requerida.", 401);
+  if (!canAccessModule(session, "documents") || session.workspaceMode === "demo") throw new GeneralInformationApiError("Sin permiso para Información General.", 403);
   const admin = createAdminClient();
   const profile = await admin.from("profiles")
-    .select("organization_id,user_type,status")
+    .select("organization_id,user_type,status,workspace_mode")
     .eq("id", session.authUserId)
     .maybeSingle();
-  if (profile.error || !profile.data || profile.data.status !== "active") {
+  if (profile.error || !profile.data || profile.data.status !== "active" || !["administrator", "internal"].includes(profile.data.user_type)) {
     throw new GeneralInformationApiError("La cuenta no está activa.", 403);
   }
   const administrator = isAdministrator(session) && profile.data.user_type === "administrator";
   if (requireAdministrator && !administrator) {
     throw new GeneralInformationApiError("Acción exclusiva para administrador.", 403);
   }
-  let workspaceId = profile.data.organization_id as string | null;
-  if (!workspaceId) {
-    const workspace = await admin.from("organizations").select("id").eq("code", "TOWELL").maybeSingle();
-    if (workspace.error || !workspace.data) {
-      throw new GeneralInformationApiError("No se encontró el espacio de Información General.", 409);
-    }
-    workspaceId = String(workspace.data.id);
-  }
-  return { id: session.authUserId, workspaceId, administrator } satisfies GeneralInformationActor;
+  const workspaceId = profile.data.organization_id as string | null;
+  if (!workspaceId) throw new GeneralInformationApiError("La cuenta requiere una organización asignada.", 403);
+  const workspaceMode = profile.data.workspace_mode === "demo" ? "demo" : "production";
+  return { id: session.authUserId, workspaceId, administrator, workspaceMode };
+
 }
 
 export function generalInformationErrorResponse(error: unknown) {
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+  if (code === "23505") return { status: 409, message: "El código o identidad documental ya está ocupado por un documento activo. No se sobrescribió ningún archivo." };
+  if (code === "42501") return { status: 403, message: "No tienes autorización para este documento o workspace." };
+  if (code === "22023" || code === "23503") return { status: 409, message: "El documento cambió de estado o su carpeta no está disponible. Actualiza la vista antes de continuar." };
   const status = error instanceof GeneralInformationApiError ? error.status : 500;
   const message = error instanceof GeneralInformationApiError
     ? error.message

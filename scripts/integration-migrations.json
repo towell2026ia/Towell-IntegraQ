@@ -1,0 +1,76 @@
+{
+  "base": "b4f5bb7e046ed02ac8149a0014e95dcd063eefb9",
+  "sources": {
+    "4": "bdb419ba0f64648a77c09aea2473cb8b0de6b3f9",
+    "5": "27ea064aa4aef0feac455c5d200fd9f33ecd21d9",
+    "6": "9ddcb893a1d864a387a5074fbc6e4cd7c20a365b",
+    "7": "2459c05f1070c4cb9a9eb9221b415e79295f5f7d",
+    "8": "f64fe52198ec3bcba116b1727a8374ec76f88fb7"
+  },
+  "baseline": {
+    "supabase/migrations/202608230001_identity_and_access.sql": "ad98e70bace46934ec4f4c8c1f06c85753e7d06d59fee5ff9a5d550d6b02fdd4",
+    "supabase/migrations/202608230002_platform_core.sql": "6777882fab03515d9d4819c0bd81080496fde85b5d4b6252b6c840d2b49cbec5",
+    "supabase/migrations/202608230003_documents_forms_indicators_risks.sql": "8bf8aa17d915062bdb9d7cefbeba91c8607e922326c2996e5094ca09652f937c",
+    "supabase/migrations/202608230004_quality_audits_and_portals.sql": "11b449081b9be064feb6793ddafd905d8a77a6fb020c4459fa75161216b3d7b8",
+    "supabase/migrations/202608230005_metrology_improvement_management.sql": "9f8fcd9f0cc974781b7872ad1561be8af46a99cbc180f15f39d7b2bedfed650f",
+    "supabase/migrations/202608230006_granular_user_permissions.sql": "9d4261b435b53706cf7c53581fa70d4b6f5087e028eea02b3586b31ae26b28ea",
+    "supabase/migrations/202608240001_organization_source.sql": "41a1d69c7841a232529c12a526dcc4957b2eb7db9b7c01d3e792a6665da442c3",
+    "supabase/migrations/202609010001_rename_p11_human_resources.sql": "cb736bbf378577f925713adccb167706ad76387b8f351141d4be53e38e3c12a0",
+    "supabase/migrations/202609010002_add_quality_management_systems_process.sql": "100a2287352fa90fbdae4675766e5b9670a44db06809c3ba2dce98bf6a299273",
+    "supabase/migrations/202609030001_strategy_risks_and_opportunities.sql": "2486d5f569d6d4e1da912164cdcdfdc8e37705f5f200bed2978b91b7a2de0728",
+    "supabase/migrations/202609070001_expand_organization_levels.sql": "ccf0e9cc5718c0df220b1ec6bfc6165ec4effd457d49ce0fa0a5c8ca88bd944d",
+    "supabase/migrations/202609070002_ai_core_foundations.sql": "7531e78d96e9384f4a67dd646afc093f556322c7f4a15c6c5bdd5c664e8a2f28",
+    "supabase/migrations/202609070003_data_integrity_relationships.sql": "6e8c6c8332aa152f9ab7b9c3cde4f9dcd1468551f98143dc9b7ce555b569db08",
+    "supabase/migrations/202609070004_access_traceability_approvals.sql": "3eb137d4f6a0255e803de85194ab748babbc98a456ae8ee5bd88ef60c5f28bbb",
+    "supabase/migrations/202609140001_audit_occurrences.sql": "1315efc79dc1300404205353565828b8c4147807a7e0ddf845f6081301d988bd",
+    "supabase/migrations/202609180001_audit_periodic_schedule.sql": "298dde13d77de6fcd6497f51407db24a053a4efdee54139bae4f38d8faeb35e8",
+    "supabase/migrations/202609220001_document_lifecycle_master_list.sql": "4007b187f74ab653687ae9b4bc9d8f386381f85ea391b4032bdb917a67e7d673",
+    "supabase/migrations/202609240001_home_process_visibility.sql": "3ef16ec3c592c5b34bb554689bc6c4f4bb7feda466f19074230e60cbdcb72c25",
+    "supabase/migrations/202609240002_transversal_evidence_permissions.sql": "912b7e731692956a02baae4c94190a2bf39e82f4774a8b1e917e0d960acf9654",
+    "supabase/migrations/202609240003_organization_chart_current_version.sql": "1aaa720b882ec38d77e7454b8aebcde86d6f2d233689f765be1623e6d7a55929",
+    "supabase/migrations/202609240004_permission_audit_actor.sql": "fce2f30a62010298f495e815dc14a0184f780b3009f431d63a0ae43f83483e68",
+    "supabase/migrations/202609240005_admin_only_document_management.sql": "b965f817e8e06548b68211dbbc6b700d4bcd75792279f6893873edbef9da85c3",
+    "supabase/migrations/202609240006_demo_workspace_isolation.sql": "4717deced4806276291141b7769911e67e0661533b3205562ac04ccbd6ffac03",
+    "supabase/migrations/202609250001_production_hardening.sql": "de5d259c623052bfef4d518e10519715fff10dd20baf75a4a7e31e3e935c5017",
+    "supabase/migrations/202609250002_profile_workspace_assignment.sql": "b20bd2a3b79d806d8fdea9eb2080e8bd59ea4bf273be01b264c5130d21c70f93",
+    "supabase/migrations/202609250003_workspace_soft_delete_guard.sql": "ebdab9676d5a40ac3ed022f4504d4cfcf7dd5fab670598f795046c76a182d347",
+    "supabase/migrations/202609270001_general_information_repository.sql": "c12f1a3a6b923c09332f8fb8c1cc4897c7f6a8c936a56c67d8d632b65a65be03",
+    "supabase/migrations/202610070001_indicator_runtime_source_of_truth.sql": "89f86b9d10df08c7188af654ce7c2b8484e47440893d7f9a7f5c51378cb6e64a",
+    "supabase/migrations/202610070002_indicator_capture_permissions.sql": "5abc5fc24951573cc069299094b3bc4ab05e7ee4c6aca7ed56895dd8cdf6207a",
+    "supabase/migrations/202610070003_indicator_capture_windows.sql": "366d4b57f104d47b49263c97c31d4460ec05e5f5ec301e1fe60d369d88f083d9",
+    "supabase/migrations/202610080002_external_company_master.sql": "d4a72c9bbd890f548230c02028db60006a46649cf8d52e7d7e7b34a99b008bcd",
+    "supabase/migrations/202610080003_rncp_lifecycle.sql": "66e26fb31ebd6474ee2869f8c51a56dbc2018ef3f87a038c402eecc9cc73c9a0",
+    "supabase/migrations/202610080004_supplier_portal_evidence.sql": "98d4bbbe7f5f10a1ba9c38ad2b8227085818c5e19c84fc9aed99a1d3730fc8dc",
+    "supabase/migrations/202610080005_supplier_dashboard_indexes.sql": "c0c410fd5a75e4b56b96ff139f77714f01b5cb2813cae79478c9b42ef33c8019",
+    "supabase/migrations/202610080006_supplier_assessment_results.sql": "882b5d9003dc9e65fb1841b149c73eb3d3d448a1fe3ce7d5d0b129fe1a7c6881",
+    "supabase/migrations/202610080007_home_institutional_information.sql": "ab05b4898893975fdaa8f947474a6600bfbd167aca3bf585952b740b2d61fedc",
+    "supabase/migrations/202610090001_indicator_rule_expression_engine.sql": "7ee02f6b1d1ef18e613d33a774cc55a20e6697e2b79b873a038f59ed8dda7377"
+  },
+  "pending": [
+    {
+      "path": "supabase/migrations/202610210003_indicator_global_capture_windows.sql",
+      "pr": 4,
+      "sha256": "a3ef2077ecf071627b9f1530091a71b9f6ebde016cc7a58c84221e6223f1f6b5"
+    },
+    {
+      "path": "supabase/migrations/202610220001_document_retention_code_reuse.sql",
+      "pr": 5,
+      "sha256": "277843ec77d2ad57d4d244dbad8c8d7fdcd7ad371aeb33c2b35692d6613b121c"
+    },
+    {
+      "path": "supabase/migrations/202610270001_home_image_slots.sql",
+      "pr": 6,
+      "sha256": "1eae196539b030f0a6a3e6b7bbcb867711d81189da27f0b0c1fc0cdf7b2be251"
+    },
+    {
+      "path": "supabase/migrations/20261028153100_iq_fix03_user_permissions_portal_isolation.sql",
+      "pr": 8,
+      "sha256": "467a9c96719a6e31c1b59014c67d3a67801c6261495d9dd51e1f780092a0050e"
+    },
+    {
+      "path": "supabase/migrations/20261028180652_iq_fix03a_document_file_process_scope.sql",
+      "pr": 8,
+      "sha256": "d5ed4165e5dab4e29818a2b06437255e9e5a1a581af829fc168be529e07de30c"
+    }
+  ]
+}
