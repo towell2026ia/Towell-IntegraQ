@@ -225,13 +225,13 @@ using (public.is_internal_user() or (
 ));
 
 create or replace function public.fix03_bump_access_revision() returns trigger
-language plpgsql security definer set search_path='' as $
+language plpgsql security definer set search_path='' as $$
 begin
   update public.profiles set updated_at=clock_timestamp() where id=coalesce(new.user_id,old.user_id);
   if tg_op='DELETE' then return old; end if;
   return new;
 end;
-$;
+$$;
 revoke all on function public.fix03_bump_access_revision() from public,anon,authenticated;
 create trigger fix03_access_revision after insert or update or delete on public.user_permission_overrides for each row execute function public.fix03_bump_access_revision();
 create trigger fix03_process_revision after insert or update or delete on public.user_process_permissions for each row execute function public.fix03_bump_access_revision();
