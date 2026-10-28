@@ -53,6 +53,7 @@ export function resolvePortalCompany(
     ? {
         companyId: session.externalParty.companyId,
         companyName: session.externalParty.companyName,
+        demo: true,
         siteId: session.externalParty.siteId,
         siteName: session.externalParty.siteName,
       }

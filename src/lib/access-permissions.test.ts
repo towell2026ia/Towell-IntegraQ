@@ -43,6 +43,9 @@ describe("FIX-03 effective permissions and portal isolation",()=>{
     expect(resolvePortalCompany(external("customer"),"customer")?.companyId).toBe("company-a");
     expect(getCustomerPortalData("customer-001",demoCorrectiveActions)).toEqual({actions:[],audits:[],certifications:[]});
   });
+  it("retains DEMO isolation for companies absent from the example catalog",()=>{
+    expect(resolvePortalCompany({...external("customer"),workspaceMode:"demo"},"customer")?.demo).toBe(true);
+  });
   it("never opens live supplier APIs from a demo or revoked account",()=>{
     const supplier=external("supplier");
     expect(canUseSupplierApi(supplier)).toBe(true);
