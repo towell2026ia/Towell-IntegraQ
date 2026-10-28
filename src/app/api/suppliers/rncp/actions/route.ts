@@ -1,3 +1,4 @@
+import { canUseSupplierApi } from "@/lib/portal-security";
 import { NextResponse } from "next/server";
 
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -6,6 +7,7 @@ import { createClient } from "@/lib/supabase/server";
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.reportId !== "string") return NextResponse.json({ error: "Solicitud de acción no válida." }, { status: 400 });
   const supabase = await createClient();
@@ -26,6 +28,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.actionId !== "string") return NextResponse.json({ error: "Solicitud de revisión no válida." }, { status: 400 });
   const supabase = await createClient();

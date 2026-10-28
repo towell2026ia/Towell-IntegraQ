@@ -11,7 +11,7 @@ export function useSupplierAssessments(enabled = true) {
     if (!enabled) return [];
     setLoading(true); setError("");
     try { const result = await loadSupplierAssessments(); setAssessments(result.assessments); return result.assessments; }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible consultar evaluaciones."); return []; }
+    catch (cause) { setAssessments([]); setError(cause instanceof Error ? cause.message : "No fue posible consultar evaluaciones."); return []; }
     finally { setLoading(false); }
   }, [enabled]);
   useEffect(() => { if (!enabled) return; void Promise.resolve().then(refresh); const onFocus = () => void refresh(); window.addEventListener("focus", onFocus); return () => window.removeEventListener("focus", onFocus); }, [enabled, refresh]);

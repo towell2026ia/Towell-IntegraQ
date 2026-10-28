@@ -17,6 +17,8 @@ const customerSession: ActiveSession = {
   department: "Externo",
   company: "Cliente corporativo A",
   userType: "Cliente",
+  workspaceMode:"demo",
+  specificPermissions:{"portal_clientes.acceder":true},
   assignedProcessIds: [],
   externalParty: {
     kind: "customer",
@@ -30,6 +32,7 @@ describe("portal company isolation", () => {
     expect(resolvePortalCompany(customerSession, "customer")).toEqual({
       companyId: "customer-001",
       companyName: "Cliente corporativo A",
+      demo:true,
     });
     expect(resolvePortalCompany(customerSession, "supplier")).toBeNull();
   });
@@ -38,6 +41,7 @@ describe("portal company isolation", () => {
     const firstCustomer = getCustomerPortalData(
       "customer-001",
       demoCorrectiveActions,
+      true,
     );
     const secondCustomer = getCustomerPortalData(
       "customer-002",

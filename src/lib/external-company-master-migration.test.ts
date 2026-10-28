@@ -59,7 +59,7 @@ describe("external company master contract", () => {
     expect(migration).toContain("external_site_company_mismatch");
     expect(migration).toContain("and organization.active");
     expect(migration).toContain("where site.id = profile.external_site_id and site.active");
-    expect(companiesRoute).toContain('profile.data.external_site_id');
+    expect(companiesRoute).toContain('session.externalParty?.siteId');
     expect(companiesRoute).toContain('sitesQuery.eq("id", actor.externalSiteId)');
     expect(companiesRoute).toContain('in("kind", actor.readableKinds)');
   });

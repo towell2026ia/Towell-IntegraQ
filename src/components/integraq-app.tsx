@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { LoginScreen } from "@/components/auth/login-screen";
 import { IntegraQWorkspace } from "@/components/integraq-workspace";
@@ -24,6 +24,12 @@ function getLoginError(message: string) {
 
 export function IntegraQApp({ initialSession }: IntegraQAppProps) {
   const router = useRouter();
+  useEffect(() => {
+    if (!initialSession) return;
+    const refresh = () => router.refresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [initialSession, router]);
   const [error, setError] = useState<string | null>(null);
 
   const signIn = async (email: string, password: string) => {

@@ -1,4 +1,5 @@
 import "server-only";
+import { effectiveSpecificPermissions } from "@/lib/access-permissions";
 
 import { isWorkspaceModuleId } from "@/lib/navigation";
 import type {
@@ -66,11 +67,11 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
   if (claimsError || !claims?.sub) return null;
 
   const [
-    { data: profileData },
-    { data: processData },
-    { data: moduleData },
-    { data: moduleActionData },
-    { data: specificPermissionData },
+    { data: profileData, error: profileError },
+    { data: processData, error: processError },
+    { data: moduleData, error: moduleError },
+    { data: moduleActionData, error: actionError },
+    { data: specificPermissionData, error: permissionError },
   ] =
     await Promise.all([
       supabase
@@ -98,7 +99,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     ]);
 
   const profile = profileData as ProfileRow | null;
-  if (profile?.status === "inactive") return null;
+  if (profileError || processError || moduleError || actionError || permissionError || !profile || profile.status !== "active") return null;
   const userMetadata = (claims.user_metadata ?? {}) as Record<string, unknown>;
   const appMetadata = (claims.app_metadata ?? {}) as Record<string, unknown>;
   const fullName =
@@ -155,13 +156,13 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
     assignedProcessIds,
     assignedModuleIds,
     moduleActionPermissions,
-    specificPermissions,
+    specificPermissions: effectiveSpecificPermissions({ userType: userTypeLabels[rawUserType], assignedModuleIds, moduleActionPermissions, specificPermissions }),
     positionId: profile?.position_id || undefined,
     documentAccess,
     continuousImprovementRole:
       profile?.continuous_improvement_role || undefined,
     workspaceMode:
-      profile?.workspace_mode === "demo" || appMetadata.workspace_mode === "demo"
+      profile?.workspace_mode === "demo"
         ? "demo"
         : "production",
     externalParty:

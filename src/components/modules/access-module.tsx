@@ -1,4 +1,5 @@
 "use client";
+import { effectiveSpecificPermissions, specificPermissionModuleAction, synchronizeSpecificPermissions } from "@/lib/access-permissions";
 
 import {
   Building2,
@@ -235,6 +236,7 @@ export function AccessModule() {
 
       {editingAccount !== undefined ? (
         <UserAccountModal
+          key={editingAccount?.authUserId ?? "new"}
           account={editingAccount}
           companies={companyDirectory.companies}
           onCompaniesChange={companyDirectory.refresh}
@@ -388,7 +390,7 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
   );
 }
 
-function UserAccountModal({ account, companies, onCompaniesChange, positions, onClose, onSave }: { account: UserAccessAccount | null; companies: ExternalCompany[]; onCompaniesChange: () => Promise<ExternalCompany[]>; positions: OrganizationPosition[]; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
+export function UserAccountModal({ account, companies, onCompaniesChange, positions, onClose, onSave }: { account: UserAccessAccount | null; companies: ExternalCompany[]; onCompaniesChange: () => Promise<ExternalCompany[]>; positions: OrganizationPosition[]; onClose: () => void; onSave: (account: UserAccessAccount) => Promise<void> }) {
   const [fullName, setFullName] = useState(account?.fullName ?? "");
   const [email, setEmail] = useState(account?.email ?? "");
   const [userType, setUserType] = useState<UserType>(account?.userType ?? "Usuario interno");
@@ -399,7 +401,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
   const [companyCreatorError, setCompanyCreatorError] = useState("");
   const [documentAccess, setDocumentAccess] = useState<ProcessDocumentAccess[]>(account?.documentAccess ?? []);
   const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(account?.moduleActionPermissions ?? []);
-  const [specificPermissions, setSpecificPermissions] = useState<SpecificPermissionState>(account?.specificPermissions ?? {});
+  const [specificPermissions, setSpecificPermissions] = useState<SpecificPermissionState>(account ? effectiveSpecificPermissions(account) : {});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const internal = userType === "Administrador" || userType === "Usuario interno";
@@ -452,6 +454,8 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
   }
 
   function toggleModuleAction(permission: ModuleActionPermission) {
+    const currentlyEnabled = hasModuleAction(moduleActionPermissions, permission.moduleId, permission.action);
+    setSpecificPermissions((current) => synchronizeSpecificPermissions(current, permission, !currentlyEnabled));
     setModuleActionPermissions((current) => {
       const enabled = hasModuleAction(
         current,
@@ -472,11 +476,11 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
 
   function toggleSpecificPermission(permission: SpecificPermissionKey) {
     const enabling = !specificPermissions[permission];
-    setSpecificPermissions((current) => ({
-      ...current,
-      [permission]: !current[permission],
-    }));
     const modulePermission = specificPermissionModuleAction(permission);
+    setSpecificPermissions((current) => ({
+      ...(modulePermission ? synchronizeSpecificPermissions(current, modulePermission, enabling) : current),
+      [permission]: enabling,
+    }));
     if (!modulePermission) return;
     setModuleActionPermissions((current) => {
       if (enabling) return normalizeModulePermissions([...current, modulePermission]);
@@ -512,18 +516,21 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
       positionCatalog: positions,
       createdAt: account?.createdAt ?? new Date().toISOString(),
     });
-    if (!built) {
+    const prepared = built ?? (account && userType === account.userType ? { ...account, fullName: fullName.trim(), email: email.trim(), documentAccess, moduleActionPermissions: normalizeModulePermissions(moduleActionPermissions), assignedModuleIds: [...new Set(["home" as const, ...moduleActionPermissions.map((p) => p.moduleId)])], specificPermissions } : null);
+    if (!prepared) {
       setSaveError("Completa el puesto o la empresa vinculada.");
       return;
     }
+    if (account && !window.confirm("¿Guardar los cambios de acceso de este usuario? Se registrarán en auditoría.")) return;
     setSaving(true);
     try {
       await onSave(account ? {
-        ...built,
+        ...prepared,
+        accessRevision: account.accessRevision,
         id: account.id,
         authUserId: account.authUserId,
         status: account.status,
-      } : built);
+      } : prepared);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "No fue posible guardar el usuario.");
       setSaving(false);
@@ -537,9 +544,9 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
         <form onSubmit={submit}>
           <div className="user-account-form-grid">
             <label className="wide">Nombre completo<input required value={fullName} onChange={(event) => setFullName(event.target.value)} /></label>
-            <label className="wide">Correo de acceso<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+            <label className="wide">Correo de acceso<input required type="email" readOnly={Boolean(account)} value={email} onChange={(event) => setEmail(event.target.value)} /></label>
             <label>Tipo de usuario<select value={userType} onChange={(event) => changeUserType(event.target.value as UserType)}><option>Administrador</option><option>Usuario interno</option><option>Cliente</option><option>Proveedor</option></select></label>
-            {internal ? <label>Puesto del organigrama<select required value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
+            {internal ? <label>Puesto del organigrama<select required={!account} value={positionId} onChange={(event) => selectPosition(event.target.value)}><option value="">Seleccionar puesto</option>{positions.map((position) => <option key={position.id} value={position.id}>{position.id} · {position.name}</option>)}</select></label> : null}
             {!internal ? <label>Empresa vinculada<select required value={companyId} onChange={(event) => { setCompanyId(event.target.value); setSiteId(""); }}><option value="">Seleccionar empresa</option>{companyCatalog.map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label> : null}
             {!internal ? <label>Sucursal (opcional)<select disabled={!companyId || !siteCatalog.length} value={siteId} onChange={(event) => setSiteId(event.target.value)}><option value="">Toda la empresa</option>{siteCatalog.map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label> : null}
             {!internal ? <div className="wide external-company-create-toggle"><button className="button button-secondary" type="button" onClick={() => setShowCompanyCreator((current) => !current)}><Plus size={14} /> Crear empresa</button><small>Registra la empresa sin salir del alta de usuario.</small></div> : null}
@@ -703,21 +710,4 @@ function AccessMetric({ icon, label, value, tone }: { icon: React.ReactNode; lab
 
 function getInitials(name: string) {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toLocaleUpperCase("es-MX");
-}
-
-function specificPermissionModuleAction(permission: SpecificPermissionKey): ModuleActionPermission | null {
-  const [family, action] = permission.split(".");
-  const moduleId = family === "usuarios" ? "access"
-    : family === "clientes" ? "customers"
-      : family === "proveedores" ? "suppliers"
-        : family === "portal_clientes" ? "customer-portal"
-          : family === "portal_proveedores" ? "supplier-portal"
-            : null;
-  if (!moduleId) return null;
-  if ((family === "clientes" || family === "proveedores") && action === "ver") return null;
-  const moduleAction = action === "acceder" || action === "ver" ? "view"
-    : action === "crear" ? "create"
-      : action === "editar" || action === "desactivar" ? "update"
-        : "manage";
-  return { moduleId, action: moduleAction };
 }

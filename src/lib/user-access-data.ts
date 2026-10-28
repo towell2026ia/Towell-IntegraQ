@@ -24,6 +24,7 @@ export type UserAccountStatus = "active" | "inactive";
 export interface UserAccessAccount {
   id: string;
   authUserId?: string;
+  accessRevision?: string;
   fullName: string;
   email: string;
   userType: UserType;
@@ -82,6 +83,7 @@ export const relationshipDocumentRole: Record<
 
 export const internalAssignableModuleIds: WorkspaceModuleId[] = [
   "home",
+  "access",
   "home-settings",
   "documents",
   "risks",
@@ -262,6 +264,7 @@ export function buildSessionFromAccount(
     assignedProcessIds: account.assignedProcessIds,
     assignedModuleIds: account.assignedModuleIds,
     moduleActionPermissions: account.moduleActionPermissions,
+    specificPermissions: account.specificPermissions,
     documentAccess: account.documentAccess,
     continuousImprovementRole: account.continuousImprovementRole,
     externalParty:

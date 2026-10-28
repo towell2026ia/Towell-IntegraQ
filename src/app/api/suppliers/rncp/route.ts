@@ -1,3 +1,4 @@
+import { canUseSupplierApi } from "@/lib/portal-security";
 import { NextResponse } from "next/server";
 
 import type { RncpHistoryEvent, RncpReport, RncpResponseAction, RncpResponseStatus, RncpStatus } from "@/lib/rncp-data";
@@ -60,12 +61,15 @@ type EvidenceLinkRow = { action_id: string; file: EvidenceFileRow | EvidenceFile
 export async function GET() {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   const supabase = await createClient();
-  const result = await supabase
+  let query = supabase
     .from("supplier_rncp_reports")
     .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)")
     .order("report_date", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false });
+  if (session.userType === "Proveedor") { query = query.eq("supplier_id", session.externalParty!.companyId).eq("portal_visible", true).is("deleted_at", null); if (session.externalParty?.siteId) query = query.or(`site_id.is.null,site_id.eq.${session.externalParty.siteId}`); }
+  const result = await query;
   if (result.error) {
     console.error("No fue posible consultar RNCP.", result.error);
     return NextResponse.json({ error: "No fue posible consultar los RNCP." }, { status: 500 });
@@ -102,6 +106,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.action !== "string") return NextResponse.json({ error: "Solicitud RNCP no válida." }, { status: 400 });
   const supabase = await createClient();
@@ -118,6 +123,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.reportId !== "string" || typeof payload.deleted !== "boolean") {
     return NextResponse.json({ error: "Solicitud RNCP no válida." }, { status: 400 });

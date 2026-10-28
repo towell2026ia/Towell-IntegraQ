@@ -1,8 +1,10 @@
+import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+import { canAccessModule } from "@/lib/access-policy";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 import { NextResponse } from "next/server";
 
 import type { ExternalCompany, ExternalCompanySite } from "@/lib/external-company-data";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 
 export const maxDuration = 30;
 
@@ -36,30 +38,19 @@ type SiteRow = {
 };
 
 async function getActor(): Promise<Actor | null> {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getUser();
-  if (!data.user) return null;
-  const profile = await supabase.from("profiles").select("user_type,status,external_party_id,external_site_id").eq("id", data.user.id).maybeSingle();
-  if (!profile.data || profile.data.status !== "active") return null;
-  const userType = profile.data.user_type as Actor["userType"];
-  let readableKinds: Actor["readableKinds"] = [];
-  if (userType === "administrator") readableKinds = ["customer", "supplier"];
-  else if (userType === "customer" || userType === "supplier") readableKinds = [userType];
-  else {
-    const [customers, suppliers] = await Promise.all([
-      supabase.rpc("has_module_permission", { requested_module_id: "customers", requested_action: "view" }),
-      supabase.rpc("has_module_permission", { requested_module_id: "suppliers", requested_action: "view" }),
-    ]);
-    if (customers.data === true) readableKinds.push("customer");
-    if (suppliers.data === true) readableKinds.push("supplier");
+  const session = await getAuthenticatedSession();
+  if (!session?.authUserId || session.workspaceMode === "demo") return null;
+  const userType = session.userType === "Administrador" ? "administrator" : session.userType === "Usuario interno" ? "internal" : session.userType === "Cliente" ? "customer" : "supplier";
+  const readableKinds: Actor["readableKinds"] = [];
+  if (userType === "administrator") readableKinds.push("customer", "supplier");
+  else if (userType === "customer" || userType === "supplier") {
+    if (!canAccessModule(session, userType === "customer" ? "customer-portal" : "supplier-portal")) return null;
+    readableKinds.push(userType);
+  } else {
+    if (canPerformModuleAction(session, "access", "view") || canPerformModuleAction(session, "customers", "view")) readableKinds.push("customer");
+    if (canPerformModuleAction(session, "access", "view") || canPerformModuleAction(session, "suppliers", "view")) readableKinds.push("supplier");
   }
-  return {
-    id: data.user.id,
-    userType,
-    externalPartyId: profile.data.external_party_id,
-    externalSiteId: profile.data.external_site_id,
-    readableKinds,
-  };
+  return { id: session.authUserId, userType, externalPartyId: session.externalParty?.companyId ?? null, externalSiteId: session.externalParty?.siteId ?? null, readableKinds };
 }
 
 async function listCompanies(actor: Actor) {
@@ -115,7 +106,7 @@ export async function PATCH(request: Request) {
 async function mutate(request: Request, create: boolean) {
   try {
     const actor = await getActor();
-    if (!actor || actor.userType !== "administrator") {
+    if (!actor || !["administrator", "internal"].includes(actor.userType)) {
       return NextResponse.json({ error: "Sólo un administrador puede modificar empresas externas." }, { status: 403 });
     }
     const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
@@ -139,11 +130,13 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   const kind = payload.kind === "customer" || payload.kind === "supplier" ? payload.kind : null;
   if (!code || !name || !kind) return NextResponse.json({ error: "Código, nombre y tipo de empresa son obligatorios." }, { status: 400 });
   const admin = createAdminClient();
+  const session = await getAuthenticatedSession();
+  if (!session || !canPerformModuleAction(session, kind === "customer" ? "customers" : "suppliers", "manage")) return NextResponse.json({ error: "Sin permiso para administrar esta empresa." }, { status: 403 });
   const values = { code, name, kind, active: payload.active !== false };
   const saved = create
     ? await admin.from("organizations").insert(values).select("id,code,name,kind,active,created_at,updated_at").single()
     : isUuid(payload.id)
-      ? await admin.from("organizations").update(values).eq("id", payload.id).in("kind", ["customer", "supplier"]).select("id,code,name,kind,active,created_at,updated_at").single()
+      ? await admin.from("organizations").update(values).eq("id", payload.id).eq("kind", kind).select("id,code,name,kind,active,created_at,updated_at").single()
       : { data: null, error: new Error("INVALID_ID") };
   if (saved.error || !saved.data) return companyError(saved.error?.message);
   if (kind === "supplier") {
@@ -160,9 +153,11 @@ async function mutateSite(payload: Record<string, unknown>, actor: Actor, create
   const name = clean(payload.name);
   if (!isUuid(companyId) || !code || !name) return NextResponse.json({ error: "Empresa, código y nombre de sucursal son obligatorios." }, { status: 400 });
   const admin = createAdminClient();
-  const company = await admin.from("organizations").select("id").eq("id", companyId).in("kind", ["customer", "supplier"]).maybeSingle();
+  const company = await admin.from("organizations").select("id,kind").eq("id", companyId).in("kind", ["customer", "supplier"]).maybeSingle();
   if (company.error) throw company.error;
   if (!company.data) return NextResponse.json({ error: "Empresa no registrada. La empresa seleccionada todavía no está registrada en IntegraQ." }, { status: 400 });
+  const session = await getAuthenticatedSession();
+  if (!session || !canPerformModuleAction(session, company.data.kind === "customer" ? "customers" : "suppliers", "manage")) return NextResponse.json({ error: "Sin permiso para administrar esta empresa." }, { status: 403 });
   const values = { company_id: companyId, code, name, address: clean(payload.address) || null, active: payload.active !== false };
   const saved = create
     ? await admin.from("external_company_sites").insert(values).select("id,company_id,code,name,address,active,created_at,updated_at").single()

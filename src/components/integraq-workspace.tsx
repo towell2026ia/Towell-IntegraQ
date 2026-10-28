@@ -545,6 +545,7 @@ export function IntegraQWorkspace({
         </header>
 
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
+          {!canAccessModule(session, activeModule) ? <section className="access-empty"><h2>Acceso no disponible</h2><p>La cuenta no tiene autorización vigente para este módulo.</p></section> : <>
           {activeModule === "home" ? <HomeModule loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
@@ -566,6 +567,7 @@ export function IntegraQWorkspace({
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
           {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
           <ModuleDocumentsPanel moduleId={activeModule} session={session} />
+          </>}
         </main>
       </div>
 

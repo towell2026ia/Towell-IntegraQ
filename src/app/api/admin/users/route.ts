@@ -1,3 +1,4 @@
+import { effectiveSpecificPermissions } from "@/lib/access-permissions";
 import { NextResponse } from "next/server";
 
 import { processCatalog } from "@/lib/configuration-data";
@@ -56,6 +57,7 @@ type ProfileRow = {
   external_party_name: string | null;
   external_site_id: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 async function requireUserPermission(permission: SpecificPermissionKey) {
@@ -64,15 +66,16 @@ async function requireUserPermission(permission: SpecificPermissionKey) {
   if (!userData.user) return null;
   const { data: profile } = await supabase
     .from("profiles")
-    .select("user_type,status")
+    .select("user_type,status,workspace_mode")
     .eq("id", userData.user.id)
     .maybeSingle();
   if (profile?.status !== "active") return null;
-  if (profile.user_type === "administrator") return userData.user;
+  if (profile.user_type === "administrator") return { ...userData.user, workspaceMode: profile.workspace_mode ?? "production" };
+  if (profile.user_type !== "internal" || profile.workspace_mode === "demo") return null;
   const { data: allowed } = await supabase.rpc("has_permission", {
     requested_permission: permission,
   });
-  return allowed ? userData.user : null;
+  return allowed === true ? { ...userData.user, workspaceMode: profile.workspace_mode ?? "production" } : null;
 }
 
 export async function GET() {
@@ -103,7 +106,7 @@ async function listAccounts() {
     externalSitesResult,
     authUsersResult,
   ] = await Promise.all([
-    admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at").order("full_name"),
+    admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at,updated_at").eq("workspace_mode", actor.workspaceMode).order("full_name"),
     admin.from("positions").select("id,name,branch"),
     admin.from("user_process_permissions").select("user_id,process_id,document_role,inherited_from_position_id"),
     admin.from("user_module_permissions").select("user_id,module_id,can_view"),
@@ -147,7 +150,10 @@ async function listAccounts() {
           permission.inherited_from_position_id ?? "ASIGNACION-DIRECTA",
       }));
     const moduleActionPermissions = normalizeModulePermissions(
-      (moduleActionsResult.data ?? [])
+      [
+        ...(modulePermissionsResult.data ?? []).filter((p) => p.user_id === profile.id && p.can_view).map((p) => ({ user_id: p.user_id, module_id: p.module_id, action: "view" })),
+        ...(moduleActionsResult.data ?? []),
+      ]
         .filter((permission) => permission.user_id === profile.id)
         .flatMap((permission) =>
           isWorkspaceModuleId(permission.module_id)
@@ -167,17 +173,6 @@ async function listAccounts() {
           )
           .map((permission) => permission.module_id)
           .filter(isWorkspaceModuleId);
-    const specificPermissions = Object.fromEntries(
-      editableSpecificPermissionKeys.map((key) => [
-        key,
-        profile.user_type === "administrator"
-          ? true
-          : (permissionOverridesResult.data ?? []).find((row) => {
-              const relation = Array.isArray(row.permission) ? row.permission[0] : row.permission;
-              return row.user_id === profile.id && relation?.code === key;
-            })?.allowed ?? false,
-      ]),
-    );
 
     return {
       ...(() => {
@@ -204,7 +199,8 @@ async function listAccounts() {
       documentAccess,
       continuousImprovementRole:
         profile.continuous_improvement_role ?? undefined,
-      specificPermissions,
+      specificPermissions: effectiveSpecificPermissions({ userType: userTypeFromDatabase[profile.user_type], assignedModuleIds, moduleActionPermissions, specificPermissions: Object.fromEntries((permissionOverridesResult.data ?? []).filter((r) => r.user_id === profile.id).map((r) => { const rel = Array.isArray(r.permission) ? r.permission[0] : r.permission; return [rel?.code, r.allowed]; })) }),
+      accessRevision: profile.updated_at,
       createdAt: profile.created_at,
     } satisfies UserAccessAccount;
   });
@@ -248,7 +244,27 @@ async function saveAccount(request: Request, create: boolean) {
   if (!account.fullName?.trim() || !account.email?.trim()) {
     return NextResponse.json({ error: "Nombre y correo son obligatorios." }, { status: 400 });
   }
+  if (!create) return updateExistingAccess(account);
   const admin = createAdminClient();
+  const actorProfile = await admin.from("profiles").select("user_type,workspace_mode").eq("id", actor.id).single();
+  if (actorProfile.error || actorProfile.data?.workspace_mode === "demo" || (actorProfile.data?.user_type !== "administrator" && account.userType === "Administrador")) return NextResponse.json({ error: "Alta no autorizada." }, { status: 403 });
+  if (actorProfile.data?.user_type !== "administrator") {
+    const db = await createClient();
+    const requested = Object.entries(account.specificPermissions ?? {}).filter(([, allowed]) => allowed);
+    for (const [key] of requested) {
+      if (!editableSpecificPermissionKeys.includes(key as SpecificPermissionKey)) return NextResponse.json({ error: "Permiso no válido." }, { status: 400 });
+      const check = await db.rpc("has_permission", { requested_permission: key });
+      if (check.error || check.data !== true) return NextResponse.json({ error: "No puedes delegar permisos que no tienes." }, { status: 403 });
+    }
+    for (const action of account.moduleActionPermissions ?? []) {
+      const check = await db.rpc("has_module_permission", { requested_module_id: action.moduleId, requested_action: action.action });
+      if (check.error || check.data !== true) return NextResponse.json({ error: "No puedes delegar módulos fuera de tu alcance." }, { status: 403 });
+    }
+    for (const process of account.documentAccess ?? []) {
+      const check = await db.rpc("has_process_document_role", { requested_process_id: process.processId, required_role: process.role });
+      if (check.error || check.data !== true) return NextResponse.json({ error: "No puedes delegar procesos fuera de tu alcance." }, { status: 403 });
+    }
+  }
   const external = account.userType === "Cliente" || account.userType === "Proveedor";
   if (external && !isUuid(account.companyId)) {
     return NextResponse.json(
@@ -478,4 +494,16 @@ function isUuid(value: string | undefined) {
     value &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),
   );
+}
+
+async function updateExistingAccess(account: UserAccessAccount) {
+  if (!isUuid(account.authUserId) || !account.accessRevision || !Array.isArray(account.documentAccess) || !Array.isArray(account.moduleActionPermissions) || !Array.isArray(account.assignedModuleIds)) return NextResponse.json({ error: "Recarga los permisos actuales antes de guardar." }, { status: 400 });
+  const supabase = await createClient();
+  const result = await supabase.rpc("save_user_access", { requested_user_id: account.authUserId, expected_revision: account.accessRevision, requested_account: { ...account, specificPermissions: account.specificPermissions ?? {} } });
+  if (result.error) {
+    const stale = result.error.message.includes("ACCESS_STALE");
+    const missing = result.error.code === "PGRST202" || result.error.code === "42883";
+    return NextResponse.json({ error: stale ? "Los permisos cambiaron. Recarga el usuario antes de editar." : missing ? "El servicio de permisos no está disponible. No se guardaron cambios." : "No se guardaron los cambios de acceso. Revisa autorización y datos." }, { status: stale ? 409 : missing ? 503 : 403 });
+  }
+  return NextResponse.json({ ok: true, userId: account.authUserId, message: "Permisos actualizados y auditados. El correo de autenticación se conserva." });
 }

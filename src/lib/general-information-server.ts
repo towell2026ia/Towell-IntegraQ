@@ -1,4 +1,5 @@
 import "server-only";
+import { canAccessModule } from "@/lib/access-policy";
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -19,6 +20,7 @@ export interface GeneralInformationActor {
 export async function requireGeneralInformationActor(requireAdministrator = false) {
   const session = await getAuthenticatedSession();
   if (!session?.authUserId) throw new GeneralInformationApiError("Sesión requerida.", 401);
+  if (!canAccessModule(session, "documents") || session.workspaceMode === "demo") throw new GeneralInformationApiError("Sin permiso para Información General.", 403);
   const admin = createAdminClient();
   const profile = await admin.from("profiles")
     .select("organization_id,user_type,status")

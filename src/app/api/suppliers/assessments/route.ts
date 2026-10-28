@@ -1,3 +1,5 @@
+import { createClient } from "@/lib/supabase/server";
+import { canUseSupplierApi } from "@/lib/portal-security";
 import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
@@ -20,10 +22,11 @@ type FileRow = { id: string; original_name: string; mime_type: string | null; si
 export async function GET() {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-  const internalAccess = canPerformModuleAction(session, "suppliers", "view");
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
+  const internalAccess = session.userType !== "Proveedor" && canPerformModuleAction(session, "suppliers", "view");
   const supplierAccess = session.userType === "Proveedor" && session.externalParty?.kind === "supplier";
   if (!internalAccess && !supplierAccess) return NextResponse.json({ error: "No tienes permiso para consultar evaluaciones de proveedores." }, { status: 403 });
-  const admin = createAdminClient();
+  const admin = await createClient();
   let builder = admin.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").order("assessment_date", { ascending: false }).order("created_at", { ascending: false });
   if (supplierAccess) {
     builder = builder.eq("supplier_id", session.externalParty!.companyId).eq("portal_visible", true);
@@ -50,6 +53,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   if (!canPerformModuleAction(session, "suppliers", "update")) return NextResponse.json({ error: "No tienes permiso para registrar evaluaciones." }, { status: 403 });
   if (!session.authUserId) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const form = await request.formData().catch(() => null);

@@ -1,3 +1,4 @@
+import { canUseSupplierApi, canReadSupplierRecord } from "@/lib/portal-security";
 import { createHash } from "node:crypto";
 
 import { NextResponse } from "next/server";
@@ -16,6 +17,7 @@ const extensionMime: Record<string, string> = {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
+  if (!canUseSupplierApi(session)) return NextResponse.json({ error: "Acceso a proveedores no autorizado." }, { status: 403 });
   if (session.userType !== "Proveedor") return NextResponse.json({ error: "Sólo el proveedor puede adjuntar evidencias desde este portal." }, { status: 403 });
   const form = await request.formData().catch(() => null);
   const actionId = form?.get("actionId");
@@ -34,8 +36,8 @@ export async function POST(request: Request) {
   if (!policyResult.data.allowed_mime_types.includes(mimeType)) return NextResponse.json({ error: "Formato no permitido. Usa JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX." }, { status: 400 });
   if (file.size > policyResult.data.max_size_bytes) return NextResponse.json({ error: `El archivo supera el máximo de ${formatMegabytes(policyResult.data.max_size_bytes)} MB.` }, { status: 400 });
 
-  const reportResult = await supabase.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,status,deleted_at").eq("id", actionResult.data.report_id).maybeSingle();
-  if (reportResult.error || !reportResult.data || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
+  const reportResult = await supabase.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,status,deleted_at,portal_visible").eq("id", actionResult.data.report_id).maybeSingle();
+  if (reportResult.error || !reportResult.data || !canReadSupplierRecord(session, reportResult.data.supplier_id, reportResult.data.site_id) || !reportResult.data.portal_visible || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
     return NextResponse.json({ error: "La RNCP no admite nuevas evidencias." }, { status: 400 });
   }
   const userId = session.authUserId;
