@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { createClient } from "@/lib/supabase/client";
 
@@ -162,7 +162,7 @@ function RecoveryRequest() {
 }
 
 function PasswordUpdate() {
-  const supabase = useMemo(() => createClient(), []);
+  const clientRef = useRef<ReturnType<typeof createClient> | null>(null);
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -174,6 +174,18 @@ function PasswordUpdate() {
 
   useEffect(() => {
     let active = true;
+    let supabase: ReturnType<typeof createClient>;
+    try {
+      supabase = createClient();
+      clientRef.current = supabase;
+    } catch {
+      void Promise.resolve().then(() => {
+        if (!active) return;
+        setError("No fue posible conectar con el servicio de acceso. Contacta al administrador.");
+        setChecking(false);
+      });
+      return () => { active = false; };
+    }
     const hash = new URLSearchParams(window.location.hash.slice(1));
     const recoveryError = hash.get("error_description");
 
@@ -200,8 +212,9 @@ function PasswordUpdate() {
     return () => {
       active = false;
       listener.subscription.unsubscribe();
+      clientRef.current = null;
     };
-  }, [supabase]);
+  }, []);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -216,6 +229,11 @@ function PasswordUpdate() {
       return;
     }
 
+    const supabase = clientRef.current;
+    if (!supabase || !hasSession) {
+      setError("Este enlace no es válido o ya expiró.");
+      return;
+    }
     setSubmitting(true);
     const { error: updateError } = await supabase.auth.updateUser({ password });
 
