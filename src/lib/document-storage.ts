@@ -451,71 +451,83 @@ function firstRelation<T>(relation: T | T[] | null) {
 
 export async function loadStoredControlledDocuments(): Promise<ControlledDocument[]> {
   const supabase = createClient();
-  const { data, error } = await supabase
-    .from("controlled_documents")
-    .select(`
-      id,
-      process_id,
-      document_type_id,
-      code,
-      title,
-      description,
-      owner_id,
-      owner:profiles!controlled_documents_owner_id_fkey(full_name),
-      lifecycle:document_lifecycle(
-        lifecycle_status,
-        is_deleted,
-        deleted_at,
-        delete_reason,
-        obsoleted_at,
-        obsolete_reason,
-        replacement_document_id,
-        restored_at,
-        deleter:profiles!document_lifecycle_deleted_by_fkey(full_name),
-        obsoleter:profiles!document_lifecycle_obsoleted_by_fkey(full_name),
-        restorer:profiles!document_lifecycle_restored_by_fkey(full_name)
-      ),
-      activity:document_audit_log(
+  const rows: StoredDocumentRow[] = [];
+  let total: number | null = null;
+  do {
+    const { data, error, count } = await supabase
+      .from("controlled_documents")
+      .select(`
         id,
-        event_type,
-        performed_at,
-        reason,
-        document_version_id,
-        metadata,
-        performer:profiles!document_audit_log_performed_by_fkey(full_name)
-      ),
-      versions:controlled_document_versions(
-        id,
-        revision,
-        status,
-        file_name,
-        change_reason,
-        change_summary,
-        comments,
-        updated_at,
-        authorized_at,
-        rejection_reason,
-        uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
-        validator:profiles!controlled_document_versions_validator_id_fkey(full_name),
-        file:file_objects!controlled_document_versions_file_id_fkey(
+        process_id,
+        document_type_id,
+        code,
+        title,
+        description,
+        owner_id,
+        owner:profiles!controlled_documents_owner_id_fkey(full_name),
+        lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(
+          lifecycle_status,
+          is_deleted,
+          deleted_at,
+          delete_reason,
+          obsoleted_at,
+          obsolete_reason,
+          replacement_document_id,
+          restored_at,
+          deleter:profiles!document_lifecycle_deleted_by_fkey(full_name),
+          obsoleter:profiles!document_lifecycle_obsoleted_by_fkey(full_name),
+          restorer:profiles!document_lifecycle_restored_by_fkey(full_name)
+        ),
+        activity:document_audit_log!document_audit_log_document_id_fkey(
           id,
-          bucket_id,
-          object_path,
-          mime_type,
-          size_bytes,
-          sha256,
-          preview_path,
-          preview_status,
-          preview_generated_at,
-          preview_error
+          event_type,
+          performed_at,
+          reason,
+          document_version_id,
+          metadata,
+          performer:profiles!document_audit_log_performed_by_fkey(full_name)
+        ),
+        versions:controlled_document_versions!controlled_document_versions_document_id_fkey(
+          id,
+          revision,
+          status,
+          file_name,
+          change_reason,
+          change_summary,
+          comments,
+          updated_at,
+          authorized_at,
+          rejection_reason,
+          uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
+          validator:profiles!controlled_document_versions_validator_id_fkey(full_name),
+          file:file_objects!controlled_document_versions_file_id_fkey(
+            id,
+            bucket_id,
+            object_path,
+            mime_type,
+            size_bytes,
+            sha256,
+            preview_path,
+            preview_status,
+            preview_generated_at,
+            preview_error
+          )
         )
-      )
-    `);
-  if (error) throw new Error(errorMessage(error));
+      `, { count: "exact" })
+      .order("id", { ascending: true })
+      .range(rows.length, rows.length + 499);
+    if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code ?? "consulta"}): ${errorMessage(error)}`);
+    if (count === null || (total !== null && total !== count)) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
+    total = count;
+    const page = (data ?? []) as unknown as StoredDocumentRow[];
+    if (page.length === 0 && rows.length < total) throw new Error("La consulta devolvió un catálogo incompleto. Reintenta.");
+    rows.push(...page);
+    if (new Set(rows.map(row => row.id)).size !== rows.length) throw new Error("El catálogo cambió durante la paginación. Reintenta.");
+  } while (rows.length < total);
 
-  return ((data ?? []) as unknown as StoredDocumentRow[]).flatMap((row) => {
+  return rows.flatMap((row) => {
     const documentTypeId = clientDocumentTypeIds[row.document_type_id];
-    if (!documentTypeId) return [];
+    if (!documentTypeId) throw new Error(`Tipo documental no reconocido: ${row.document_type_id}. No se mostrará un catálogo incompleto.`);
     const defaultValidator = documentValidatorByProcess[row.process_id]?.name ?? "Jefatura del área";
     const lifecycle = relationRecord(row.lifecycle);
     return [{
