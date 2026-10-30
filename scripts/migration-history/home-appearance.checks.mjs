@@ -1,0 +1,54 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { PROJECT, VERSION, NAME, collectSnapshot, validateSnapshot, SNAPSHOT_SQL } from "./home-appearance.mjs";
+const expr = "((area <> 'homeAppearance'::text) OR is_administrator())";
+function baseline() {
+  return {
+    policies: ["delete","insert","update"].map(suffix => ({ schemaname: "public", tablename: "workspace_data", policyname: "workspace_data_home_appearance_" + suffix, permissive: "RESTRICTIVE", roles: ["authenticated"], cmd: suffix.toUpperCase(), qual: suffix === "insert" ? null : expr, with_check: suffix === "delete" ? null : expr })),
+    dependencies: ["delete","insert","update","update"].map(suffix => ({ policy: "workspace_data_home_appearance_" + suffix, schema: "public", function: "is_administrator" })),
+    history: [], otherHistoryFingerprint: "a".repeat(32),
+  };
+}
+test("preflight accepts only the expected absent version and policy definitions", () => { validateSnapshot(baseline(), "pre"); });
+test("already applied version aborts instead of replaying repair", () => { const row = baseline(); row.history = [{ version: VERSION, name: NAME }]; assert.throws(() => validateSnapshot(row,"pre")); });
+for (const [name, mutate] of [
+  ["permissive policy", row => row.policies[0].permissive = "PERMISSIVE"],
+  ["wrong role", row => row.policies[0].roles = ["public"]],
+  ["missing update check", row => row.policies[2].with_check = null],
+  ["broadened condition", row => row.policies[2].qual = "true"],
+  ["wrong function schema", row => row.dependencies[0].schema = "other"],
+  ["missing policy", row => row.policies.pop()],
+]) test(`rejects ${name}`, () => { const row = baseline(); mutate(row); assert.throws(() => validateSnapshot(row,"pre")); });
+test("postflight requires one matching history record with every policy intact", () => {
+  const before = baseline(); const after = structuredClone(before); after.history = [{ version: VERSION, name: NAME }]; validateSnapshot(after,"post",before);
+  after.history.push({ version: VERSION, name: NAME }); assert.throws(() => validateSnapshot(after,"post",before));
+});
+test("postflight detects changes to unrelated policies and migration history", () => {
+  const before = baseline(); const after = structuredClone(before); after.history = [{ version: VERSION, name: NAME }];
+  after.policies.push({ policyname: "unrelated" }); assert.throws(() => validateSnapshot(after,"post",before));
+  after.policies.pop(); after.otherHistoryFingerprint = "b".repeat(32); assert.throws(() => validateSnapshot(after,"post",before));
+});
+test("wrong project stops before any query", async () => {
+  let calls = 0;
+  await assert.rejects(collectSnapshot("TEST_ONLY", async () => { calls++; return { ok: true, json: async () => ({ id: "wrong", status: "ACTIVE_HEALTHY" }) }; }));
+  assert.equal(calls,1);
+});
+test("cloud verification submits only the constant read-only query to the fixed project", async () => {
+  const calls=[]; const row=baseline();
+  const result=await collectSnapshot("TEST_ONLY", async (url, options) => { calls.push({url,options}); return { ok: true, json: async () => calls.length === 1 ? { id: PROJECT, status: "ACTIVE_HEALTHY" } : [{ snapshot: row }] }; });
+  assert.deepEqual(result,row); assert.equal(calls[1].url,`https://api.supabase.com/v1/projects/${PROJECT}/database/query`);
+  assert.deepEqual(JSON.parse(calls[1].options.body), { query: SNAPSHOT_SQL, read_only: true });
+  assert.equal(calls[1].options.redirect,"error");
+});
+test("workflow is manual-only, gated, and has one fixed repair operation", () => {
+  const workflow=readFileSync(new URL("../../.github/workflows/reconcile-home-appearance-history.yml",import.meta.url),"utf8");
+  assert.match(workflow,/on:\s*\n  workflow_dispatch:/);
+  assert.doesNotMatch(workflow,/^\s+(push|pull_request|schedule|workflow_run):/m);
+  assert.match(workflow,/environment: supabase-history-repair/);
+  assert.match(workflow,/SUPABASE_REPAIR_APPROVED_VERSION/);
+  assert.match(workflow,/contents: read/);
+  assert.equal((workflow.match(/supabase migration repair/g)||[]).length,1);
+  assert.match(workflow,/supabase migration repair 202610290001 --status applied --linked --workdir approved-source/);
+  assert.doesNotMatch(workflow,/supabase (db (push|reset)|migration (up|down))|--status reverted|service_role/);
+});

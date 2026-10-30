@@ -1,0 +1,85 @@
+name: Reconcile homeAppearance migration history (manual only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type APPLY 202610290001 TO yptrqowmviixlkrxjrqr after specific authorization'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-history-yptrqowmviixlkrxjrqr-202610290001
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    if: github.repository == 'towell2026ia/Towell-IntegraQ' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-history-repair
+    env:
+      EXPECTED_PROJECT_REF: yptrqowmviixlkrxjrqr
+    steps:
+      - name: Check explicit confirmation and environment approval switch
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+          APPROVED_VERSION: ${{ vars.SUPABASE_REPAIR_APPROVED_VERSION }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = 'APPLY 202610290001 TO yptrqowmviixlkrxjrqr'
+          test "$APPROVED_VERSION" = '202610290001'
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check out only the approved migration source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: 959fe550327714185428b6c91884a10cbe91bf29
+          path: approved-source
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /supabase/config.toml
+            /supabase/migrations/202610290001_home_appearance_admin_scope.sql
+      - name: Validate immutable migration source
+        run: |
+          set -euo pipefail
+          test "$(git -C approved-source hash-object supabase/migrations/202610290001_home_appearance_admin_scope.sql)" = '50d2eed8d634efcb11b3effa88afaf9a88fa5c24'
+          node --test scripts/migration-history/home-appearance.checks.mjs
+      - name: Install pinned CLI in the cloud runner
+        uses: supabase/setup-cli@1dedf2c611547ede7232d26866dd3c56ab903bbb # v1
+        with:
+          version: 2.117.0
+      - name: Link runner exclusively to the approved project
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_REPAIR_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_REPAIR_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          supabase link --project-ref "$EXPECTED_PROJECT_REF" --workdir approved-source
+          test "$(cat approved-source/supabase/.temp/project-ref)" = "$EXPECTED_PROJECT_REF"
+      - name: Read-only preflight and baseline
+        id: preflight
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_REPAIR_ACCESS_TOKEN }}
+        run: node scripts/migration-history/home-appearance.mjs pre "$RUNNER_TEMP/home-appearance-before.json"
+      - name: Register exactly one already-applied migration
+        id: repair
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_REPAIR_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_REPAIR_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test "$(cat approved-source/supabase/.temp/project-ref)" = "$EXPECTED_PROJECT_REF"
+          supabase migration repair 202610290001 --status applied --linked --workdir approved-source
+      - name: Read-only postflight (also after a repair error)
+        if: always() && steps.preflight.outcome == 'success' && steps.repair.outcome != 'skipped'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_REPAIR_ACCESS_TOKEN }}
+        run: node scripts/migration-history/home-appearance.mjs post "$RUNNER_TEMP/home-appearance-before.json"
