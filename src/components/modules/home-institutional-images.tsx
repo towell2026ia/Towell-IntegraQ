@@ -18,7 +18,7 @@ export function HomeInstitutionalImages({ documents, session, onManage }: {
     </article>)}
   </section>;
 }
-function InstitutionalImage({ version, title }: { version: ControlledDocumentVersion; title: string }) {
+export function InstitutionalImage({ version, title }: { version: ControlledDocumentVersion; title: string }) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -41,7 +41,7 @@ function InstitutionalImage({ version, title }: { version: ControlledDocumentVer
     } catch (cause) { tab?.close(); setError(cause instanceof Error ? cause.message : "No fue posible abrir la imagen."); }
   }
   return <>
-    <small>Revisión {version.revision} · {version.status === "current" ? "Vigente" : "Pendiente de validación · vista administrativa"}</small>
+    <small>Revisión {version.revision} · {({ current: "Vigente", pending: "Pendiente de validación", draft: "Borrador", obsolete: "Obsoleta", rejected: "Rechazada" })[version.status]}</small>
     {error ? <div role="alert"><p>{error}</p><button type="button" onClick={() => { setError(""); setRetry(value => value + 1); }}>Reintentar</button></div> : url ? <button type="button" className={styles.image} onClick={() => void openFullSize()} aria-label={`Ver completa: ${title}`}>
       {/* The original is private and has a short-lived signed URL; do not proxy through Next Image. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}

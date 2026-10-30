@@ -32,6 +32,9 @@ import {
 } from "lucide-react";
 import { HomeInstitutionalImages } from "./home-institutional-images";
 import { HomeObjectiveCatalog } from "./home-objective-catalog";
+import { useHomeAppearance } from "@/lib/use-home-appearance";
+import { isExternalUser } from "@/lib/session-data";
+import type { CSSProperties } from "react";
 import type { LucideIcon } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -97,6 +100,7 @@ const moduleIcons: Partial<Record<WorkspaceModuleId, LucideIcon>> = {
 };
 
 export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleProps) {
+  const appearance = useHomeAppearance(!isExternalUser(sources.session));
   const [asOf] = useState(() => new Date());
   const [filters, setFilters] = useState<HomeDashboardFilters>(emptyHomeDashboardFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -183,7 +187,8 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
   if (loading) return <HomeDashboardSkeleton />;
 
   return (
-    <div className="home-dashboard">
+    <div className="home-dashboard" data-text-size={appearance.appearance.textSize} style={{ "--home-text-scale": appearance.appearance.textSize / 100 } as CSSProperties}>
+      {appearance.error ? <div role="alert">{appearance.error} <button type="button" onClick={appearance.refresh}>Reintentar</button></div> : null}
       <section className="home-command-header" aria-labelledby="home-greeting">
         <div className="home-command-identity">
           <span className="home-command-avatar" aria-hidden="true">{sources.session.initials}</span>
