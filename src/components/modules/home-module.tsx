@@ -30,6 +30,8 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { HomeInstitutionalImages } from "./home-institutional-images";
+import { HomeObjectiveCatalog } from "./home-objective-catalog";
 import type { LucideIcon } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -254,6 +256,10 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
+      {visibleSections.has("quality-policy") && sources.documentLoadError ? <p role="alert">{sources.documentLoadError} <button type="button" onClick={() => onNavigate("documents")}>Revisar carga documental</button></p> : null}
+      {visibleSections.has("quality-policy") && sources.documentsLoading ? <p role="status">Cargando imágenes del catálogo documental…</p> : null}
+      {visibleSections.has("quality-policy") && !sources.documentLoadError && !sources.documentsLoading ? <HomeInstitutionalImages documents={sources.documents} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
+
       {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
         <section className="home-dashboard-section home-institutional-section" aria-label="Información institucional">
           <SectionHeader eyebrow="Gobierno institucional" title="Información institucional" icon={BookOpenCheck} count={institutionalItems.length} />
@@ -262,22 +268,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      {visibleSections.has("quality-objectives") ? (
-        <section className="home-dashboard-section home-objectives-section">
-          <SectionHeader eyebrow="Dirección estratégica" title="Objetivos de Calidad" icon={Target} count={dashboard.qualityObjectives.length} />
-          <div className="home-objective-grid">
-            {dashboard.qualityObjectives.length ? dashboard.qualityObjectives.slice(0, 6).map((objective) => (
-              <button key={objective.id} type="button" onClick={() => onNavigate("indicators", objective.id)}>
-                <span>{objective.processName}</span>
-                <strong>{objective.name}</strong>
-                <small>Meta: {objective.target}</small>
-                <em>{objective.leader}</em>
-                <ChevronRight size={16} />
-              </button>
-            )) : <EmptyState icon={Target} text="No hay objetivos configurados para los procesos autorizados." />}
-          </div>
-        </section>
-      ) : null}
+      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog sources={{ ...sources, sectionConfigurations }} filters={filters} asOf={asOf} onOpenIndicator={(id) => onNavigate("indicators", id)} /> : null}
 
       {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
       <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>

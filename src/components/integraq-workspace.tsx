@@ -400,6 +400,8 @@ export function IntegraQWorkspace({
     () => ({
       session,
       documents: controlledDocuments,
+      documentLoadError: !demoMode && documentLoad?.session === session ? documentLoad.error : undefined,
+      documentsLoading: !demoMode && documentLoad?.session !== session,
       actions,
       assets,
       indicators: indicatorDefinitions,
@@ -409,7 +411,7 @@ export function IntegraQWorkspace({
       managementReview: currentManagementReview,
       risks: riskWorkspace,
     }),
-    [actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
+    [demoMode, documentLoad, actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
   );
   const managementReviewSources = useMemo(
     () => ({
@@ -552,7 +554,7 @@ export function IntegraQWorkspace({
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
-          {activeModule === "home-settings" ? <HomeSettingsModule /> : null}
+          {activeModule === "home-settings" ? <HomeSettingsModule documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
           {activeModule === "documents" && !demoMode && documentLoad?.session !== session ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
           {activeModule === "documents" && !demoMode && documentLoad?.session === session && documentLoad.error ? <section role="alert"><p>{documentLoad.error}</p><button type="button" onClick={() => { setDocumentLoad(null); setDocumentRetry(value => value + 1); }}>Reintentar</button></section> : null}
