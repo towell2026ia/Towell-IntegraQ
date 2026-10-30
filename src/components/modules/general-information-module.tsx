@@ -324,7 +324,7 @@ function UploadDialog({ currentFolderId, folders, mode, replace, onClose, onComp
 }
 
 function GeneralInformationPreview({ document, onClose }: { document: GeneralInformationDocument; onClose: () => void }) {
-  const sourceUrl = useCallback(async () => (await getGeneralInformationFileUrl(document.id, "preview")).signedUrl, [document.id]);
+  const sourceUrl = useCallback(async (target: "original" | "preview") => (await getGeneralInformationFileUrl(document.id, "preview", target)).signedUrl, [document.id]);
   const version = useMemo(() => ({
     id: document.id,
     revision: document.version,

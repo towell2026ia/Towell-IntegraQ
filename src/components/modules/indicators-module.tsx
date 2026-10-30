@@ -349,7 +349,7 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
   );
 }
 
-function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => Promise<void>; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
+export function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, session, year }: { indicator: ConfiguredIndicator; onBack: () => void; onResult: (record: IndicatorResultRecord) => Promise<void>; quarter: Quarter; record?: IndicatorResultRecord; session: ActiveSession; year: number }) {
   const [evidence, setEvidence] = useState<AttachmentRecord[]>([]);
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -415,13 +415,15 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
         {administrativeOutsideWindow ? <label><span>Motivo de modificación administrativa</span><textarea name="adminOverrideReason" placeholder="Ej. Corrección autorizada de captura T3." required rows={3} /></label> : null}
         <EvidenceManager
           moduleId="indicators"
+          referencedFileId={record?.evidenceFileId}
+          viewLabel="Ver evidencia"
           onChange={setEvidence}
           permissions={{ read: true, add: editable, replace: editable, delete: administrativeOverride, history: true }}
           processId={evidenceProcessId}
           resourceKey={`${indicator.id}:${year}:${quarter}`}
           resourceType="indicator_result"
         />
-        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>El registro anterior sólo conservaba el nombre; vuelve a adjuntar el binario una vez para habilitar Ver y Descargar.</small></span></div> : null}
+        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>No se pudo resolver el archivo con los permisos actuales. La referencia se conserva; no es necesario volver a cargar una evidencia existente.</small></span></div> : null}
         {record ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Último registro manual</strong><small>{record.submittedBy} · {formatTimestamp(record.submittedAt)}</small></span></div> : null}
         {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
         <footer><p>{saved ? <><CheckCircle2 size={15} /> Resultado guardado y confirmado</> : <><CircleAlert size={15} /> No se cargará información automáticamente.</>}</p><button className="button button-primary" disabled={!editable || saving} type="submit">{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Guardar resultado</button></footer>
