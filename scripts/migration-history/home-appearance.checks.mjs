@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PROJECT, VERSION, NAME, collectSnapshot, validateSnapshot, SNAPSHOT_SQL } from "./home-appearance.mjs";
+import { sessionPoolerUrl, repairOverIpv4 } from "./home-appearance-ipv4.mjs";
 const expr = "((area <> 'homeAppearance'::text) OR is_administrator())";
 function baseline() {
   return {
@@ -48,7 +52,55 @@ test("workflow is manual-only, gated, and has one fixed repair operation", () =>
   assert.match(workflow,/environment: supabase-history-repair/);
   assert.match(workflow,/SUPABASE_REPAIR_APPROVED_VERSION/);
   assert.match(workflow,/contents: read/);
-  assert.equal((workflow.match(/supabase migration repair/g)||[]).length,1);
-  assert.match(workflow,/supabase migration repair 202610290001 --status applied --linked --workdir approved-source/);
+  assert.match(workflow,/node scripts\/migration-history\/home-appearance-ipv4\.mjs/);
+  const ipv4=readFileSync(new URL("./home-appearance-ipv4.mjs",import.meta.url),"utf8");
+  assert.equal((ipv4.match(/"migration", "repair"/g)||[]).length,1);
+  assert.match(ipv4,/"--status", "applied", "--db-url"/);
+  assert.match(ipv4,/"--workdir", "approved-source"/);
   assert.doesNotMatch(workflow,/supabase (db (push|reset)|migration (up|down))|--status reverted|service_role/);
+});
+
+test("IPv4 pooler URL comes only from official primary shared pooler metadata", async () => {
+  const calls=[];
+  const url=await sessionPoolerUrl("TEST_TOKEN", "test:#? password", async (endpoint, options) => {
+    calls.push({endpoint,options});
+    return { ok:true, json:async()=>[{ database_type:"PRIMARY", db_host:"aws-0-us-east-1.pooler.supabase.com", db_user:"postgres", db_name:"postgres", pool_mode:"transaction" }] };
+  });
+  assert.equal(calls[0].endpoint,`https://api.supabase.com/v1/projects/${PROJECT}/config/database/pooler`);
+  assert.equal(calls[0].options.method,"GET");
+  const parsed=new URL(url);
+  assert.equal(parsed.hostname,"aws-0-us-east-1.pooler.supabase.com");
+  assert.equal(parsed.port,"5432");
+  assert.equal(parsed.username,`postgres.${PROJECT}`);
+  assert.equal(parsed.password,"test%3A%23%3F%20password");
+  assert.equal(parsed.searchParams.get("sslmode"),"require");
+});
+
+for (const [label, configs] of [
+  ["direct IPv6 host",[{database_type:"PRIMARY",db_host:`db.${PROJECT}.supabase.co`}]],
+  ["unknown pooler host",[{database_type:"PRIMARY",db_host:"other.example.com"}]],
+  ["nonprimary database",[{database_type:"READ_REPLICA",db_host:"aws-0-us-east-1.pooler.supabase.com"}]],
+  ["ambiguous pooler hosts",[{database_type:"PRIMARY",db_host:"aws-0-us-east-1.pooler.supabase.com"},{database_type:"PRIMARY",db_host:"aws-1-us-east-1.pooler.supabase.com"}]],
+]) test(`IPv4 discovery rejects ${label}`, async () => {
+  await assert.rejects(sessionPoolerUrl("TEST_TOKEN","TEST_PASSWORD",async()=>({ok:true,json:async()=>configs})));
+});
+
+test("repair wrapper invokes only the approved version over the IPv4 URL after a valid baseline", async () => {
+  const folder=await mkdtemp(join(tmpdir(),"integraq-ipv4-test-"));
+  try {
+    await writeFile(join(folder,"home-appearance-before.json"),JSON.stringify(baseline()));
+    let called=0;
+    await repairOverIpv4({EXPECTED_PROJECT_REF:PROJECT,RUNNER_TEMP:folder,SUPABASE_ACCESS_TOKEN:"TEST_TOKEN",SUPABASE_DB_PASSWORD:"TEST_PASSWORD"},
+      async()=>({ok:true,json:async()=>[{database_type:"PRIMARY",db_host:"aws-0-us-east-1.pooler.supabase.com"}]}),
+      (command,args,options)=>{
+        called++;
+        assert.equal(command,"supabase");
+        assert.deepEqual(args.slice(0,6),["migration","repair",VERSION,"--status","applied","--db-url"]);
+        assert.match(args[6],/pooler\.supabase\.com:5432\/postgres\?sslmode=require$/);
+        assert.deepEqual(args.slice(7),["--workdir","approved-source"]);
+        assert.equal(options.env.SUPABASE_DB_PASSWORD,"");
+        return {status:0};
+      });
+    assert.equal(called,1);
+  } finally { await unlink(join(folder,"home-appearance-before.json")); await rmdir(folder); }
 });
