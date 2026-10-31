@@ -60,6 +60,8 @@ export const emptyHomeDashboardFilters: HomeDashboardFilters = {
 };
 
 export interface HomeDashboardSources {
+  documentLoadError?: string | null;
+  documentsLoading?: boolean;
   session: ActiveSession;
   documents: ControlledDocument[];
   actions: CorrectiveAction[];
@@ -178,6 +180,12 @@ export interface HomeDashboardData {
     statement: string;
   };
   qualityObjectives: Array<{
+    active: boolean;
+    result?: number;
+    status: IndicatorStatus;
+    period: string;
+    objective: string;
+    indicatorName: string;
     id: string;
     name: string;
     processId: string;
@@ -743,6 +751,12 @@ export function buildHomeDashboard(
       statement: "Consulta la versión vigente de la Política de Calidad en Información documentada. Su publicación y visibilidad se administran desde la configuración de Inicio.",
     },
     qualityObjectives: indicators.map((indicator) => ({
+      active: indicator.active !== false,
+      result: getIndicatorRecord(sources.indicatorResults, indicator.id, year, currentQuarter)?.value,
+      status: evaluateConfiguredIndicator(indicator, getIndicatorRecord(sources.indicatorResults, indicator.id, year, currentQuarter)?.value, year, currentQuarter, now),
+      period: `${year} ${currentQuarter}`,
+      objective: indicator.qualityObjective.trim(),
+      indicatorName: indicator.name,
       id: indicator.id,
       name: indicator.qualityObjective || indicator.name,
       processId: indicator.processId,

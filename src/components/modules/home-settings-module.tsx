@@ -12,6 +12,10 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { HomeAppearanceSettings } from "./home-appearance-settings";
+import { HomeImageSettings } from "./home-image-settings";
+import type { ControlledDocument } from "@/lib/document-control-data";
+import type { ActiveSession } from "@/lib/session-data";
 
 import type {
   HomeSectionConfiguration,
@@ -51,7 +55,7 @@ const scopeOptions: Array<{
   { id: "specific-users", label: "Usuarios específicos", detail: "Visible solamente para las cuentas seleccionadas." },
 ];
 
-export function HomeSettingsModule() {
+export function HomeSettingsModule({ documents, session, onManageDocument, onChangeDocument }: { onChangeDocument: (document: ControlledDocument) => void; documents: ControlledDocument[]; session: ActiveSession; onManageDocument: (id: string) => void }) {
   const [configurations, setConfigurations] = useState<HomeSectionConfiguration[]>([]);
   const [processes, setProcesses] = useState<ProcessOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -224,6 +228,8 @@ export function HomeSettingsModule() {
           ) : null}
         </section>
       )}
+      {session.userType === "Administrador" ? <HomeAppearanceSettings /> : null}
+      <HomeImageSettings documents={documents} session={session} onChange={onChangeDocument} onManage={onManageDocument} />
       <InstitutionalSettings />
     </>
   );

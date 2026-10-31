@@ -181,7 +181,11 @@ describe("indicator master production preflight", () => {
     const workspace = readFileSync(join(process.cwd(), "src/components/integraq-workspace.tsx"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/components/modules/home-module.tsx"), "utf8");
     expect(workspace).toContain("const indicatorDefinitions = demoMode ? demoIndicatorDefinitions : indicatorRuntime.definitions");
-    expect(home).toContain("dashboard.qualityObjectives");
+    expect(home).toContain("<HomeObjectiveCatalog");
+    const catalog = readFileSync(join(process.cwd(), "src/components/modules/home-objective-catalog.tsx"), "utf8");
+    expect(catalog).toContain("/api/indicators/runtime?includeInactive=true");
+    expect(catalog).toContain("dashboard.qualityObjectives");
+    expect(catalog).not.toContain("localStorage");
     expect(workspace).not.toContain("objetivos-calidad.png");
     expect(home).not.toContain("objetivos-calidad.png");
   });

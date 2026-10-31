@@ -12,6 +12,7 @@ export type IndicatorStatus =
   | "pending";
 
 export interface IndicatorDefinition {
+  active?: boolean;
   id: string;
   sourceRow: number;
   processId: string;
