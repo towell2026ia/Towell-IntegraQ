@@ -98,7 +98,7 @@ import {
   workspaceModuleMeta,
   type WorkspaceModuleId,
 } from "@/lib/navigation";
-import { isDemoSession, isExternalUser, type ActiveSession } from "@/lib/session-data";
+import { isAdministrator, isDemoSession, isExternalUser, type ActiveSession } from "@/lib/session-data";
 import {
   loadRiskWorkspace,
   saveRiskWorkspace,
@@ -158,6 +158,7 @@ const navigationGroups = [
       { id: "organization" as const, icon: Building2 },
       { id: "access" as const, icon: UserCog },
       { id: "home-settings" as const, icon: Settings2 },
+      { id: "indicators" as const, icon: Settings2, captureSettings: true },
       { id: "forms" as const, icon: Settings2 },
     ],
   },
@@ -484,7 +485,7 @@ export function IntegraQWorkspace({
           {navigationGroups.map((group) => {
             const visibleItems = group.items.filter(
               (item) =>
-                canAccessModule(session, item.id) &&
+                canAccessModule(session, item.id) && (!("captureSettings" in item) || isAdministrator(session)) &&
                 workspaceModuleMeta[item.id].label
                   .toLocaleLowerCase("es")
                   .includes(normalizedNavigationQuery),
@@ -498,9 +499,9 @@ export function IntegraQWorkspace({
                   const meta = workspaceModuleMeta[item.id];
                   const isActive = item.id === activeModule;
                   return (
-                    <button key={item.id} type="button" className={`nav-item ${isActive ? "nav-item-active" : ""}`} onClick={() => changeModule(item.id)}>
+                    <button key={item.id} type="button" className={`nav-item ${isActive ? "nav-item-active" : ""}`} onClick={() => changeModule(item.id, "captureSettings" in item ? "capture-settings" : undefined)}>
                       <Icon size={17} strokeWidth={1.8} />
-                      <span>{meta.label}</span>
+                      <span>{"captureSettings" in item ? "Indicadores · Fechas de captura" : meta.label}</span>
                       {meta.status !== "Disponible" ? <span className={`nav-status nav-status-${meta.status.toLocaleLowerCase("es")}`} title={meta.status} /> : null}
                     </button>
                   );
