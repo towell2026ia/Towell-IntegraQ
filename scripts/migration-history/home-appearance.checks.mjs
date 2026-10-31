@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROJECT, VERSION, NAME, collectSnapshot, validateSnapshot, SNAPSHOT_SQL } from "./home-appearance.mjs";
-import { sessionPoolerUrl, repairOverIpv4 } from "./home-appearance-ipv4.mjs";
+import { sessionPoolerUrl, repairOverIpv4, diagnosticLine, classifyCliFailure, RepairDiagnosticError } from "./home-appearance-ipv4.mjs";
 const expr = "((area <> 'homeAppearance'::text) OR is_administrator())";
 function baseline() {
   return {
@@ -102,5 +102,56 @@ test("repair wrapper invokes only the approved version over the IPv4 URL after a
         return {status:0};
       });
     assert.equal(called,1);
+  } finally { await unlink(join(folder,"home-appearance-before.json")); await rmdir(folder); }
+});
+
+test("pooler discovery reports only stage and HTTP status", async () => {
+  const injected="SECRET_TOKEN_AND_URL";
+  await assert.rejects(sessionPoolerUrl(injected,"SECRET_PASSWORD",async()=>({ok:false,status:403})),error=>{
+    assert.equal(diagnosticLine(error),"FAIL: stage=pooler_discovery; code=HTTP_ERROR; http_status=403");
+    assert(!diagnosticLine(error).includes(injected));
+    return true;
+  });
+  await assert.rejects(sessionPoolerUrl(injected,"SECRET_PASSWORD",async()=>{throw new Error(injected);}),error=>{
+    assert.equal(diagnosticLine(error),"FAIL: stage=pooler_discovery; code=REQUEST_FAILED");
+    return true;
+  });
+});
+
+test("connection validation distinguishes missing and ambiguous poolers without printing hosts", async () => {
+  for (const [configs,code] of [
+    [[{database_type:"PRIMARY",db_host:"db.project.supabase.co"}],"NO_PRIMARY_SHARED_POOLER"],
+    [[{database_type:"PRIMARY",db_host:"aws-0-us-east-1.pooler.supabase.com"},{database_type:"PRIMARY",db_host:"aws-1-us-east-1.pooler.supabase.com"}],"AMBIGUOUS_POOLER"],
+  ]) await assert.rejects(sessionPoolerUrl("TOKEN","PASSWORD",async()=>({ok:true,json:async()=>configs})),error=>{
+    assert.equal(diagnosticLine(error),`FAIL: stage=connection_validation; code=${code}`);
+    assert(!diagnosticLine(error).includes("pooler.supabase.com"));
+    return true;
+  });
+});
+
+test("CLI failure classifier emits only established categories", () => {
+  assert.equal(classifyCliFailure("password authentication failed for user postgres"),"AUTHENTICATION_FAILED");
+  assert.equal(classifyCliFailure("IPv6 is not supported on your current network"),"IPV6_UNSUPPORTED");
+  assert.equal(classifyCliFailure("unrecognized private detail"),"EXIT_NONZERO_UNCLASSIFIED");
+  assert.equal(diagnosticLine(new Error("SECRET_URL")),"FAIL: stage=unknown; code=UNCLASSIFIED");
+  assert.equal(diagnosticLine(new RepairDiagnosticError("repair_result","EXIT_NONZERO_UNCLASSIFIED",{exitCode:1})),"FAIL: stage=repair_result; code=EXIT_NONZERO_UNCLASSIFIED; cli_exit=1");
+});
+
+test("CLI invocation and repair result report sanitized stage and exit code", async () => {
+  const folder=await mkdtemp(join(tmpdir(),"integraq-ipv4-diagnostic-"));
+  try {
+    await writeFile(join(folder,"home-appearance-before.json"),JSON.stringify(baseline()));
+    const env={EXPECTED_PROJECT_REF:PROJECT,RUNNER_TEMP:folder,SUPABASE_ACCESS_TOKEN:"SECRET_TOKEN",SUPABASE_DB_PASSWORD:"SECRET_PASSWORD"};
+    const fetcher=async()=>({ok:true,json:async()=>[{database_type:"PRIMARY",db_host:"aws-0-us-east-1.pooler.supabase.com"}]});
+    await assert.rejects(repairOverIpv4(env,fetcher,()=>({error:{code:"ENOENT"}})),error=>{
+      assert.equal(diagnosticLine(error),"FAIL: stage=cli_invocation; code=ENOENT");
+      return true;
+    });
+    await assert.rejects(repairOverIpv4(env,fetcher,()=>({status:1,stderr:"password authentication failed; SECRET_PASSWORD postgresql://SECRET_URL"})),error=>{
+      const line=diagnosticLine(error);
+      assert.equal(line,"FAIL: stage=repair_result; code=AUTHENTICATION_FAILED; cli_exit=1");
+      assert(!line.includes("SECRET_PASSWORD") && !line.includes("SECRET_URL"));
+      return true;
+    });
   } finally { await unlink(join(folder,"home-appearance-before.json")); await rmdir(folder); }
 });
