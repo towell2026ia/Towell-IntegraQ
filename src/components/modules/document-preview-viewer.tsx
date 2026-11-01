@@ -20,6 +20,8 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { getControlledDocumentDownloadUrl } from "@/lib/document-storage";
+import { describeSpreadsheet, getSpreadsheetPage, isSpreadsheetFileName, SPREADSHEET_PAGE_COLUMNS, SPREADSHEET_PAGE_ROWS, type SpreadsheetSheet } from "@/lib/spreadsheet-preview";
+import type * as XLSXType from "xlsx";
 
 export interface DocumentPreviewViewerHandle {
   downloadImage: () => Promise<void>;
@@ -34,7 +36,6 @@ interface DocumentPreviewViewerProps {
 }
 
 type PreviewKind = "pdf" | "document" | "spreadsheet" | "image";
-type SpreadsheetData = Record<string, Array<Array<string | number | boolean | null>>>;
 
 const spreadsheetExtensions = new Set(["xlsx", "xls", "xlsm", "xlsb"]);
 const imageExtensions = new Set(["png", "jpg", "jpeg", "webp"]);
@@ -66,9 +67,11 @@ export const DocumentPreviewViewer = forwardRef<
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [documentHtml, setDocumentHtml] = useState("");
-  const [spreadsheetData, setSpreadsheetData] = useState<SpreadsheetData>({});
-  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [sheets, setSheets] = useState<SpreadsheetSheet[]>([]);
+  const [spreadsheetUtils, setSpreadsheetUtils] = useState<typeof XLSXType.utils | null>(null);
   const [activeSheet, setActiveSheet] = useState("");
+  const [sheetRowStart, setSheetRowStart] = useState(0);
+  const [sheetColumnStart, setSheetColumnStart] = useState(0);
   const [imageUrl, setImageUrl] = useState("");
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
@@ -87,7 +90,8 @@ export const DocumentPreviewViewer = forwardRef<
     setError("");
 
     void (async () => {
-      const normalizedPreview = version.previewStatus === "ready" && Boolean(version.previewPath);
+      const spreadsheetOriginal = isSpreadsheetFileName(version.fileName);
+      const normalizedPreview = !spreadsheetOriginal && version.previewStatus === "ready" && Boolean(version.previewPath);
       const signedUrl = sourceUrl
         ? await sourceUrl()
         : await getControlledDocumentDownloadUrl(version, normalizedPreview ? "preview" : "original");
@@ -118,20 +122,13 @@ export const DocumentPreviewViewer = forwardRef<
         setKind("document");
       } else if (spreadsheetExtensions.has(extension)) {
         const XLSX = await import("xlsx");
-        const workbook = XLSX.read(bytes, { type: "array", cellDates: true });
-        const data = Object.fromEntries(
-          workbook.SheetNames.map((sheetName) => [
-            sheetName,
-            XLSX.utils.sheet_to_json<Array<string | number | boolean | null>>(
-              workbook.Sheets[sheetName],
-              { header: 1, raw: false, defval: null },
-            ),
-          ]),
-        );
+        const workbook = XLSX.read(bytes, { type: "array", cellDates: true, cellStyles: true });
         if (!active) return;
-        setSpreadsheetData(data);
-        setSheetNames(workbook.SheetNames);
+        setSheets(describeSpreadsheet(workbook, XLSX.utils));
+        setSpreadsheetUtils(XLSX.utils);
         setActiveSheet(workbook.SheetNames[0] ?? "");
+        setSheetRowStart(0);
+        setSheetColumnStart(0);
         setKind("spreadsheet");
       } else if (imageExtensions.has(extension)) {
         localImageUrl = URL.createObjectURL(new Blob([bytes], {
@@ -202,6 +199,7 @@ export const DocumentPreviewViewer = forwardRef<
 
   useImperativeHandle(ref, () => ({
     downloadImage: async () => {
+      if (kind === "spreadsheet") throw new Error("La hoja de cálculo se descarga en su formato original.");
       const canvas = await capturePreview();
       const blob = await new Promise<Blob>((resolve, reject) => {
         canvas.toBlob((result) => result ? resolve(result) : reject(new Error("No fue posible crear la imagen.")), "image/png");
@@ -209,6 +207,7 @@ export const DocumentPreviewViewer = forwardRef<
       triggerDownload(blob, `${safeExportName(code)}-Rev${version.revision}.png`);
     },
     downloadPdf: async () => {
+      if (kind === "spreadsheet") throw new Error("La hoja de cálculo se descarga en su formato original.");
       if (kind === "pdf" && sourceBytesRef.current) {
         triggerDownload(
           new Blob([sourceBytesRef.current], { type: "application/pdf" }),
@@ -239,12 +238,8 @@ export const DocumentPreviewViewer = forwardRef<
     },
   }), [code, kind, version.revision]);
 
-  const activeRows = spreadsheetData[activeSheet] ?? [];
-  const visibleRows = activeRows.slice(0, 250);
-  const visibleColumnCount = Math.min(
-    60,
-    visibleRows.reduce((maximum, row) => Math.max(maximum, row.length), 0),
-  );
+  const selectedSheet = sheets.find(sheet => sheet.name === activeSheet);
+  const sheetPage = selectedSheet && spreadsheetUtils ? getSpreadsheetPage(selectedSheet, spreadsheetUtils, sheetRowStart, sheetColumnStart) : null;
 
   return (
     <section className="secure-document-viewer" aria-busy={loading}>
@@ -268,30 +263,39 @@ export const DocumentPreviewViewer = forwardRef<
               <button type="button" onClick={() => setPdfZoom(.85)}><Maximize2 size={15} /> Ajustar página</button>
             </nav>
           ) : null}
-          {version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" ? "Preview PDF normalizado" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{version.previewStatus === "ready" ? "La orientación y paginación provienen del motor documental." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
-          {kind === "spreadsheet" && sheetNames.length > 1 ? (
+          {kind !== "spreadsheet" && version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" ? "Preview PDF normalizado" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{version.previewStatus === "ready" ? "La orientación y paginación provienen del motor documental." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
+          {kind === "spreadsheet" ? (
             <nav className="secure-preview-navigation secure-sheet-tabs" aria-label="Hojas del libro">
-              {sheetNames.map((sheetName) => <button className={activeSheet === sheetName ? "active" : ""} key={sheetName} type="button" onClick={() => setActiveSheet(sheetName)}>{sheetName}</button>)}
+              {sheets.map(sheet => <button className={activeSheet === sheet.name ? "active" : ""} key={sheet.name} type="button" onClick={() => { setActiveSheet(sheet.name); setSheetRowStart(0); setSheetColumnStart(0); }}>{sheet.name}</button>)}
             </nav>
           ) : null}
+          {kind === "spreadsheet" && selectedSheet ? <nav className="secure-preview-navigation" aria-label="Navegación de la hoja">
+            <button type="button" disabled={sheetRowStart === 0} onClick={() => setSheetRowStart(value => Math.max(0, value - SPREADSHEET_PAGE_ROWS))}>Filas anteriores</button>
+            <span>Filas {selectedSheet.rowCount ? sheetRowStart + 1 : 0}–{Math.min(selectedSheet.rowCount, sheetRowStart + SPREADSHEET_PAGE_ROWS)} de {selectedSheet.rowCount}</span>
+            <button type="button" disabled={sheetRowStart + SPREADSHEET_PAGE_ROWS >= selectedSheet.rowCount} onClick={() => setSheetRowStart(value => value + SPREADSHEET_PAGE_ROWS)}>Filas siguientes</button>
+            <button type="button" disabled={sheetColumnStart === 0} onClick={() => setSheetColumnStart(value => Math.max(0, value - SPREADSHEET_PAGE_COLUMNS))}>Columnas anteriores</button>
+            <span>Columnas {sheetColumnStart + 1}–{Math.min(selectedSheet.columnCount, sheetColumnStart + SPREADSHEET_PAGE_COLUMNS)} de {selectedSheet.columnCount}</span>
+            <button type="button" disabled={sheetColumnStart + SPREADSHEET_PAGE_COLUMNS >= selectedSheet.columnCount} onClick={() => setSheetColumnStart(value => value + SPREADSHEET_PAGE_COLUMNS)}>Columnas siguientes</button>
+          </nav> : null}
           <div className={`secure-preview-viewport secure-preview-${kind}`}>
             <div className="secure-preview-surface" ref={previewSurfaceRef}>
               {kind === "pdf" ? <canvas aria-label={`Página ${pdfPage}`} className={pdfRendering ? "rendering" : ""} ref={pdfCanvasRef} /> : null}
               {kind === "document" ? <article className="secure-docx-content" dangerouslySetInnerHTML={{ __html: documentHtml }} /> : null}
-              {kind === "spreadsheet" ? (
+              {kind === "spreadsheet" && sheetPage ? (
                 <div className="secure-sheet-content">
                   <table>
+                    <colgroup><col className="secure-sheet-row-column" />{sheetPage.columnWidths.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+                    <thead><tr><th aria-label="Fila y columna" scope="col" />{sheetPage.columnLabels.map(label => <th key={label} scope="col">{label}</th>)}</tr></thead>
                     <tbody>
-                      {visibleRows.map((row, rowIndex) => (
-                        <tr key={rowIndex}>
-                          {Array.from({ length: visibleColumnCount }, (_, columnIndex) => (
-                            <td key={columnIndex}>{row[columnIndex] == null ? "" : String(row[columnIndex])}</td>
-                          ))}
+                      {sheetPage.rows.map((row, rowIndex) => (
+                        <tr key={sheetPage.rowNumbers[rowIndex]}>
+                          <th scope="row">{sheetPage.rowNumbers[rowIndex]}</th>
+                          {row.map((cell, columnIndex) => cell ? <td key={columnIndex} colSpan={cell.colSpan} rowSpan={cell.rowSpan} className={`secure-sheet-align-${cell.align}`}>{cell.text}</td> : null)}
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  {activeRows.length > visibleRows.length ? <p>Vista rápida limitada a 250 filas. La exportación conserva esta vista.</p> : null}
+                  <p>Vista de solo lectura. Se conservan las pestañas, celdas combinadas y formatos numéricos compatibles; descarga el original para funciones avanzadas de Excel.</p>
                 </div>
               ) : null}
               {/* La fuente es un blob privado generado en memoria; next/image no puede optimizarlo. */}

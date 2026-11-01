@@ -2,22 +2,25 @@ import { NextResponse } from "next/server";
 import { HOME_APPEARANCE_AREA, isHomeTextSize, readHomeTextSize } from "@/lib/home-appearance";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 
 async function resolveActor() {
   const session = await getAuthenticatedSession();
   if (!session?.authUserId) return { response: NextResponse.json({ error: "Sesión requerida." }, { status: 401 }) };
-  if (isExternalUser(session)) return { response: NextResponse.json({ error: "Acceso no autorizado." }, { status: 403 }) };
   const supabase = await createClient();
   const profile = await supabase.from("profiles").select("organization_id,workspace_mode,status,user_type").eq("id", session.authUserId).maybeSingle();
   if (profile.error || !profile.data || profile.data.status !== "active" || !profile.data.organization_id || !["production", "demo"].includes(profile.data.workspace_mode)) {
     return { response: NextResponse.json({ error: "No se pudo verificar el espacio autorizado." }, { status: 403 }) };
   }
   return { supabase, userId: session.authUserId, workspaceId: profile.data.organization_id, workspaceMode: profile.data.workspace_mode,
-    administrator: isAdministrator(session) && profile.data.user_type === "administrator" };
+    external: isExternalUser(session), administrator: isAdministrator(session) && profile.data.user_type === "administrator" };
 }
 async function readRow(actor: Awaited<ReturnType<typeof resolveActor>>) {
-  return actor.supabase!.from("workspace_data").select("id,payload,revision")
+  // La política de lectura de workspace_data sólo cubre usuarios internos.
+  // La lectura externa se limita a la clave de apariencia de su organización y modo autenticados.
+  const reader = actor.external ? createAdminClient() : actor.supabase!;
+  return reader.from("workspace_data").select("id,payload,revision")
     .eq("workspace_id", actor.workspaceId).eq("workspace_mode", actor.workspaceMode)
     .eq("area", HOME_APPEARANCE_AREA).is("deleted_at", null).maybeSingle();
 }
@@ -32,7 +35,7 @@ export async function GET() {
 export async function PATCH(request: Request) {
   try {
     const actor = await resolveActor(); if (actor.response) return actor.response;
-    if (!actor.administrator) return NextResponse.json({ error: "Sólo el administrador puede cambiar la apariencia." }, { status: 403 });
+    if (actor.external || !actor.administrator) return NextResponse.json({ error: "Sólo el administrador puede cambiar la apariencia." }, { status: 403 });
     const body = await request.json().catch(() => null);
     if (!body || !isHomeTextSize(body.textSize) || !Number.isInteger(body.revision) || body.revision < 0) return NextResponse.json({ error: "Tamaño o revisión no válidos." }, { status: 400 });
     const existing = await readRow(actor);

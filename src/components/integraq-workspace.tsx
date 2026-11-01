@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import { AccessModule } from "@/components/modules/access-module";
 import { ActivityLogModule } from "@/components/modules/activity-log-module";
@@ -49,6 +49,7 @@ import { RisksOpportunitiesModule } from "@/components/modules/risks-opportuniti
 import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal-module";
 import { SuppliersModule } from "@/components/modules/suppliers-module";
 import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
+import { useHomeAppearance } from "@/lib/use-home-appearance";
 import {
   demoCorrectiveActions,
   demoMeasurementAssets,
@@ -178,6 +179,7 @@ export function IntegraQWorkspace({
   session: ActiveSession;
 }) {
   const demoMode = isDemoSession(session);
+  const { appearance, error: appearanceError, refresh: refreshAppearance } = useHomeAppearance();
   const [activeModule, setActiveModule] = useState<WorkspaceModuleId>(() =>
     getDefaultModuleForSession(session),
   );
@@ -460,7 +462,8 @@ export function IntegraQWorkspace({
   const externalSession = isExternalUser(session);
 
   return (
-    <div className="app-frame">
+    <div className="app-frame" data-text-size={appearance.textSize} style={{ "--app-text-scale": appearance.textSize / 100, "--home-text-scale": appearance.textSize / 100 } as CSSProperties}>
+      {appearanceError ? <div className="app-appearance-error" role="alert">No se pudo consultar el tamaño de texto. <button type="button" onClick={refreshAppearance}>Reintentar</button></div> : null}
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-mark" aria-hidden="true">
