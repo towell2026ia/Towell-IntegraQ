@@ -9,6 +9,7 @@ import {
   Code2,
   Database,
   Download,
+  Eye,
   FileInput,
   Files,
   FileText,
@@ -25,7 +26,7 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { EvidenceManager } from "@/components/evidence/evidence-manager";
-import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { DocumentHistoryModal, DocumentPreviewModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
 import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
@@ -46,6 +47,7 @@ import {
   getDocumentProcessIds,
   getAuthorizedDocumentProcessIds,
   getPrimaryDocumentProcessId,
+  getVisibleProcessDocuments,
   isGroupedDocumentProcess,
 } from "@/lib/document-data";
 import {
@@ -291,6 +293,7 @@ export function DocumentsModule({
                 (document) => selectedDocumentProcessIds.includes(document.processId),
               )}
               permissions={selectedPermissions}
+              session={session}
               source={selectedPermissions.view ? organizationSources.find((source) => source.processId === selected.id) : undefined}
               onOrganizationSaved={loadOrganizationSources}
               onOpenType={openDocumentType}
@@ -361,6 +364,7 @@ function ProcessDocumentHome({
   process,
   documents,
   permissions,
+  session,
   source,
   onOrganizationSaved,
   onOpenType,
@@ -368,10 +372,14 @@ function ProcessDocumentHome({
   process: ProcessCatalogItem;
   documents: ControlledDocument[];
   permissions: ReturnType<typeof getDocumentPermissions>;
+  session: ActiveSession;
   source?: ProcessOrganizationSource;
   onOrganizationSaved: () => Promise<void> | void;
   onOpenType: (documentTypeId: string) => void;
 }) {
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const processDocuments = getVisibleProcessDocuments(documents, process.id, id => getDocumentPermissions(session, id).view);
+  const preview = processDocuments.find(document => document.id === previewId);
   return (
     <>
       <header className="documents-detail-header">
@@ -385,6 +393,17 @@ function ProcessDocumentHome({
       </header>
 
       {permissions.view ? <ProcessOrganizationChart process={process} permissions={permissions} source={source} onSaved={onOrganizationSaved} /> : null}
+
+      <section className="documents-detail-section" aria-label="Documentos PR del proceso">
+        <div className="section-title-row"><h4>Procesos · Documentos PR</h4><span className="count-badge">{processDocuments.length}</span></div>
+        {processDocuments.length ? <div className="document-process-file-list">{processDocuments.map(document => {
+          const version = getWorkingVersion(document);
+          return <article key={document.id}>
+            <span><strong>{document.code} · {document.name}</strong><small>{document.processId} · {version ? `Rev. ${version.revision} · ${version.fileName}` : "Sin versión consultable"}</small></span>
+            <button className="button button-secondary" type="button" disabled={!version?.storageObjectPath && !version?.previewPath} onClick={() => setPreviewId(document.id)}><Eye size={15} /> Ver archivo</button>
+          </article>;
+        })}</div> : <p>No hay documentos PR vigentes en los procesos autorizados de este expediente.</p>}
+      </section>
 
       <section className="documents-detail-section">
         <div className="section-title-row">
@@ -423,6 +442,7 @@ function ProcessDocumentHome({
             : "Consulta documental del proceso."}
         </span>
       </div>
+      {preview ? <DocumentPreviewModal document={preview} canDownload={getDocumentPermissions(session, preview.processId).download} onClose={() => setPreviewId(null)} /> : null}
     </>
   );
 }
