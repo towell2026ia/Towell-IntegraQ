@@ -24,6 +24,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { EvidenceManager } from "@/components/evidence/evidence-manager";
 import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
@@ -56,6 +57,7 @@ import {
 import type { ActiveSession } from "@/lib/session-data";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { restoreStoredDocument } from "@/lib/document-storage";
+import { listAttachments } from "@/lib/attachment-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -323,10 +325,36 @@ export function DocumentsModule({
         </div>
       </section>
       )}
+      {canViewControlledDocuments && documentsView === "process" ? <ExistingDocumentAttachments /> : null}
       </>
       )}
     </>
   );
+}
+
+function ExistingDocumentAttachments() {
+  const [available, setAvailable] = useState(false);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listAttachments({ moduleId: "documents", resourceType: "module_document", resourceKey: "documents" })
+      .then((files) => { if (!cancelled) { setAvailable(files.length > 0); setError(""); } })
+      .catch(() => { if (!cancelled) setError("No fue posible consultar los archivos documentales anteriores."); });
+    return () => { cancelled = true; };
+  }, [retry]);
+
+  if (error) return <p role="alert">{error} <button type="button" onClick={() => setRetry((value) => value + 1)}>Reintentar</button></p>;
+  if (!available) return null;
+  return <EvidenceManager
+    moduleId="documents"
+    resourceType="module_document"
+    resourceKey="documents"
+    title="Archivo documental anterior"
+    description="Consulta de archivos existentes"
+    permissions={{ read: true, add: false, replace: false, delete: false, history: true }}
+  />;
 }
 
 function ProcessDocumentHome({

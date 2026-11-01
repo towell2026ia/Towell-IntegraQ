@@ -273,7 +273,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog sources={{ ...sources, sectionConfigurations }} filters={filters} asOf={asOf} onOpenIndicator={(id) => onNavigate("indicators", id)} /> : null}
+      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog /> : null}
 
       {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
       <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>

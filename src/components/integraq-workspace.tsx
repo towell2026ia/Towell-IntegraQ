@@ -42,7 +42,6 @@ import { HomeModule } from "@/components/modules/home-module";
 import { HomeSettingsModule } from "@/components/modules/home-settings-module";
 import { IndicatorsModule } from "@/components/modules/indicators-module";
 import { ManagementReviewModule } from "@/components/modules/management-review-module";
-import { ModuleDocumentsPanel } from "@/components/module-documents-panel";
 import { ModulePlaceholder } from "@/components/modules/module-placeholder";
 import { OrganizationModule } from "@/components/modules/organization-module";
 import { ProcessesModule } from "@/components/modules/processes-module";
@@ -572,7 +571,6 @@ export function IntegraQWorkspace({
           {activeModule === "customer-portal" ? <StakeholderPortalModule kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
           {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
-          <ModuleDocumentsPanel moduleId={activeModule} session={session} />
         </main>
       </div>
 
