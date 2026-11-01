@@ -15,11 +15,11 @@ export function HomeAppearanceSettings() {
       const response = await fetch("/api/home/appearance", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ textSize, revision: appearance.revision }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "No fue posible guardar la apariencia.");
-      setDraft(null); refresh(); setNotice("Tamaño de texto guardado para este espacio de trabajo.");
+      setDraft(null); refresh(); window.dispatchEvent(new Event("integraq:appearance-changed")); setNotice("Tamaño de texto guardado para toda la plataforma.");
     } catch (cause) { setSaveError(cause instanceof Error ? cause.message : "No fue posible guardar."); }
     finally { setSaving(false); }
   }
-  return <section className="home-appearance-settings" aria-label="Apariencia de Inicio">
+  return <section className="home-appearance-settings" aria-label="Apariencia de IntegraQ">
     <h3>Apariencia</h3>
     <label>Tamaño de texto <select value={size} disabled={loading || saving || Boolean(error)} onChange={event => setDraft(Number(event.target.value) as HomeTextSize)}>
       {homeTextSizes.map(option => <option key={option.value} value={option.value}>{option.label} · {option.value}%</option>)}

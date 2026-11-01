@@ -177,14 +177,18 @@ describe("indicator master production preflight", () => {
     });
   });
 
-  it("keeps Home wired to runtime indicators instead of the historical image", () => {
+  it("keeps indicators in their runtime module and Home on institutional objectives", () => {
     const workspace = readFileSync(join(process.cwd(), "src/components/integraq-workspace.tsx"), "utf8");
     const home = readFileSync(join(process.cwd(), "src/components/modules/home-module.tsx"), "utf8");
     expect(workspace).toContain("const indicatorDefinitions = demoMode ? demoIndicatorDefinitions : indicatorRuntime.definitions");
+    expect(workspace).toContain("<IndicatorsModule");
     expect(home).toContain("<HomeObjectiveCatalog");
     const catalog = readFileSync(join(process.cwd(), "src/components/modules/home-objective-catalog.tsx"), "utf8");
-    expect(catalog).toContain("/api/indicators/runtime?includeInactive=true");
-    expect(catalog).toContain("dashboard.qualityObjectives");
+    expect(catalog).toContain("<HomeObjectives />");
+    expect(catalog).not.toContain("/api/indicators/runtime");
+    const objectives = readFileSync(join(process.cwd(), "src/components/modules/home-objectives.tsx"), "utf8");
+    expect(objectives).toContain("institutionalQualityObjectives");
+    expect(objectives).not.toContain("indicator.indicatorName");
     expect(catalog).not.toContain("localStorage");
     expect(workspace).not.toContain("objetivos-calidad.png");
     expect(home).not.toContain("objetivos-calidad.png");

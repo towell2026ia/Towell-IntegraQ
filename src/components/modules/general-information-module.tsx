@@ -28,6 +28,7 @@ import {
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import { DocumentPreviewViewer } from "@/components/modules/document-preview-viewer";
+import { isSpreadsheetFileName } from "@/lib/spreadsheet-preview";
 import styles from "@/components/modules/general-information.module.css";
 import { useGeneralInformation } from "@/hooks/use-general-information";
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
@@ -324,7 +325,7 @@ function UploadDialog({ currentFolderId, folders, mode, replace, onClose, onComp
 }
 
 function GeneralInformationPreview({ document, onClose }: { document: GeneralInformationDocument; onClose: () => void }) {
-  const sourceUrl = useCallback(async () => (await getGeneralInformationFileUrl(document.id, "preview")).signedUrl, [document.id]);
+  const sourceUrl = useCallback(async () => (await getGeneralInformationFileUrl(document.id, "preview", isSpreadsheetFileName(document.originalName))).signedUrl, [document.id, document.originalName]);
   const version = useMemo(() => ({
     id: document.id,
     revision: document.version,

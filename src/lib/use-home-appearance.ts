@@ -22,7 +22,8 @@ export function useHomeAppearance(enabled = true) {
     };
     void load();
     window.addEventListener("focus", refresh);
-    return () => { controller.abort(); window.removeEventListener("focus", refresh); };
+    window.addEventListener("integraq:appearance-changed", refresh);
+    return () => { controller.abort(); window.removeEventListener("focus", refresh); window.removeEventListener("integraq:appearance-changed", refresh); };
   }, [enabled, attempt, refresh]);
   return { appearance, loading, error, refresh };
 }

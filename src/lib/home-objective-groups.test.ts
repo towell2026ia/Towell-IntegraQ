@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { groupHomeObjectives } from "./home-objective-groups";
+import { groupHomeObjectives, institutionalQualityObjectives } from "./home-objective-groups";
 import { buildHomeDashboard } from "./home-dashboard";
 import { buildInitialIndicatorDefinitions } from "./indicator-data";
 import { activeSession } from "./session-data";
 
 describe("Home objective assignments using fixture data", () => {
+  it("keeps the five institutional names complete, unique and in source order", () => {
+    expect(institutionalQualityObjectives).toEqual([
+      "Mantener y mejorar continuamente nuestro Sistema de Gestión de la Calidad.",
+      "Fomentar una cultura de mejora continua y eficiencia en todos nuestros procesos.",
+      "Escuchar y responder proactivamente a las necesidades y expectativas de nuestros clientes y partes interesadas.",
+      "Capacitar y desarrollar a nuestro equipo para que alcance su máximo potencial.",
+      "Implementar prácticas sostenibles que protejan el medio ambiente.",
+    ]);
+    expect(new Set(institutionalQualityObjectives).size).toBe(5);
+  });
   it("preserves all 52 records across five real objectives and the unassigned group", () => {
     const definitions = buildInitialIndicatorDefinitions();
     const before = JSON.stringify(definitions);

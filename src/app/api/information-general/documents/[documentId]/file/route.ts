@@ -6,6 +6,7 @@ import {
   requireGeneralInformationActor,
 } from "@/lib/general-information-server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isSpreadsheetFileName } from "@/lib/spreadsheet-preview";
 
 export async function GET(
   request: Request,
@@ -13,7 +14,8 @@ export async function GET(
 ) {
   try {
     const actor = await requireGeneralInformationActor();
-    const disposition = new URL(request.url).searchParams.get("disposition") === "download" ? "download" : "preview";
+    const searchParams = new URL(request.url).searchParams;
+    const disposition = searchParams.get("disposition") === "download" ? "download" : "preview";
     if (disposition === "download" && !actor.administrator) {
       throw new GeneralInformationApiError("La descarga está reservada al administrador.", 403);
     }
@@ -28,7 +30,8 @@ export async function GET(
       .maybeSingle();
     if (record.error) throw record.error;
     if (!record.data || record.data.deleted_at) throw new GeneralInformationApiError("Documento no disponible.", 404);
-    const path = disposition === "preview" && record.data.preview_status === "ready" && record.data.preview_path
+    const originalSpreadsheetPreview = disposition === "preview" && searchParams.get("original") === "1" && isSpreadsheetFileName(record.data.original_name);
+    const path = disposition === "preview" && !originalSpreadsheetPreview && record.data.preview_status === "ready" && record.data.preview_path
       ? record.data.preview_path
       : record.data.object_path;
     const signed = await admin.storage.from(record.data.bucket_id || "integraq-private").createSignedUrl(

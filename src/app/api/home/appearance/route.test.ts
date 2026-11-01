@@ -9,13 +9,28 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: (ta
   chain.maybeSingle = async () => state.responses.shift() ?? { data: null, error: null };
   return chain;
 } }) }));
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: (table: string) => {
+  state.calls.push({ method: "adminFrom", args: [table] });
+  const chain: Record<string, unknown> = {};
+  for (const method of ["select", "eq", "is"]) chain[method] = (...args: unknown[]) => { state.calls.push({ method, args }); return chain; };
+  chain.maybeSingle = async () => state.responses.shift() ?? { data: null, error: null };
+  return chain;
+} }) }));
 import { GET, PATCH } from "./route";
 const profile = { organization_id: "authorized-org", workspace_mode: "production", status: "active", user_type: "administrator" };
 const request = (body: unknown) => new Request("https://integraq.test/api/home/appearance", { method: "PATCH", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
 beforeEach(() => { state.session = { ...activeSession, authUserId: "real-user" }; state.responses = [{ data: profile, error: null }]; state.calls = []; });
 describe("Home appearance authorization and persistence", () => {
   it("requires a real session", async () => { state.session = null; expect((await GET()).status).toBe(401); expect(state.calls).toEqual([]); });
-  it("blocks external accounts even with stale internal assignments", async () => { state.session!.userType = "Cliente"; expect((await GET()).status).toBe(403); expect(state.calls).toEqual([]); });
+  it("lets an external account read only its workspace appearance", async () => {
+    state.session!.userType = "Cliente";
+    state.responses.push({ data: { payload: { textSize: 120 }, revision: 7 }, error: null });
+    expect(await (await GET()).json()).toEqual({ textSize: 120, revision: 7 });
+    expect(state.calls).toContainEqual({ method: "adminFrom", args: ["workspace_data"] });
+    expect(state.calls).toContainEqual({ method: "eq", args: ["workspace_id", "authorized-org"] });
+    expect(state.calls).toContainEqual({ method: "eq", args: ["area", "homeAppearance"] });
+    expect((await PATCH(request({ textSize: 130, revision: 7 }))).status).toBe(403);
+  });
   it("loads defaults only when no persisted configuration exists", async () => {
     expect(await (await GET()).json()).toEqual({ textSize: 100, revision: 0 });
     expect(state.calls).toContainEqual({ method: "eq", args: ["workspace_id", "authorized-org"] });
