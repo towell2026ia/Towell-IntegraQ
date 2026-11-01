@@ -48,12 +48,12 @@ async function resolveContext() {
   };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const resolved = await resolveContext();
     if (resolved.response) return resolved.response;
     return NextResponse.json({
-      ...await loadRuntimeSnapshot(resolved.supabase!, resolved.context!),
+      ...await loadRuntimeSnapshot(resolved.supabase!, resolved.context!, new URL(request.url).searchParams.get("includeInactive") === "true"),
       access: {
         administrator: resolved.context!.administrator,
         assignedProcessIds: resolved.session!.assignedProcessIds,
@@ -269,6 +269,7 @@ export async function POST(request: Request) {
 async function loadRuntimeSnapshot(
   supabase: Awaited<ReturnType<typeof createClient>>,
   context: RuntimeContext,
+  includeInactive = false,
 ) {
   const settingsQuery = await supabase.from("indicator_capture_settings")
     .select("capture_days_after_close,business_timezone")
@@ -280,12 +281,13 @@ async function loadRuntimeSnapshot(
     captureDaysAfterClose: Number(settingsQuery.data?.capture_days_after_close ?? DEFAULT_CAPTURE_DAYS_AFTER_CLOSE),
     timezone: INDICATOR_BUSINESS_TIME_ZONE,
   } as const;
-  const definitionsQuery = await supabase.from("indicator_definitions")
-    .select("id,code,source_row,process_id,area,direction_objective,direction_metric,quality_objective,name,leader_name,owner_name_snapshot,metric_label,description,periodicity")
+  let definitionsRequest = supabase.from("indicator_definitions")
+    .select("id,code,source_row,process_id,area,direction_objective,direction_metric,quality_objective,name,leader_name,owner_name_snapshot,metric_label,description,periodicity,active")
     .eq("organization_id", context.workspaceId)
     .eq("workspace_mode", context.workspaceMode)
-    .eq("active", true)
     .order("code");
+  if (!includeInactive) definitionsRequest = definitionsRequest.eq("active", true);
+  const definitionsQuery = await definitionsRequest;
   if (definitionsQuery.error) throw definitionsQuery.error;
   const definitionRows = definitionsQuery.data ?? [];
   if (!definitionRows.length) return { definitions: [], results: {}, settings, loadedAt: new Date().toISOString(), source: "supabase" as const };
@@ -355,6 +357,7 @@ async function loadRuntimeSnapshot(
     }
     return {
       id: row.code,
+      active: row.active,
       sourceRow: Number(row.source_row || 0),
       processId: row.process_id,
       processIds: processesByIndicator.get(row.id) ?? [row.process_id],
