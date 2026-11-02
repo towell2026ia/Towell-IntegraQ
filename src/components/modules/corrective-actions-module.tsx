@@ -277,12 +277,11 @@ export function CorrectiveActionsModule({
 
   const deleteCandidate = actions.find(action => action.id === deleteCandidateId);
   const confirmDelete = async () => {
-    if (!deleteCandidate || !isAdministrator(session) || !deleteReason.trim()) return;
+    if (!deleteCandidate || !isAdministrator(session) || session.workspaceMode === "demo" || !deleteReason.trim()) return;
     setDeleting(true); setDeleteError("");
     try {
-      if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(deleteCandidate.id) && session.workspaceMode !== "demo") {
-        await softDeleteStoredCorrectiveAction(deleteCandidate.id, deleteReason.trim());
-      }
+      if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(deleteCandidate.id)) throw new Error("Este ejemplo aún no tiene un expediente persistido para borrado administrativo seguro.");
+      await softDeleteStoredCorrectiveAction(deleteCandidate.id, deleteReason.trim());
       onActionsChange(actions.map(action => action.id === deleteCandidate.id ? {
         ...action, deletedAt: new Date().toISOString(), deletedBy: session.authUserId ?? session.userId,
         deletionReason: deleteReason.trim(), portalVisible: false,
@@ -456,7 +455,7 @@ export function CorrectiveActionsModule({
               <CheckCircle2 size={16} /> Avanzar etapa
             </button>
             {isAdministrator(session) && selected.source === "customer" ? <button className="button button-secondary" type="button" disabled={publishing || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "")} onClick={() => void (selected.portalVisible ? unpublishSelected() : publishSelected())}>{selected.portalVisible ? "Retirar del portal" : "Autorizar publicación"}</button> : null}
-            {isAdministrator(session) ? <button className="button button-secondary" type="button" onClick={() => { setDeleteCandidateId(selected.id); setDeleteReason(""); setDeleteError(""); }}><Trash2 size={16} /> Borrar</button> : null}
+            {isAdministrator(session) && session.workspaceMode !== "demo" && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.id) ? <button className="button button-secondary" type="button" onClick={() => { setDeleteCandidateId(selected.id); setDeleteReason(""); setDeleteError(""); }}><Trash2 size={16} /> Borrar</button> : null}
           </A3ActionReport>
           {selected.source === "customer" && isAdministrator(session) && !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "") ? <p role="status">Para publicar, vincula primero un cliente real del catálogo.</p> : null}
           {publicationError ? <p role="alert">{publicationError}</p> : null}
