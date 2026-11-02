@@ -51,10 +51,11 @@ import { SuppliersModule } from "@/components/modules/suppliers-module";
 import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import { useHomeAppearance } from "@/lib/use-home-appearance";
 import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
+import { loadStoredCorrectiveActions } from "@/lib/corrective-action-storage";
 import {
   demoCorrectiveActions,
   demoMeasurementAssets,
-  enrichSavedCorrectiveActions,
+  restoreInitialCorrectiveActions,
 } from "@/lib/demo-data";
 import { normalizeMeasurementAssets } from "@/lib/metrology-data";
 import {
@@ -185,7 +186,7 @@ export function IntegraQWorkspace({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
-  const [actions, setActions] = useState<CorrectiveAction[]>([]);
+  const [actions, setActions] = useState<CorrectiveAction[]>(demoCorrectiveActions);
   const [assets, setAssets] = useState<MeasurementAsset[]>(demoMeasurementAssets);
   const [loadedDocuments, setControlledDocuments] = useState<ControlledDocument[]>(
     () => demoMode ? buildInitialControlledDocuments() : [],
@@ -228,6 +229,8 @@ export function IntegraQWorkspace({
     initialAuditOccurrences,
   );
   const [storageReady, setStorageReady] = useState(false);
+  const [actionLoadError, setActionLoadError] = useState("");
+  const [actionRetry, setActionRetry] = useState(0);
   const [riskServerReady, setRiskServerReady] = useState(false);
   const [riskLoadError, setRiskLoadError] = useState("");
   const [riskRetry, setRiskRetry] = useState(0);
@@ -265,12 +268,7 @@ export function IntegraQWorkspace({
         const savedImprovementProjects = window.localStorage.getItem("integraq.improvementProjects.v2") ?? window.localStorage.getItem("integraq.improvementProjects.v1");
         const savedAudits = window.localStorage.getItem("integraq.auditOccurrences.v1");
         if (savedActions) {
-          setActions(
-            withoutUnchangedSamples(
-              enrichSavedCorrectiveActions(JSON.parse(savedActions) as CorrectiveAction[]),
-              demoCorrectiveActions,
-            ),
-          );
+          setActions(restoreInitialCorrectiveActions(JSON.parse(savedActions) as CorrectiveAction[]));
         }
         if (savedAssets) setAssets(normalizeMeasurementAssets(JSON.parse(savedAssets) as MeasurementAsset[], demoMeasurementAssets));
         const hydratedForms = normalizeAppForms((savedForms
@@ -323,6 +321,24 @@ export function IntegraQWorkspace({
       window.localStorage.setItem("integraq.correctiveActions", JSON.stringify(actions));
     }
   }, [actions, storageReady]);
+
+  useEffect(() => {
+    if (!storageReady || demoMode || isExternalUser(session)) return;
+    let active = true;
+    void loadStoredCorrectiveActions(session)
+      .then(stored => {
+        if (!active) return;
+        setActions(current => {
+          const remote = new Map(stored.map(action => [action.id, action]));
+          const merged = current.map(action => remote.get(action.id) ?? action);
+          const known = new Set(merged.map(action => action.id));
+          return [...merged, ...stored.filter(action => !known.has(action.id))];
+        });
+        setActionLoadError("");
+      })
+      .catch(cause => { if (active) setActionLoadError(cause instanceof Error ? cause.message : "No fue posible consultar Root2Cause."); });
+    return () => { active = false; };
+  }, [storageReady, demoMode, session, actionRetry]);
 
   useEffect(() => {
     if (storageReady) {
@@ -588,6 +604,7 @@ export function IntegraQWorkspace({
           {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{riskLoadError || "Consultando riesgos autorizados en Supabase…"}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
           {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
+          {activeModule === "corrective-actions" && actionLoadError ? <section role="alert"><p>{actionLoadError}</p><button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button></section> : null}
           {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}

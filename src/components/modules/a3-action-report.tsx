@@ -14,6 +14,7 @@ import type {
 const sourceLabels: Record<CorrectiveActionSource, string> = {
   internal: "Interna",
   audit: "Sistema de gestión de calidad",
+  sgc: "Sistema de gestión de calidad",
   customer: "Externa / cliente",
   supplier: "Proveedor",
 };

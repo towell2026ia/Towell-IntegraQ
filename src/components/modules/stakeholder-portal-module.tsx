@@ -13,9 +13,8 @@ import {
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
-import { A3ActionReport } from "@/components/modules/a3-action-report";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import {
@@ -27,12 +26,12 @@ import type { ActiveSession } from "@/lib/session-data";
 import { getRncpEvidenceUrl, saveRncpResponseAction, uploadRncpEvidence, type RncpReport } from "@/lib/rncp-data";
 import { getSupplierAssessmentFileUrl, supplierAssessmentTypeLabel } from "@/lib/supplier-assessment-data";
 import type { CorrectiveAction } from "@/lib/types";
+import { loadPublishedCorrectiveActions, type PublishedCorrectiveAction } from "@/lib/root-cause-publication";
 
 type PortalKind = "customer" | "supplier";
 
 export function StakeholderPortalModule({
   kind,
-  actions,
   session,
 }: {
   kind: PortalKind;
@@ -42,23 +41,29 @@ export function StakeholderPortalModule({
   const company = resolvePortalCompany(session, kind);
   if (!company) return <PortalAccessDenied />;
   return kind === "customer" ? (
-    <CustomerPortal actions={actions} company={company} />
+    <CustomerPortal company={company} />
   ) : (
     <SupplierPortal company={company} />
   );
 }
 
-function CustomerPortal({
-  actions,
-  company,
-}: {
-  actions: CorrectiveAction[];
-  company: PortalCompany;
-}) {
+function CustomerPortal({ company }: { company: PortalCompany }) {
   const [view, setView] = useState<"actions" | "audits" | "certifications">("actions");
   const [selectedActionId, setSelectedActionId] = useState("");
-  const portalData = getCustomerPortalData(company.companyId, actions);
-  const selectedAction = portalData.actions.find((action) => action.id === selectedActionId);
+  const [actions, setActions] = useState<PublishedCorrectiveAction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    let active = true;
+    void loadPublishedCorrectiveActions()
+      .then(result => { if (active) { setActions(result); setError(""); } })
+      .catch(cause => { if (active) { setActions([]); setError(cause instanceof Error ? cause.message : "No se pudieron consultar las acciones."); } })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [company.companyId, retry]);
+  const portalData = getCustomerPortalData(company.companyId, []);
+  const selectedAction = actions.find((action) => action.id === selectedActionId);
   return (
     <>
       <PortalHeading title="Portal del cliente" account={company.companyName} description="Reclamos, acciones, auditorías externas y certificaciones autorizadas." />
@@ -69,17 +74,19 @@ function CustomerPortal({
       </div>
       {view === "actions" ? (
         selectedAction ? (
-          <A3ActionReport action={selectedAction} onBack={() => setSelectedActionId("")} />
+          <section className="portal-record-list"><button className="button button-secondary" type="button" onClick={() => setSelectedActionId("")}>Volver</button><article><div><code>{selectedAction.folio}</code><h4>{selectedAction.title}</h4></div><dl><div><dt>Avance</dt><dd>{selectedAction.progress}%</dd></div><div><dt>Vencimiento</dt><dd>{formatDate(selectedAction.dueDate)}</dd></div></dl><span className="quality-state warning">{selectedAction.status}</span></article></section>
         ) : <section className="portal-record-list">
           <header><div><h3>Mis reclamos, hallazgos y planes</h3><p>Vista de consulta compartida desde Root2Cause; no permite editar el análisis A3.</p></div><ClipboardCheck size={19} /></header>
-          {portalData.actions.map((action) => (
+          {loading ? <PortalEmpty message="Consultando acciones autorizadas…" /> : null}
+          {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
+          {actions.map((action) => (
             <article key={action.id}>
-              <div><code>{action.folio}</code><h4>{action.title}</h4><p>{action.problem}</p><button className="button button-secondary portal-report-link" type="button" onClick={() => setSelectedActionId(action.id)}><FileText size={15} /> Ver reporte A3</button></div>
-              <dl><div><dt>Avance</dt><dd>{action.progress}%</dd></div><div><dt>Vencimiento</dt><dd>{formatDate(action.dueDate)}</dd></div><div><dt>Planes</dt><dd>{action.a3?.plans.length ?? 0}</dd></div></dl>
+              <div><code>{action.folio}</code><h4>{action.title}</h4><button className="button button-secondary portal-report-link" type="button" onClick={() => setSelectedActionId(action.id)}><FileText size={15} /> Ver información compartida</button></div>
+              <dl><div><dt>Avance</dt><dd>{action.progress}%</dd></div><div><dt>Vencimiento</dt><dd>{formatDate(action.dueDate)}</dd></div></dl>
               <span className="quality-state warning">{action.status}</span>
             </article>
           ))}
-          {portalData.actions.length === 0 ? <PortalEmpty message="No hay reclamos ni acciones compartidas con esta empresa." /> : null}
+          {!loading && !error && actions.length === 0 ? <PortalEmpty message="No hay reclamos ni acciones compartidas con esta empresa." /> : null}
         </section>
       ) : null}
       {view === "audits" ? <PortalTable title="Calendario de auditorías externas"><table className="quality-table"><thead><tr><th>Evento</th><th>Fecha</th><th>Alcance</th><th>Estado</th></tr></thead><tbody>{portalData.audits.map((audit) => <tr key={audit.id}><td><strong>{audit.id}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}</tbody></table>{portalData.audits.length === 0 ? <PortalEmpty message="No hay auditorías compartidas con esta empresa." /> : null}</PortalTable> : null}
