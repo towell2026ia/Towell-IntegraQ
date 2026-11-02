@@ -80,10 +80,12 @@ create function public.iq_root2cause_file_write_allowed(file_module text, file_t
 returns boolean language sql stable security invoker set search_path = '' as $check$
   select case
     when file_module = 'corrective-actions' or file_type like 'corrective_action%'
-      then public.is_administrator() and exists (
-        select 1 from public.corrective_actions a
-        join public.profiles p on p.organization_id = a.organization_id
-        where a.id = file_resource and p.id = auth.uid()
+      then public.is_administrator() and (
+        file_resource is null or exists (
+          select 1 from public.corrective_actions a
+          join public.profiles p on p.organization_id = a.organization_id
+          where a.id = file_resource and p.id = auth.uid()
+        )
       )
     else true
   end;
