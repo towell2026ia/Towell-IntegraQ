@@ -41,6 +41,14 @@ describe("access policy", () => {
     expect(canAccessModule({ ...baseSession, assignedModuleIds: [] }, "documents")).toBe(true);
   });
 
+  it("opens Root2Cause with an explicit view grant and denies absent grants", () => {
+    const viewer = { ...baseSession, assignedModuleIds: [],
+      moduleActionPermissions: [{ moduleId: "corrective-actions" as const, action: "view" as const }] };
+    expect(canAccessModule(viewer, "corrective-actions")).toBe(true);
+    expect(canAccessModule({ ...viewer, moduleActionPermissions: [] }, "corrective-actions")).toBe(false);
+    expect(canAccessModule({ ...viewer, userType: "Cliente" }, "corrective-actions")).toBe(false);
+  });
+
   it("denies clients and suppliers explicitly even when a legacy menu assignment remains", () => {
     expect(canAccessModule({
       ...baseSession,

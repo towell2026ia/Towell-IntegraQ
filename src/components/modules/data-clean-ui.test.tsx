@@ -36,6 +36,20 @@ describe("dashboard Root2Cause y módulos vacíos", () => {
     expect(detail).toContain("Externas / clientes");
   });
 
+  it("shows the four Root2Cause lists to internal viewers without write controls", () => {
+    const viewer = { ...activeSession, userType: "Usuario interno" as const, organizationId: "org-a",
+      assignedProcessIds: ["P-13"], assignedModuleIds: ["corrective-actions" as const],
+      moduleActionPermissions: [{ moduleId: "corrective-actions" as const, action: "view" as const }] };
+    const action = { ...demoCorrectiveActions[0], organizationId: "org-a", processId: "P-13", participantUserIds: [] };
+    const html = renderToStaticMarkup(createElement(CorrectiveActionsModule, {
+      actions: [action], onActionsChange: vi.fn(), session: viewer,
+    }));
+    for (const tab of ["Acciones abiertas", "Externas / clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
+    expect(html).toContain(action.folio);
+    expect(html).toContain("Buscar acción");
+    expect(html).not.toContain("Iniciar análisis A3");
+  });
+
   it("presenta estados vacíos en Revisión, Mejora y Formularios", () => {
     const review = renderToStaticMarkup(createElement(ManagementReviewModule, {
       records: [], onRecordsChange: vi.fn(), sources: {

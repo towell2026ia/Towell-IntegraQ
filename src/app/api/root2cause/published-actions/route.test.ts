@@ -25,7 +25,7 @@ function client() {
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => client() }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => client() }));
 
-import { DELETE, GET, POST } from "./route";
+import { DELETE, GET, PATCH, POST } from "./route";
 
 const customerA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const customerB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -99,6 +99,30 @@ describe("Root2Cause portal authorization", () => {
   it("requires a persisted administrator before any deletion", async () => {
     state.session = { ...state.session!, userType: "Cliente" };
     expect((await DELETE(request("DELETE", { id: actionId, reason: "Duplicado" }))).status).toBe(403);
+    expect(calls("corrective_actions", "update")).toHaveLength(0);
+  });
+
+  it("rejects direct creation and edits from an internal account with historical write grants", async () => {
+    state.session = { ...state.session!, userType: "Usuario interno", assignedModuleIds: ["corrective-actions"],
+      moduleActionPermissions: [{ moduleId: "corrective-actions", action: "create" },
+        { moduleId: "corrective-actions", action: "update" }] };
+    state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "internal", status: "active", workspace_mode: "production" }, error: null }];
+    expect((await POST(request("POST", { action: {} }))).status).toBe(403);
+    expect((await POST(request("POST", { action: {}, publish: true }))).status).toBe(403);
+    expect((await PATCH(request("PATCH", { id: actionId }))).status).toBe(403);
+    expect((await DELETE(request("DELETE", { id: actionId, reason: "No autorizado" }))).status).toBe(403);
+    expect(calls("corrective_actions", "insert")).toHaveLength(0);
+    expect(calls("corrective_actions", "update")).toHaveLength(0);
+  });
+
+  it("rejects customer and supplier write requests", async () => {
+    for (const userType of ["Cliente", "Proveedor"] as const) {
+      state.session = { ...state.session!, userType };
+      expect((await POST(request("POST", { action: {} }))).status).toBe(403);
+      expect((await PATCH(request("PATCH", { id: actionId }))).status).toBe(403);
+      expect((await DELETE(request("DELETE", { id: actionId, reason: "No autorizado" }))).status).toBe(403);
+    }
+    expect(calls("corrective_actions", "insert")).toHaveLength(0);
     expect(calls("corrective_actions", "update")).toHaveLength(0);
   });
 

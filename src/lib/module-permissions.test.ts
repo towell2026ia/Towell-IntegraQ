@@ -52,4 +52,18 @@ describe("module action permissions", () => {
       moduleActionPermissions: [],
     }, "calibrations", "manage")).toBe(true);
   });
+
+  it("treats Root2Cause as consultation-only for internal accounts despite legacy grants", () => {
+    const legacy = { ...viewer, assignedModuleIds: ["corrective-actions" as const],
+      moduleActionPermissions: [
+        { moduleId: "corrective-actions" as const, action: "view" as const },
+        { moduleId: "corrective-actions" as const, action: "create" as const },
+        { moduleId: "corrective-actions" as const, action: "update" as const },
+      ] };
+    expect(canPerformModuleAction(legacy, "corrective-actions", "view")).toBe(true);
+    for (const action of ["create", "update", "manage", "approve"] as const) {
+      expect(canPerformModuleAction(legacy, "corrective-actions", action)).toBe(false);
+    }
+    expect(canPerformModuleAction({ ...legacy, userType: "Administrador" }, "corrective-actions", "update")).toBe(true);
+  });
 });

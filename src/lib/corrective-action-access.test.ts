@@ -10,6 +10,8 @@ import type { CorrectiveAction } from "@/lib/types";
 const session: ActiveSession = {
   userId: "USR-TEJIDO",
   authUserId: "0e7192ec-8f68-4bb4-bbe0-cb45ad8ddd97",
+  organizationId: "org-a",
+  workspaceMode: "production",
   name: "Supervisor de Tejido",
   shortName: "Supervisor",
   initials: "ST",
@@ -24,6 +26,8 @@ const session: ActiveSession = {
 
 const action: CorrectiveAction = {
   id: "AC-1",
+  organizationId: "org-a",
+  processId: "P-13",
   folio: "AC-2026-001",
   title: "Tensión de urdido",
   problem: "Variación detectada",
@@ -36,20 +40,20 @@ const action: CorrectiveAction = {
   status: "analysis",
   progress: 30,
   evidenceCount: 0,
-  participantUserIds: ["0e7192ec-8f68-4bb4-bbe0-cb45ad8ddd97"],
+  participantUserIds: [],
 };
 
-describe("corrective action participation", () => {
-  it("shows only actions where the user participates", () => {
+describe("corrective action consultation", () => {
+  it("shows authorized organization and process records without participation", () => {
     expect(canViewCorrectiveAction(session, action)).toBe(true);
-    expect(canViewCorrectiveAction(session, {
-      ...action,
-      id: "AC-2",
-      participantUserIds: [],
-    })).toBe(false);
+    expect(canViewCorrectiveAction(session, { ...action, processId: undefined })).toBe(true);
+    expect(canViewCorrectiveAction(session, { ...action, processId: "P-99" })).toBe(false);
+    expect(canViewCorrectiveAction(session, { ...action, organizationId: "org-b" })).toBe(false);
+    expect(canViewCorrectiveAction({ ...session, assignedModuleIds: [], moduleActionPermissions: [] }, action)).toBe(false);
+    expect(canViewCorrectiveAction({ ...session, userType: "Cliente" }, action)).toBe(false);
   });
 
-  it("requires update permission to work the A3", () => {
+  it("keeps internal viewers read-only even with a historical update grant", () => {
     expect(canEditCorrectiveAction(session, action)).toBe(false);
     expect(canEditCorrectiveAction({
       ...session,
@@ -57,6 +61,7 @@ describe("corrective action participation", () => {
         { moduleId: "corrective-actions", action: "view" },
         { moduleId: "corrective-actions", action: "update" },
       ],
-    }, action)).toBe(true);
+    }, action)).toBe(false);
+    expect(canEditCorrectiveAction({ ...session, userType: "Administrador" }, action)).toBe(true);
   });
 });

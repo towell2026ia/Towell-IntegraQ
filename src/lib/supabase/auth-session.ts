@@ -9,6 +9,7 @@ import type {
 import { createClient } from "@/lib/supabase/server";
 
 type ProfileRow = {
+  organization_id: string | null;
   external_id: string | null;
   full_name: string;
   short_name: string | null;
@@ -144,6 +145,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
   return {
     userId: profile?.external_id || claims.sub,
     authUserId: claims.sub,
+    organizationId: profile?.organization_id ?? undefined,
     name: fullName,
     shortName: profile?.short_name || shortNameFor(fullName),
     initials: profile?.initials || initialsFor(fullName),

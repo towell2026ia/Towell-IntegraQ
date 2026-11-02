@@ -74,7 +74,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   const scope = await internalScope(session);
-  if (!scope || !session) return NextResponse.json({ error: "Acceso interno no autorizado." }, { status: 403 });
+  if (!scope?.administrator || !session) return NextResponse.json({ error: "Sólo un administrador activo puede crear o modificar análisis." }, { status: 403 });
   const { organizationId } = scope;
   const body = await request.json() as { action?: unknown; publish?: boolean };
   if (!validAction(body.action)) return NextResponse.json({ error: "El análisis está incompleto o no tiene un cliente real." }, { status: 400 });
