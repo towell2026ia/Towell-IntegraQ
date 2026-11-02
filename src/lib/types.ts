@@ -9,6 +9,7 @@ export type CorrectiveActionStatus =
 export type CorrectiveActionSource =
   | "internal"
   | "audit"
+  | "sgc"
   | "customer"
   | "supplier";
 
@@ -99,6 +100,11 @@ export interface CorrectiveAction {
   aiDraft?: AiRootCauseDraft;
   relatedParty?: string;
   relatedPartyId?: string;
+  qualityCaseId?: string;
+  portalVisible?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
+  deletionReason?: string;
   a3?: A3Analysis;
 }
 

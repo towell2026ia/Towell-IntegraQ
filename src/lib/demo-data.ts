@@ -166,6 +166,13 @@ export function enrichSavedCorrectiveActions(
   });
 }
 
+/** Restore the former Root2Cause dashboard without replacing user-edited records. */
+export function restoreInitialCorrectiveActions(savedActions: CorrectiveAction[]): CorrectiveAction[] {
+  const saved = enrichSavedCorrectiveActions(savedActions);
+  const existingIds = new Set(saved.map(action => action.id));
+  return [...saved, ...demoCorrectiveActions.filter(action => !existingIds.has(action.id))];
+}
+
 export const demoMeasurementAssets = measurementAssetCatalog;
 
 /** @deprecated Datos de maqueta conservados sólo como referencia de migración. */

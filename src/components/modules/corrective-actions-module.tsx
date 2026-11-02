@@ -20,6 +20,7 @@ import {
   Search,
   ShieldAlert,
   Sparkles,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -42,7 +43,8 @@ import {
   toIsoDate,
 } from "@/lib/domain";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import type { ActiveSession } from "@/lib/session-data";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { publishCorrectiveAction, saveCorrectiveAction, softDeleteStoredCorrectiveAction, unpublishCorrectiveAction } from "@/lib/root-cause-publication";
 import type {
   AiRootCauseDraft,
   CorrectiveAction,
@@ -84,7 +86,7 @@ export function CorrectiveActionsModule({
   const [listScope, setListScope] = useState<CorrectiveListScope>(
     focusedAction?.source === "customer"
       ? "customer"
-      : focusedAction?.source === "audit"
+      : focusedAction?.source === "audit" || focusedAction?.source === "sgc"
         ? "system"
         : focusedAction
           ? "internal"
@@ -93,6 +95,12 @@ export function CorrectiveActionsModule({
   const [registryView, setRegistryView] = useState<CorrectiveRegistryView>("index");
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [publicationError, setPublicationError] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [deleteCandidateId, setDeleteCandidateId] = useState("");
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const canCreate = canPerformModuleAction(
     session,
     "corrective-actions",
@@ -102,7 +110,7 @@ export function CorrectiveActionsModule({
   const rootCauseActions = useMemo(
     () => actions.filter(
       (action) =>
-        action.source !== "supplier" && canViewCorrectiveAction(session, action),
+        !action.deletedAt && action.source !== "supplier" && canViewCorrectiveAction(session, action),
     ),
     [actions, session],
   );
@@ -123,7 +131,7 @@ export function CorrectiveActionsModule({
         (listScope === "open" && action.status !== "closed") ||
         (listScope === "customer" && action.source === "customer") ||
         (listScope === "internal" && action.source === "internal") ||
-        (listScope === "system" && action.source === "audit");
+        (listScope === "system" && (action.source === "audit" || action.source === "sgc"));
       return matchesQuery && matchesStatus && matchesScope;
     });
   }, [listScope, query, rootCauseActions, statusFilter, today]);
@@ -152,11 +160,11 @@ export function CorrectiveActionsModule({
 
   const updateSelected = (changes: Partial<CorrectiveAction>) => {
     if (!selected || !canEditSelected) return;
-    onActionsChange(
-      actions.map((action) =>
-        action.id === selected.id ? { ...action, ...changes } : action,
-      ),
-    );
+    const updated = { ...selected, ...changes, portalVisible: selected.portalVisible && session.workspaceMode !== "demo" ? false : selected.portalVisible };
+    const apply = () => onActionsChange(actions.map(action => action.id === selected.id ? updated : action));
+    if (session.workspaceMode !== "demo" && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(updated.id) && updated.a3) {
+      void saveCorrectiveAction(updated).then(apply).catch(error => setPublicationError(error instanceof Error ? error.message : "No fue posible guardar los cambios."));
+    } else apply();
   };
 
   const requestAiAnalysis = async () => {
@@ -209,16 +217,18 @@ export function CorrectiveActionsModule({
     }
   };
 
-  const completeA3Analysis = (values: A3Submission) => {
+  const completeA3Analysis = async (values: A3Submission) => {
+    const year = today.slice(0, 4);
     const nextNumber =
       Math.max(
         0,
-        ...actions.map((action) => Number(action.folio.split("-").at(-1)) || 0),
+        ...actions.filter(action => action.folio.startsWith(`AC-${year}-`)).map((action) => Number(action.folio.split("-").at(-1)) || 0),
       ) + 1;
     const action: CorrectiveAction = {
       ...values,
+      a3: { ...values.a3, plans: values.a3.plans.map(plan => ({ ...plan, id: crypto.randomUUID() })) },
       id: crypto.randomUUID(),
-      folio: `AC-2026-${String(nextNumber).padStart(3, "0")}`,
+      folio: `AC-${year}-${String(nextNumber).padStart(3, "0")}`,
       createdAt: today,
       status: "action_plan",
       progress: 55,
@@ -226,14 +236,18 @@ export function CorrectiveActionsModule({
       rootCause: values.a3.rootCause,
       ownerId: session.authUserId,
       participantUserIds: [session.authUserId ?? session.userId],
+      relatedPartyId: values.relatedPartyId,
+      qualityCaseId: values.qualityCaseId,
+      portalVisible: false,
     };
 
+    if (session.workspaceMode !== "demo") await saveCorrectiveAction(action);
     onActionsChange([action, ...actions]);
     setSelectedId(action.id);
     setListScope(
       action.source === "customer"
         ? "customer"
-        : action.source === "audit"
+        : action.source === "audit" || action.source === "sgc"
           ? "system"
           : "internal",
     );
@@ -241,22 +255,47 @@ export function CorrectiveActionsModule({
     setRegistryView("report");
   };
 
+  const publishSelected = async () => {
+    if (!selected || !isAdministrator(session) || selected.source !== "customer") return;
+    setPublishing(true); setPublicationError("");
+    try {
+      await publishCorrectiveAction(selected);
+      onActionsChange(actions.map(action => action.id === selected.id ? { ...action, portalVisible: true } : action));
+    } catch (error) { setPublicationError(error instanceof Error ? error.message : "No fue posible publicar el análisis."); }
+    finally { setPublishing(false); }
+  };
+
+  const unpublishSelected = async () => {
+    if (!selected || !isAdministrator(session)) return;
+    setPublishing(true); setPublicationError("");
+    try {
+      await unpublishCorrectiveAction(selected.id);
+      onActionsChange(actions.map(action => action.id === selected.id ? { ...action, portalVisible: false } : action));
+    } catch (error) { setPublicationError(error instanceof Error ? error.message : "No fue posible retirar la publicación."); }
+    finally { setPublishing(false); }
+  };
+
+  const deleteCandidate = actions.find(action => action.id === deleteCandidateId);
+  const confirmDelete = async () => {
+    if (!deleteCandidate || !isAdministrator(session) || !deleteReason.trim()) return;
+    setDeleting(true); setDeleteError("");
+    try {
+      if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(deleteCandidate.id) && session.workspaceMode !== "demo") {
+        await softDeleteStoredCorrectiveAction(deleteCandidate.id, deleteReason.trim());
+      }
+      onActionsChange(actions.map(action => action.id === deleteCandidate.id ? {
+        ...action, deletedAt: new Date().toISOString(), deletedBy: session.authUserId ?? session.userId,
+        deletionReason: deleteReason.trim(), portalVisible: false,
+      } : action));
+      setDeleteCandidateId(""); setDeleteReason(""); setSelectedId(""); setRegistryView("index");
+    } catch (error) { setDeleteError(error instanceof Error ? error.message : "No fue posible borrar el análisis."); }
+    finally { setDeleting(false); }
+  };
+
   const selectListScope = (scope: CorrectiveListScope) => {
     setListScope(scope);
     setRegistryView("index");
   };
-
-  if (!selected) {
-    return (
-      <>
-        <section className="module-heading">
-          <div><p className="module-kicker">CAPA</p><h2>Root2Cause</h2><p>Acciones y análisis donde participas.</p></div>
-          {canCreate ? <button className="button button-primary" type="button" onClick={() => setWorkspaceView("a3")}><Plus size={17} /> Iniciar análisis A3</button> : null}
-        </section>
-        {workspaceView === "a3" && canCreate ? <A3AnalysisWorkbench onCancel={() => setWorkspaceView("lists")} onComplete={completeA3Analysis} /> : <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones asignadas</h3><p>No participas en acciones o análisis abiertos en este momento.</p></div>}
-      </>
-    );
-  }
 
   return (
     <>
@@ -312,7 +351,7 @@ export function CorrectiveActionsModule({
             <button className={listScope === "open" ? "active" : ""} type="button" onClick={() => selectListScope("open")}><ClipboardList size={18} /><span><strong>Acciones abiertas</strong><small>{rootCauseActions.filter((action) => action.status !== "closed").length} registros activos</small></span></button>
             <button className={listScope === "customer" ? "active" : ""} type="button" onClick={() => selectListScope("customer")}><ExternalLink size={18} /><span><strong>Externas / clientes</strong><small>{rootCauseActions.filter((action) => action.source === "customer").length} vinculadas al portal</small></span></button>
             <button className={listScope === "internal" ? "active" : ""} type="button" onClick={() => selectListScope("internal")}><UserRound size={18} /><span><strong>Internas</strong><small>{rootCauseActions.filter((action) => action.source === "internal").length} del proceso</small></span></button>
-            <button className={listScope === "system" ? "active" : ""} type="button" onClick={() => selectListScope("system")}><Building2 size={18} /><span><strong>Sistema de gestión</strong><small>{rootCauseActions.filter((action) => action.source === "audit").length} auditorías y SGC</small></span></button>
+            <button className={listScope === "system" ? "active" : ""} type="button" onClick={() => selectListScope("system")}><Building2 size={18} /><span><strong>Sistema de gestión</strong><small>{rootCauseActions.filter((action) => action.source === "audit" || action.source === "sgc").length} auditorías y SGC</small></span></button>
           </section>
 
           <section className={`corrective-registry-layout corrective-registry-${registryView}`}>
@@ -358,7 +397,7 @@ export function CorrectiveActionsModule({
                   key={action.id}
                   type="button"
                   className={`record-row ${
-                    selected.id === action.id ? "record-row-selected" : ""
+                    selected?.id === action.id ? "record-row-selected" : ""
                   }`}
                   onClick={() => {
                     setSelectedId(action.id);
@@ -395,10 +434,11 @@ export function CorrectiveActionsModule({
                 </button>
               );
             })}
+            {filteredActions.length === 0 ? <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones en este listado</h3><p>Usa otra pestaña o inicia un análisis A3.</p></div> : null}
           </div>
         </div> : null}
 
-        {registryView === "report" ? <article className="corrective-report-view">
+        {registryView === "report" && selected ? <article className="corrective-report-view">
           <A3ActionReport action={selected} onBack={() => setRegistryView("index")}>
             {canEditSelected ? <button className="button button-secondary" type="button">
               <Paperclip size={16} /> Adjuntar evidencia
@@ -415,7 +455,11 @@ export function CorrectiveActionsModule({
             >
               <CheckCircle2 size={16} /> Avanzar etapa
             </button>
+            {isAdministrator(session) && selected.source === "customer" ? <button className="button button-secondary" type="button" disabled={publishing || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "")} onClick={() => void (selected.portalVisible ? unpublishSelected() : publishSelected())}>{selected.portalVisible ? "Retirar del portal" : "Autorizar publicación"}</button> : null}
+            {isAdministrator(session) ? <button className="button button-secondary" type="button" onClick={() => { setDeleteCandidateId(selected.id); setDeleteReason(""); setDeleteError(""); }}><Trash2 size={16} /> Borrar</button> : null}
           </A3ActionReport>
+          {selected.source === "customer" && isAdministrator(session) && !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "") ? <p role="status">Para publicar, vincula primero un cliente real del catálogo.</p> : null}
+          {publicationError ? <p role="alert">{publicationError}</p> : null}
           <div className="ai-workbench">
             <div className="ai-workbench-heading">
               <div className="ai-icon">
@@ -480,8 +524,10 @@ export function CorrectiveActionsModule({
         <A3AnalysisWorkbench
           onCancel={() => setWorkspaceView("lists")}
           onComplete={completeA3Analysis}
+          session={session}
         />
       ) : null}
+      {deleteCandidate ? <div className="corrective-delete-backdrop" role="presentation"><section role="dialog" aria-modal="true" aria-label="Confirmar borrado de análisis"><h3>Borrar {deleteCandidate.folio}</h3><p>{deleteCandidate.title}</p><p>{deleteCandidate.problem}</p><p>Relaciones: {deleteCandidate.relatedPartyId ? "cliente vinculado; " : ""}{deleteCandidate.qualityCaseId ? "reclamación vinculada; " : ""}{deleteCandidate.a3?.plans.length ?? 0} acciones y {deleteCandidate.evidenceCount} evidencias. Se conservarán los archivos y el historial.</p><label>Motivo del borrado<input value={deleteReason} onChange={event => setDeleteReason(event.target.value)} required /></label>{deleteError ? <p role="alert">{deleteError}</p> : null}<div><button className="button button-secondary" type="button" onClick={() => setDeleteCandidateId("")}>Cancelar</button><button className="button button-primary" type="button" disabled={!deleteReason.trim() || deleting} onClick={() => void confirmDelete()}>{deleting ? "Guardando…" : "Confirmar borrado lógico"}</button></div></section></div> : null}
     </>
   );
 }

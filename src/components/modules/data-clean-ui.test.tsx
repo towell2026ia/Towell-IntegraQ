@@ -6,30 +6,34 @@ import { CorrectiveActionsModule } from "@/components/modules/corrective-actions
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { ManagementReviewModule } from "@/components/modules/management-review-module";
-import { demoCorrectiveActions, enrichSavedCorrectiveActions } from "@/lib/demo-data";
-import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
+import { demoCorrectiveActions, restoreInitialCorrectiveActions } from "@/lib/demo-data";
 import { appFormCatalog, normalizeAppForms } from "@/lib/form-data";
 import { editableModulePermissionGroups } from "@/lib/module-permissions";
 import { workspaceModuleMeta } from "@/lib/navigation";
 import { activeSession } from "@/lib/session-data";
 
-describe("módulos sin muestras al renderizar", () => {
-  it("muestra Root2Cause en navegación y encabezado sin las acciones antiguas", () => {
+describe("dashboard Root2Cause y módulos vacíos", () => {
+  it("restaura las cuatro pestañas incluso sin registros visibles", () => {
     expect(workspaceModuleMeta["corrective-actions"].label).toBe("Root2Cause");
     expect(editableModulePermissionGroups.find(group => group.moduleId === "corrective-actions")?.label).toBe("Root2Cause");
-    const saved = enrichSavedCorrectiveActions(demoCorrectiveActions);
-    const actions = withoutUnchangedSamples(saved, demoCorrectiveActions);
     const html = renderToStaticMarkup(createElement(CorrectiveActionsModule, {
-      actions, onActionsChange: vi.fn(), session: activeSession,
+      actions: [], onActionsChange: vi.fn(), session: activeSession,
     }));
     expect(html).toContain("<h2>Root2Cause</h2>");
-    expect(html).not.toMatch(/AC-2026-01[234]/);
+    for (const tab of ["Acciones abiertas", "Externas / clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
+    expect(html).toContain("Buscar acción");
+    expect(html).toContain("Filtrar por estado");
+    expect(html).toContain("Sin acciones en este listado");
+    expect(html).toContain("Acciones activas");
 
-    const realAction = { ...demoCorrectiveActions[0], title: "Acción real modificada" };
+    const restored = restoreInitialCorrectiveActions([]);
+    expect(restored.map(action => action.folio)).toEqual(demoCorrectiveActions.map(action => action.folio));
     const detail = renderToStaticMarkup(createElement(CorrectiveActionsModule, {
-      actions: [realAction], onActionsChange: vi.fn(), session: activeSession,
+      actions: restored, onActionsChange: vi.fn(), session: activeSession,
     }));
     expect(detail).toContain("<h2>Root2Cause</h2>");
+    expect(detail).toContain("AC-2026-014");
+    expect(detail).toContain("Externas / clientes");
   });
 
   it("presenta estados vacíos en Revisión, Mejora y Formularios", () => {

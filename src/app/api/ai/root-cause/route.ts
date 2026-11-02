@@ -11,6 +11,7 @@ import type {
 const validSources: CorrectiveActionSource[] = [
   "internal",
   "audit",
+  "sgc",
   "customer",
   "supplier",
 ];
@@ -34,6 +35,7 @@ function createDemoDraft(request: AiRootCauseRequest): AiRootCauseDraft {
   const sourceLabel = {
     internal: "una detección interna",
     audit: "un hallazgo de auditoría",
+    sgc: "un hallazgo del sistema de gestión",
     customer: "un reclamo de cliente",
     supplier: "un incumplimiento de proveedor",
   }[request.source];

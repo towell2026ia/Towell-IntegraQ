@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildInitialImprovementProjects, normalizeImprovementProjects } from "@/lib/continuous-improvement-data";
-import { demoCorrectiveActions, enrichSavedCorrectiveActions } from "@/lib/demo-data";
+import { demoCorrectiveActions, restoreInitialCorrectiveActions } from "@/lib/demo-data";
 import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { appFormCatalog } from "@/lib/form-data";
 import { validateHistoricalMinutes } from "@/lib/historical-minutes";
@@ -19,12 +19,15 @@ describe("limpieza conservadora de muestras", () => {
     expect(withoutUnchangedSamples(normalized, [...samples, ...normalized], ["createdAt", "updatedAt"])).toEqual([]);
   });
 
-  it("retira copias antiguas de Root2Cause aunque el navegador cambie el orden de campos", () => {
+  it("restaura los ejemplos de Root2Cause y conserva cambios de usuarios", () => {
     const stored = demoCorrectiveActions.map(action => Object.fromEntries(Object.entries(action).reverse()) as unknown as typeof action);
     const edited = { ...stored[0], title: "Caso real editado por un usuario" };
-    const clean = withoutUnchangedSamples(enrichSavedCorrectiveActions([...stored, edited]), demoCorrectiveActions);
-    expect(clean).toEqual([expect.objectContaining({ id: edited.id, title: edited.title })]);
-    expect(clean.map(action => action.folio)).toEqual(["AC-2026-014"]);
+    const restored = restoreInitialCorrectiveActions([edited, ...stored.slice(1)]);
+    expect(restored).toHaveLength(demoCorrectiveActions.length);
+    expect(restored[0]).toEqual(expect.objectContaining({ id: edited.id, title: edited.title }));
+    expect(restoreInitialCorrectiveActions([]).map(action => action.id)).toEqual(demoCorrectiveActions.map(action => action.id));
+    const deleted = { ...demoCorrectiveActions[1], deletedAt: "2026-11-02T00:00:00.000Z", deletionReason: "Decisión administrativa" };
+    expect(restoreInitialCorrectiveActions([deleted]).filter(action => action.id === deleted.id)).toEqual([deleted]);
   });
 
   it("conserva respuestas modificadas y mantiene las definiciones de formularios", () => {

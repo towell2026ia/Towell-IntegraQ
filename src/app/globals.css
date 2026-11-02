@@ -2324,6 +2324,11 @@ button:disabled {
 .historical-minutes-form input, .historical-minutes-form select { min-height: 35px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; }
 .historical-minutes-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgb(14 27 23 / 70%); }
 .historical-minutes-backdrop > section { width: min(1100px, 100%); max-height: 90vh; overflow: auto; padding: 12px; background: #fff; border-radius: 8px; }
+.corrective-delete-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgb(14 27 23 / 70%); }
+.corrective-delete-backdrop > section { width: min(540px, 100%); max-height: 90vh; overflow: auto; padding: 22px; background: #fff; border-radius: 8px; }
+.corrective-delete-backdrop label { display: grid; gap: 6px; margin: 14px 0; }
+.corrective-delete-backdrop input { min-height: 38px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; }
+.corrective-delete-backdrop > section > div { display: flex; justify-content: flex-end; gap: 10px; }
 .secure-preview-image .secure-preview-surface { min-width: 0; }
 .secure-preview-surface > img { display: block; max-width: min(100%, 1000px); max-height: 1400px; object-fit: contain; }
 .spin { animation: preview-spin 1s linear infinite; }
