@@ -101,9 +101,36 @@ describe("Root2Cause portal authorization", () => {
     expect(calls("corrective_actions", "update")).toHaveLength(0);
   });
 
+  it("blocks a foreign or unverified customer before creating or publishing an analysis", async () => {
+    for (const owner of [customerB, null]) {
+      state.calls = [];
+      state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
+      state.responses.organizations = [{ data: { id: customerA, owning_organization_id: owner }, error: null }];
+      const response = await POST(request("POST", { action: customerAction, publish: true }));
+      expect(response.status).toBe(403);
+      expect(calls("organizations", "eq")).toContainEqual({ table: "organizations", method: "eq", args: ["owning_organization_id", organizationId] });
+      expect(calls("corrective_actions", "insert")).toHaveLength(0);
+      expect(calls("corrective_actions", "update")).toHaveLength(0);
+    }
+  });
+
+  it("blocks an unverified customer schema or a claim from another organization", async () => {
+    state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
+    state.responses.organizations = [{ data: null, error: { code: "42703" } }];
+    expect((await POST(request("POST", { action: customerAction }))).status).toBe(409);
+    state.calls = [];
+    state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
+    state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
+    state.responses.quality_cases = [{ data: { id: customerB, organization_id: customerB }, error: null }];
+    const response = await POST(request("POST", { action: { ...customerAction, qualityCaseId: customerB }, publish: true }));
+    expect(response.status).toBe(403);
+    expect(calls("quality_cases", "eq")).toContainEqual({ table: "quality_cases", method: "eq", args: ["organization_id", organizationId] });
+    expect(calls("corrective_actions", "insert")).toHaveLength(0);
+  });
+
   it("does not publish merely because an administrator selects a real customer", async () => {
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
-    state.responses.organizations = [{ data: { id: customerA }, error: null }];
+    state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
     state.responses.corrective_actions = [{ data: null, error: null }, { data: null, error: null }];
     state.responses.corrective_action_a3 = [{ data: null, error: null }];
     state.responses.audit_log = [{ data: null, error: null }];
@@ -121,7 +148,7 @@ describe("Root2Cause portal authorization", () => {
       { data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null },
       { data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null },
     ];
-    state.responses.organizations = [{ data: { id: customerA }, error: null }];
+    state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
     state.responses.corrective_actions = [
       { data: null, error: null }, { data: null, error: null }, { data: { id: actionId }, error: null },
       { data: { id: actionId }, error: null },

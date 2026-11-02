@@ -9,6 +9,7 @@ export const maxDuration = 30;
 type Actor = {
   id: string;
   userType: "administrator" | "internal" | "customer" | "supplier";
+  organizationId: string | null;
   externalPartyId: string | null;
   externalSiteId: string | null;
   readableKinds: Array<"customer" | "supplier">;
@@ -39,7 +40,7 @@ async function getActor(): Promise<Actor | null> {
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
   if (!data.user) return null;
-  const profile = await supabase.from("profiles").select("user_type,status,external_party_id,external_site_id").eq("id", data.user.id).maybeSingle();
+  const profile = await supabase.from("profiles").select("user_type,status,organization_id,external_party_id,external_site_id").eq("id", data.user.id).maybeSingle();
   if (!profile.data || profile.data.status !== "active") return null;
   const userType = profile.data.user_type as Actor["userType"];
   let readableKinds: Actor["readableKinds"] = [];
@@ -56,6 +57,7 @@ async function getActor(): Promise<Actor | null> {
   return {
     id: data.user.id,
     userType,
+    organizationId: profile.data.organization_id,
     externalPartyId: profile.data.external_party_id,
     externalSiteId: profile.data.external_site_id,
     readableKinds,
@@ -65,15 +67,33 @@ async function getActor(): Promise<Actor | null> {
 async function listCompanies(actor: Actor) {
   if (!actor.readableKinds.length) return [];
   const admin = createAdminClient();
-  let companyQuery = admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at").in("kind", actor.readableKinds).order("name");
-  if (actor.userType === "customer" || actor.userType === "supplier") {
-    if (!actor.externalPartyId) return [];
-    companyQuery = companyQuery.eq("id", actor.externalPartyId);
-  }
-  const companiesResult = await companyQuery;
-  if (companiesResult.error) throw companiesResult.error;
-  const ids = (companiesResult.data ?? []).map((company) => company.id);
   const externalActor = actor.userType === "customer" || actor.userType === "supplier";
+  let companies: CompanyRow[];
+  if (externalActor) {
+    if (!actor.externalPartyId) return [];
+    const result = await admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at")
+      .in("kind", actor.readableKinds).eq("id", actor.externalPartyId).order("name");
+    if (result.error) throw result.error;
+    companies = (result.data ?? []) as CompanyRow[];
+  } else {
+    if (!actor.organizationId) return [];
+    companies = [];
+    if (actor.readableKinds.includes("customer")) {
+      const owned = await admin.from("organizations")
+        .select("id,code,name,kind,active,created_at,updated_at,owning_organization_id")
+        .eq("kind", "customer").eq("owning_organization_id", actor.organizationId).order("name");
+      if (owned.error && owned.error.code !== "42703") throw owned.error;
+      companies.push(...((owned.data ?? []) as (CompanyRow & { owning_organization_id: string | null })[])
+        .filter(company => company.owning_organization_id === actor.organizationId));
+    }
+    if (actor.readableKinds.includes("supplier")) {
+      const suppliers = await admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at")
+        .eq("kind", "supplier").order("name");
+      if (suppliers.error) throw suppliers.error;
+      companies.push(...((suppliers.data ?? []) as CompanyRow[]));
+    }
+  }
+  const ids = companies.map(company => company.id);
   let sitesQuery = admin
     .from("external_company_sites")
     .select("id,company_id,code,name,address,active,created_at,updated_at")
@@ -90,7 +110,7 @@ async function listCompanies(actor: Actor) {
   if (profilesResult.error) throw profilesResult.error;
   const categories = new Map((profilesResult.data ?? []).map((profile) => [profile.organization_id, profile.category ?? undefined]));
   const sites = (sitesResult.data ?? []) as SiteRow[];
-  return ((companiesResult.data ?? []) as CompanyRow[]).map((company) => mapCompany(company, sites.filter((site) => site.company_id === company.id), categories.get(company.id)));
+  return companies.map((company) => mapCompany(company, sites.filter((site) => site.company_id === company.id), categories.get(company.id)));
 }
 
 export async function GET() {

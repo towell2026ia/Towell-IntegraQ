@@ -10,7 +10,7 @@
 
 | Perfil | Consulta | Escritura por API | Escritura directa por Supabase |
 |---|---|---|---|
-| Administrador activo | Expedientes de su organización por API | Permitida dentro de su organización | Escritura limitada a su organización tras aplicar RLS; SELECT directo entre organizaciones requiere revisión adicional |
+| Administrador activo | Expedientes de su organización por API y, tras aplicar la propuesta, por Supabase directo | Permitida dentro de su organización | SELECT y escritura limitados a su organización tras aplicar RLS |
 | Interno con `corrective-actions:view` | Expedientes de su organización, limitados a procesos asignados; los sin proceso son de alcance organizacional | Denegada | Denegada tras aplicar RLS |
 | Interno sin consulta | Denegada | Denegada | Denegada |
 | Cliente A | Sólo resumen de análisis de reclamaciones `source=customer`, publicados expresamente para el ID real de A mediante Portal de Clientes | Denegada | Sólo expedientes de A publicados; adjuntos Root2Cause denegados |
@@ -23,15 +23,17 @@ La interfaz interna consulta mediante `/api/root2cause/internal-actions`, que co
 
 `20261102190001_root2cause_admin_writes.sql` agrega políticas `AS RESTRICTIVE` para INSERT, UPDATE y DELETE sobre el expediente, sus tablas hijas y metadatos de archivos etiquetados para Root2Cause. También restringe SELECT de esos metadatos a usuarios internos y administradores: la publicación de un resumen no publica automáticamente evidencias. Estas políticas se combinan por AND con las permisivas existentes, incluidas las de tipo `ALL`. No cambia SELECT de expedientes ni de archivos de otros módulos, asignaciones o filas. Las funciones auxiliares son `SECURITY INVOKER`; sus comprobaciones de escritura exigen administrador activo y organización del expediente.
 
-**Bloqueo para aceptación:** la migración no se ejecutó. Las pruebas de solicitudes directas con cuentas reales y la aceptación visual permanecen pendientes de un entorno aislado y autorización de aplicación. Hasta entonces, los permisos antiguos de Supabase siguen vigentes. El build y los mocks no equivalen a una prueba RLS productiva.
+`20261102210001_root2cause_select_organization_scope.sql` agrega una concesión SELECT permisiva para los usuarios internos con `view` y proceso autorizado, seguida de políticas SELECT restrictivas para el expediente y sus tablas hijas. La comprobación de administrador también compara la organización del perfil con la del expediente. Los metadatos `file_objects` y los objetos Storage asociados se limitan al expediente autorizado, incluidos originales y vistas previas; otros módulos siguen sus reglas existentes. Las políticas restrictivas sobre `organizations` y `quality_cases` exigen titularidad explícita de clientes y reclamaciones para usuarios internos. Las condiciones del Portal de Clientes siguen en las políticas existentes para cuentas externas.
+
+**Bloqueo para aceptación:** ninguna de las migraciones propuestas se ejecutó. Las pruebas de solicitudes directas con cuentas reales y la aceptación visual permanecen pendientes de un entorno aislado y autorización de aplicación. Hasta entonces, los permisos antiguos de Supabase siguen vigentes. El build y los mocks no equivalen a una prueba RLS productiva.
 
 ## Compatibilidad con PR #19 — revisión estática
 
-Orden previsto, sin ejecución: `20261102170852_admin_delete_guard.sql` (PR #19), `20261102190001_root2cause_admin_writes.sql` (PR #20), `20261102200001_general_information_external_read_guard.sql` (PR #20). Los nombres de políticas no colisionan. Las dos primeras actúan sobre `corrective_actions`, A3, planes, participantes, revisiones de eficacia y `file_objects`; la tercera limita la lectura de Información General para externos.
+Orden previsto, sin ejecución: `20261102170852_admin_delete_guard.sql` (PR #19), `20261102190001_root2cause_admin_writes.sql` (PR #20), `20261102200001_general_information_external_read_guard.sql` (PR #20), `20261102210001_root2cause_select_organization_scope.sql` (PR #20). La última depende de las columnas anulables de titularidad añadidas por PR #19. Los nombres de políticas no colisionan. Ninguna migración asigna titularidad a registros históricos.
 
 | Operación | PR #19 | PR #20 | Resultado combinado esperado |
 |---|---|---|---|
-| SELECT de análisis | Sin política restrictiva nueva | Sin política restrictiva nueva | Ruta interna filtra organización/proceso; RLS del portal exige `source=customer`, `portal_visible`, tipo cliente, empresa vinculada y permiso `portal_clientes.acceder` |
+| SELECT de análisis e hijos | Sin política restrictiva nueva | Nueva concesión SELECT para internos con `view` y proceso, combinada con restricción de organización para internos y administradores | Consultas directas de otro ámbito denegadas; RLS del portal conserva sus condiciones de publicación por empresa |
 | SELECT de metadatos de archivos Root2Cause | Sin política restrictiva nueva | Restrictiva sólo para etiquetas Root2Cause; externa denegada | Clientes y proveedores no obtienen evidencias internas por solicitudes directas; el resumen compartido sigue disponible |
 | INSERT/UPDATE de expediente e hijos | Trigger exige administrador para cambiar metadatos de retiro | Políticas restrictivas exigen administrador activo de la organización | Administrador conserva gestión; internos no escriben directamente |
 | DELETE físico de expediente, hijos y `file_objects` | `USING (false)` restrictivo | Exige administrador en su organización para Root2Cause | Denegado para todos los roles autenticados por el AND de PR #19; el borrado lógico por API sigue usando autorización explícita |
@@ -39,6 +41,7 @@ Orden previsto, sin ejecución: `20261102170852_admin_delete_guard.sql` (PR #19)
 | INSERT/UPDATE de adjuntos Root2Cause | Sin restricción nueva | Administrador activo; si existe `resource_id`, debe pertenecer a su organización | Carga administrativa sin identificador vinculado posible; vinculación de un expediente ajeno denegada |
 | Marcas de ejemplos en `workspace_data` | Administrador, ámbito e historial protegidos | Sin política nueva | Endpoint y trazabilidad de retiro preservados; el catálogo productivo sólo muestra expedientes reales del servidor |
 | SELECT de Información General y Storage | Sin política nueva | Nueva función de alcance y políticas restrictivas para carpetas, metadatos y objetos originales/vistas previas | Clientes y proveedores no consultan directamente documentos internos; otros tipos de archivo conservan sus políticas |
+| SELECT de catálogo de clientes y reclamaciones | Añade `owning_organization_id` y `quality_cases.organization_id` anulables | API con credenciales privilegiadas filtra ambos IDs; RLS restrictiva deniega a internos los registros sin titularidad comprobada o de otra organización | No se infiere ni cambia la titularidad histórica; clientes conocidos sin vínculo explícito quedan bloqueados |
 
 ## Separación de portales — comprobación estática
 
@@ -50,7 +53,7 @@ Orden previsto, sin ejecución: `20261102170852_admin_delete_guard.sql` (PR #19)
 | Cliente B / intentar consultar A | Portal de Clientes de B | GET usa ID B de la sesión y filtra de nuevo la respuesta | La comparación de compañía y tipo deniega A | Denegado |
 | Proveedor / intentar Portal de Clientes o Root2Cause | Portal de Proveedores | GET de publicaciones exige usuario `Cliente`; rutas internas y de escritura también lo deniegan | Alcance `customer` no coincide con perfil `supplier`; archivos Root2Cause denegados por propuesta restrictiva | Denegado; expedientes propios de proveedor intactos |
 
-Un análisis externo requiere un UUID existente y activo del catálogo de clientes. Cuando se vincula una reclamación, el API comprueba que pertenece al mismo cliente. `portal_visible` se guarda en `false` por defecto; únicamente la acción explícita de publicación del administrador lo activa. La retirada la ejecuta PATCH con autorización administrativa. Los análisis internos y del sistema de gestión no se publican en ninguno de los dos portales.
+Un análisis externo requiere un UUID existente y activo del catálogo de clientes con `owning_organization_id` igual a la organización del administrador. Cuando se vincula una reclamación, el API exige además `quality_cases.organization_id` igual a esa organización y comprueba el ID del cliente. Si faltan las columnas o la titularidad, la operación queda bloqueada. `portal_visible` se guarda en `false` por defecto; únicamente la acción explícita de publicación del administrador lo activa. La retirada la ejecuta PATCH con autorización administrativa. Los análisis internos y del sistema de gestión no se publican en ninguno de los dos portales.
 
 La ruta de Portal de Clientes usa el cliente Supabase autenticado. El endpoint interno usa credenciales privilegiadas, pero comprueba tipo de usuario, permiso, organización y proceso antes de consultar y responder. La RLS de `file_objects` anterior permitía SELECT genérico de archivos etiquetados Root2Cause según audiencia o cargador; la política restrictiva propuesta cierra ese acceso externo sin afectar archivos de proveedores. La navegación de cuentas externas se limita a su portal respectivo. Ninguna de estas comprobaciones está validada con cuentas reales hasta aplicar la migración en un entorno aislado.
 
@@ -64,11 +67,11 @@ La ruta de Portal de Clientes usa el cliente Supabase autenticado. El endpoint i
 
 **Riesgos y pruebas pendientes:**
 
-1. Probar en entorno aislado las tres migraciones en ese orden. Confirmar que los helpers de PR #20 consultan el expediente padre bajo RLS y que las políticas permisivas `ALL` no reabren escritura ni lectura externa.
+1. Probar en entorno aislado las cuatro migraciones en ese orden. Confirmar que los helpers de PR #20 consultan el expediente padre bajo RLS y que las políticas permisivas `ALL` no reabren escritura ni lectura externa.
 2. Ejecutar PostgREST directo como administrador de la organización, administrador ajeno, interno con y sin `view`, cliente y proveedor: SELECT, INSERT, UPDATE, DELETE, publicación y adjuntos. Comprobar que el borrado lógico administrativo conserva A3, planes, evidencias y auditoría.
 3. Probar `file_objects` y Storage con originales y vistas previas de Información General como Cliente A, Cliente B, Proveedor, interno y administrador; repetir carga, reemplazo, lectura y descarga de Información Documentada, Indicadores, Revisión por la Dirección y Proveedores. El DELETE físico de `file_objects` quedará denegado por PR #19 a usuarios autenticados; revisar cualquier limpieza heredada que no use `service_role`.
 4. Comprobar con sesión real el dashboard y sus cuatro listas para administrador e interno con permiso; recargar y volver a iniciar sesión. Validar portal de Cliente A frente a Cliente B y proveedor sin acceso.
-5. Revisar las rutas privilegiadas `internal-actions`, `published-actions` y `root2cause/customers` con perfiles activos y pertenencia organizacional. La lista de clientes usa el catálogo externo global; si se incorpora más de una organización interna, falta una relación de titular verificada antes de filtrar ese catálogo.
-6. La política SELECT heredada de Root2Cause usa `is_administrator()` sin comparar la organización del expediente en consultas directas. La API sí filtra organización. Comprobar y cerrar ese alcance antes de afirmar aislamiento administrativo directo entre organizaciones.
+5. Las columnas `organizations.owning_organization_id` y `quality_cases.organization_id` aún no existen en el esquema productivo consultado de sólo lectura. Tras aplicar PR #19 en un entorno autorizado, los valores históricos seguirán nulos. Verificar titularidad con fuente aprobada antes de asignarlos individualmente; mientras tanto, el catálogo interno no muestra esos clientes y Root2Cause bloquea su vinculación. No ejecutar un relleno automático.
+6. Probar SELECT directo sobre expediente, A3, planes, participantes, revisiones, metadatos y Storage como administrador de otra organización. La propuesta lo deniega, pero no hay prueba con RLS ejecutada. Revisar también rutas privilegiadas y operaciones del maestro externo fuera de Root2Cause antes de declarar aislamiento general de la plataforma.
 
 La revisión usó Git y archivos versionados; **no ejecutó SQL productivo ni aplicó migraciones**.
