@@ -266,8 +266,9 @@ export function IntegraQWorkspace({
         const savedAudits = window.localStorage.getItem("integraq.auditOccurrences.v1");
         if (savedActions) {
           setActions(
-            enrichSavedCorrectiveActions(
-              withoutUnchangedSamples(JSON.parse(savedActions) as CorrectiveAction[], demoCorrectiveActions),
+            withoutUnchangedSamples(
+              enrichSavedCorrectiveActions(JSON.parse(savedActions) as CorrectiveAction[]),
+              demoCorrectiveActions,
             ),
           );
         }

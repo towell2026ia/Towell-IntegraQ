@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildInitialImprovementProjects, normalizeImprovementProjects } from "@/lib/continuous-improvement-data";
-import { demoCorrectiveActions } from "@/lib/demo-data";
+import { demoCorrectiveActions, enrichSavedCorrectiveActions } from "@/lib/demo-data";
 import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { appFormCatalog } from "@/lib/form-data";
 import { validateHistoricalMinutes } from "@/lib/historical-minutes";
@@ -17,6 +17,14 @@ describe("limpieza conservadora de muestras", () => {
     const normalized = normalizeImprovementProjects(samples);
     expect(withoutUnchangedSamples(samples, [...samples, ...normalized], ["createdAt", "updatedAt"])).toEqual([]);
     expect(withoutUnchangedSamples(normalized, [...samples, ...normalized], ["createdAt", "updatedAt"])).toEqual([]);
+  });
+
+  it("retira copias antiguas de Root2Cause aunque el navegador cambie el orden de campos", () => {
+    const stored = demoCorrectiveActions.map(action => Object.fromEntries(Object.entries(action).reverse()) as unknown as typeof action);
+    const edited = { ...stored[0], title: "Caso real editado por un usuario" };
+    const clean = withoutUnchangedSamples(enrichSavedCorrectiveActions([...stored, edited]), demoCorrectiveActions);
+    expect(clean).toEqual([expect.objectContaining({ id: edited.id, title: edited.title })]);
+    expect(clean.map(action => action.folio)).toEqual(["AC-2026-014"]);
   });
 
   it("conserva respuestas modificadas y mantiene las definiciones de formularios", () => {

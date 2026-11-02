@@ -101,7 +101,7 @@ export const editableModulePermissionGroups: ModulePermissionGroup[] = [
   },
   {
     moduleId: "corrective-actions",
-    label: "Root2Cause, NC y CAPA",
+    label: "Root2Cause",
     capabilities: [
       { action: "view", label: "Consultar asignadas", description: "Ve únicamente acciones y análisis donde participa." },
       { action: "create", label: "Abrir acción", description: "Inicia una nueva acción correctiva." },
