@@ -269,7 +269,7 @@ function ProjectPortfolio({ projects, scopedProjects, selectedProjectId, canFoll
               <td><button className="icon-button" title="Abrir proyecto" type="button" onClick={() => onSelect(project.id)}><ArrowRight size={15} /></button></td>
             </tr>;
           })}
-        </tbody></table>{visibleProjects.length === 0 ? <div className="continuous-no-results"><Search size={22} /><strong>Sin proyectos</strong><span>Ajusta los filtros para ampliar la búsqueda.</span></div> : null}</div>
+        </tbody></table>{visibleProjects.length === 0 ? <div className="continuous-no-results"><Search size={22} /><strong>Sin proyectos</strong><span>{projects.length === 0 ? "No hay proyectos registrados. Crea uno nuevo." : "Ajusta los filtros para ampliar la búsqueda."}</span></div> : null}</div>
       </section>
       {selectedProject ? <ProjectDetail key={selectedProject.id} canFollowUp={canFollowUp} documentAdministrator={documentAdministrator} manager={manager} project={selectedProject} onChange={updateProject} /> : null}
     </div>

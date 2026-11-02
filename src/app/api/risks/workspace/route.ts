@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { authorize } from "@/lib/access/authorize";
 import { processCatalog } from "@/lib/configuration-data";
-import { buildInitialRiskWorkspace, type RiskWorkspaceState } from "@/lib/risk-opportunity-data";
+import { buildEmptyRiskWorkspace, type RiskWorkspaceState } from "@/lib/risk-opportunity-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
@@ -24,13 +24,13 @@ async function requireInternalActor(): Promise<Actor | null> {
   return { id: userData.user.id, userType: profile.user_type as Actor["userType"] };
 }
 
-async function ensureWorkspace(actor: Actor) {
+async function ensureWorkspace(actor: Actor, createIfMissing = false) {
   const admin = createAdminClient();
   const definitionResult = await admin.from("form_definitions").select("id").eq("registration_number", registrationNumber).maybeSingle();
   if (definitionResult.error) throw definitionResult.error;
   let definition = definitionResult.data;
   if (!definition) {
-    if (actor.userType !== "administrator") return null;
+    if (!createIfMissing || actor.userType !== "administrator") return null;
     const created = await admin.from("form_definitions").insert({ registration_number: registrationNumber, name: "Matriz base de Dirección · Riesgos y oportunidades 2025", process_id: "P-03", version: 1, status: "active", source_type: "excel", created_by: actor.id }).select("id").single();
     if (created.error) throw created.error;
     definition = created.data;
@@ -39,8 +39,8 @@ async function ensureWorkspace(actor: Actor) {
   if (recordResult.error) throw recordResult.error;
   let record = recordResult.data;
   if (!record) {
-    if (actor.userType !== "administrator") return null;
-    const created = await admin.from("form_records").insert({ form_id: definition.id, record_number: recordNumber, status: "active", values: buildInitialRiskWorkspace(), created_by: actor.id }).select("id,values,updated_at").single();
+    if (!createIfMissing || actor.userType !== "administrator") return null;
+    const created = await admin.from("form_records").insert({ form_id: definition.id, record_number: recordNumber, status: "active", values: buildEmptyRiskWorkspace(), created_by: actor.id }).select("id,values,updated_at").single();
     if (created.error) throw created.error;
     record = created.data;
   }
@@ -62,7 +62,7 @@ export async function GET() {
     const access = authorize({ user: session, permission: "risks.read", record: { processId: representativeProcessId } });
     if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const record = await ensureWorkspace(actor);
-    if (!record) return NextResponse.json({ error: "La matriz base aún no ha sido inicializada por Dirección." }, { status: 404 });
+    if (!record) return NextResponse.json({ state: buildEmptyRiskWorkspace(), updatedAt: null, storage: "supabase" });
     return NextResponse.json({ state: record.values, updatedAt: record.updated_at, storage: "supabase" });
   } catch (error) {
     console.error("No fue posible consultar la matriz base de riesgos.", error);
@@ -80,7 +80,7 @@ export async function PUT(request: Request) {
     if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { state?: unknown };
     if (!isWorkspaceState(payload.state)) return NextResponse.json({ error: "La matriz enviada no tiene una estructura válida." }, { status: 400 });
-    const record = await ensureWorkspace(actor);
+    const record = await ensureWorkspace(actor, true);
     if (!record) return NextResponse.json({ error: "No fue posible inicializar la matriz." }, { status: 500 });
     const admin = createAdminClient();
     let nextState = payload.state;
@@ -125,7 +125,7 @@ export async function POST(request: Request) {
     if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
     const payload = await request.json() as { action?: string };
     if (payload.action !== "start_analysis") return NextResponse.json({ error: "Acción no reconocida." }, { status: 400 });
-    const record = await ensureWorkspace(actor);
+    const record = await ensureWorkspace(actor, true);
     if (!record || !isWorkspaceState(record.values)) return NextResponse.json({ error: "La matriz base no está disponible." }, { status: 500 });
     const admin = createAdminClient();
     const state: RiskWorkspaceState = { ...record.values, cycleStatus: "active" };

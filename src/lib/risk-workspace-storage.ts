@@ -8,7 +8,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
 
 export async function loadRiskWorkspace() {
   const response = await fetch("/api/risks/workspace", { cache: "no-store" });
-  return parseResponse<{ state: RiskWorkspaceState; updatedAt: string; storage: "supabase" }>(response);
+  return parseResponse<{ state: RiskWorkspaceState; updatedAt: string | null; storage: "supabase" }>(response);
 }
 
 export async function saveRiskWorkspace(state: RiskWorkspaceState) {
