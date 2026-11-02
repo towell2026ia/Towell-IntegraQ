@@ -31,6 +31,9 @@ export interface AttachmentRecord {
   createdAt: string;
   deletedAt: string | null;
   deletedBy: string | null;
+  displayName: string | null;
+  validFrom: string | null;
+  description: string | null;
 }
 
 interface AttachmentScope {
@@ -43,7 +46,8 @@ interface AttachmentScope {
 export async function listAttachments(scope: AttachmentScope, includeHistory = false) {
   let query = createClient()
     .from("file_objects")
-    .select("id,bucket_id,object_path,original_name,mime_type,size_bytes,module_id,process_id,resource_type,resource_key,category,version,is_current,replaces_file_id,preview_path,preview_status,preview_generated_at,preview_error,uploaded_by,created_at,deleted_at,deleted_by")
+    .select("id,bucket_id,object_path,original_name,mime_type,size_bytes,module_id,process_id,resource_type,resource_key,category,version,is_current,replaces_file_id,preview_path,preview_status,preview_generated_at,preview_error,uploaded_by,created_at,deleted_at,deleted_by,display_name,valid_from,description")
+    .eq("module_id", scope.moduleId)
     .eq("resource_type", scope.resourceType)
     .eq("resource_key", scope.resourceKey)
     .order("created_at", { ascending: false });
@@ -53,10 +57,20 @@ export async function listAttachments(scope: AttachmentScope, includeHistory = f
   return (data ?? []).map(mapAttachment);
 }
 
+export async function listModuleAttachments(moduleId: WorkspaceModuleId, resourceType: string) {
+  const { data, error } = await createClient().from("file_objects")
+    .select("id,bucket_id,object_path,original_name,mime_type,size_bytes,module_id,process_id,resource_type,resource_key,category,version,is_current,replaces_file_id,preview_path,preview_status,preview_generated_at,preview_error,uploaded_by,created_at,deleted_at,deleted_by,display_name,valid_from,description")
+    .eq("module_id", moduleId).eq("resource_type", resourceType).is("deleted_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return (data ?? []).map(mapAttachment);
+}
+
 export async function uploadAttachment(
   scope: AttachmentScope,
   file: File,
   replace?: AttachmentRecord,
+  metadata?: { displayName: string; validFrom: string; description: string },
 ) {
   if (!file.size || file.size > maximumSize) {
     throw new Error("El archivo debe pesar entre 1 byte y 50 MB.");
@@ -122,6 +136,7 @@ export async function uploadAttachment(
     replaces_file_id: replace?.id ?? null,
     preview_status: previewStatus,
     uploaded_by: userData.user.id,
+    ...(metadata ? { display_name: metadata.displayName, valid_from: metadata.validFrom, description: metadata.description } : {}),
   }).select("id").single();
 
   if (result.error) {
@@ -182,6 +197,9 @@ function mapAttachment(row: Record<string, unknown>): AttachmentRecord {
     createdAt: String(row.created_at),
     deletedAt: row.deleted_at == null ? null : String(row.deleted_at),
     deletedBy: row.deleted_by == null ? null : String(row.deleted_by),
+    displayName: row.display_name == null ? null : String(row.display_name),
+    validFrom: row.valid_from == null ? null : String(row.valid_from),
+    description: row.description == null ? null : String(row.description),
   };
 }
 

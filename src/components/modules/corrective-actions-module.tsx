@@ -250,7 +250,7 @@ export function CorrectiveActionsModule({
     return (
       <>
         <section className="module-heading">
-          <div><p className="module-kicker">CAPA / Root2Cause</p><h2>Root2Cause y acciones correctivas</h2><p>Acciones y análisis donde participas.</p></div>
+          <div><p className="module-kicker">CAPA</p><h2>Root2Cause</h2><p>Acciones y análisis donde participas.</p></div>
           {canCreate ? <button className="button button-primary" type="button" onClick={() => setWorkspaceView("a3")}><Plus size={17} /> Iniciar análisis A3</button> : null}
         </section>
         {workspaceView === "a3" && canCreate ? <A3AnalysisWorkbench onCancel={() => setWorkspaceView("lists")} onComplete={completeA3Analysis} /> : <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones asignadas</h3><p>No participas en acciones o análisis abiertos en este momento.</p></div>}
@@ -262,8 +262,8 @@ export function CorrectiveActionsModule({
     <>
       <section className="module-heading">
         <div>
-          <p className="module-kicker">CAPA / Root2Cause</p>
-          <h2>Root2Cause y acciones correctivas</h2>
+          <p className="module-kicker">CAPA</p>
+          <h2>Root2Cause</h2>
           <p>
             Listados por origen y análisis A3 desde la detección hasta la eficacia.
           </p>

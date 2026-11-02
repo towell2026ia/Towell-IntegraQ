@@ -230,8 +230,13 @@ export function buildInitialRiskWorkspace(): RiskWorkspaceState {
   };
 }
 
-export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null | undefined): RiskWorkspaceState {
+export function buildEmptyRiskWorkspace(): RiskWorkspaceState {
   const baseline = buildInitialRiskWorkspace();
+  return { ...baseline, swotItems: [], risks: [], actions: [], contributions: [], importIssues: [], directionCandidates: [] };
+}
+
+export function normalizeRiskWorkspace(value: Partial<RiskWorkspaceState> | null | undefined): RiskWorkspaceState {
+  const baseline = buildEmptyRiskWorkspace();
   if (!value) return baseline;
   return {
     ...baseline,

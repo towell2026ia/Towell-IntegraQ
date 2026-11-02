@@ -249,7 +249,7 @@ export function buildManagementReviewContext(
     },
     {
       id: "root2cause",
-      label: "Root2Cause, NC y CAPA",
+      label: "Root2Cause",
       status: "connected",
       recordCount: actionsInPeriod.length,
       summary: `${openActions.length} acciones permanecen abiertas; ${overdueActions.length} están vencidas y ${sources.actions.length - openActions.length} fueron cerradas.`,
@@ -438,7 +438,7 @@ function buildClosedDemoReview(year: number): ManagementReviewRecord {
     "Riesgos y oportunidades",
     "Objetivos e indicadores",
     "Auditorías",
-    "Root2Cause, NC y CAPA",
+    "Root2Cause",
     "Calidad de proveedores",
     "Calidad de clientes",
     "Calibración y verificación",

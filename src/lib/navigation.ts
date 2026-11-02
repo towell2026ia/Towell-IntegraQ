@@ -39,7 +39,7 @@ export const workspaceModuleMeta: Record<WorkspaceModuleId, WorkspaceModuleMeta>
   indicators: { label: "Objetivos e indicadores", breadcrumb: "Operación", status: "Disponible" },
   audits: { label: "Auditorías", breadcrumb: "Operación", status: "Disponible" },
   "audit-app": { label: "App de auditorías", breadcrumb: "Operación", status: "Pendiente" },
-  "corrective-actions": { label: "Root2Cause, NC y CAPA", breadcrumb: "Operación", status: "Disponible" },
+  "corrective-actions": { label: "Root2Cause", breadcrumb: "Operación", status: "Disponible" },
   customers: { label: "Gestión de calidad de clientes", breadcrumb: "Operación", status: "Disponible" },
   "customer-portal": { label: "Portal del cliente", breadcrumb: "Portales", status: "Disponible" },
   suppliers: { label: "Gestión de calidad de proveedores", breadcrumb: "Operación", status: "Disponible" },

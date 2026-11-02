@@ -37,6 +37,8 @@ import {
   type ManagementReviewRecord,
   type ManagementReviewSources,
 } from "@/lib/management-review-data";
+import { ManagementReviewMinutes } from "./management-review-minutes";
+import type { ActiveSession } from "@/lib/session-data";
 
 interface ManagementReviewModuleProps {
   sources: ManagementReviewSources;
@@ -190,6 +192,7 @@ export function ManagementReviewModule({
         onOpen={(id) => setSelectedId(id)}
         periodLabel={period.label}
         records={records}
+        session={sources.session}
       />
     );
   }
@@ -484,6 +487,7 @@ function ManagementReviewIndex({
   onOpen,
   periodLabel,
   records,
+  session,
 }: {
   currentRecord: ManagementReviewRecord | null;
   error: string;
@@ -493,6 +497,7 @@ function ManagementReviewIndex({
   onOpen: (id: string) => void;
   periodLabel: string;
   records: ManagementReviewRecord[];
+  session: ActiveSession;
 }) {
   const orderedRecords = [...records].sort((left, right) => right.period.year - left.period.year);
   const closedCount = records.filter((record) => record.status === "operations_approved").length;
@@ -555,14 +560,12 @@ function ManagementReviewIndex({
                   </tr>
                 );
               })}
+              {!orderedRecords.length ? <tr><td colSpan={7}>No hay revisiones registradas. Puedes generar la revisión actual o adjuntar un acta histórica.</td></tr> : null}
             </tbody>
           </table>
         </div>
-        <footer className="management-history-note">
-          <AlertCircle size={15} />
-          <span>Los expedientes 2024 y 2025 son referencias demostrativas hasta importar las actas oficiales.</span>
-        </footer>
       </section>
+      <ManagementReviewMinutes session={session} />
     </div>
   );
 }

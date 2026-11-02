@@ -578,7 +578,7 @@ export function buildHomeDashboard(
     },
     {
       id: "corrective-actions",
-      label: "Acciones correctivas",
+      label: "Root2Cause",
       value: `${openActions.length} abiertas`,
       detail: `${overdueActions.length} vencidas`,
       tone: overdueActions.length > 0 ? "danger" : "warning",
@@ -669,7 +669,7 @@ export function buildHomeDashboard(
     },
     {
       id: "action-trend",
-      label: "Acciones correctivas",
+      label: "Root2Cause",
       detail: "Estado actual",
       module: "corrective-actions",
       series: [

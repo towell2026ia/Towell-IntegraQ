@@ -2319,6 +2319,11 @@ button:disabled {
 .secure-sheet-content p { margin: 9px 2px 2px; color: #765b15; font-size: calc(8px * var(--app-text-scale, 1)); }
 .app-appearance-error { position: fixed; right: 12px; bottom: 12px; z-index: 1000; max-width: min(420px, calc(100vw - 24px)); padding: 10px 12px; border: 1px solid #e5b2ac; border-radius: 7px; background: #fff3f0; color: #842d27; font-size: calc(11px * var(--app-text-scale, 1)); box-shadow: var(--shadow); }
 .app-appearance-error button { margin-left: 8px; border: 0; background: transparent; color: inherit; font-weight: 800; text-decoration: underline; }
+.historical-minutes-form { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; padding: 14px; }
+.historical-minutes-form label { display: grid; min-width: 130px; flex: 1 1 150px; gap: 5px; font-size: calc(9px * var(--app-text-scale, 1)); }
+.historical-minutes-form input, .historical-minutes-form select { min-height: 35px; padding: 6px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff; }
+.historical-minutes-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgb(14 27 23 / 70%); }
+.historical-minutes-backdrop > section { width: min(1100px, 100%); max-height: 90vh; overflow: auto; padding: 12px; background: #fff; border-radius: 8px; }
 .secure-preview-image .secure-preview-surface { min-width: 0; }
 .secure-preview-surface > img { display: block; max-width: min(100%, 1000px); max-height: 1400px; object-fit: contain; }
 .spin { animation: preview-spin 1s linear infinite; }
