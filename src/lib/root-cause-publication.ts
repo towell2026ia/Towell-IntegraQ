@@ -50,3 +50,25 @@ export async function softDeleteStoredCorrectiveAction(id: string, reason: strin
   await responseBody<{ ok: true }>(response);
   return true;
 }
+
+export interface RetiredDemoCorrectiveAction {
+  id: string;
+  folio: string;
+  deletedAt: string;
+  deletedBy: string;
+  reason: string;
+}
+
+export async function loadRetiredDemoCorrectiveActions(): Promise<RetiredDemoCorrectiveAction[]> {
+  const response = await fetch("/api/root2cause/demo-retirements", { cache: "no-store" });
+  const body = await responseBody<{ retirements: RetiredDemoCorrectiveAction[] }>(response);
+  return body.retirements;
+}
+
+export async function softDeleteDemoCorrectiveAction(id: string, reason: string): Promise<RetiredDemoCorrectiveAction> {
+  const response = await fetch("/api/root2cause/demo-retirements", {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, reason }),
+  });
+  const body = await responseBody<{ retirement: RetiredDemoCorrectiveAction }>(response);
+  return body.retirement;
+}

@@ -43,6 +43,9 @@ export interface RiskAssessment {
 
 export interface RiskRecord {
   id: string;
+  deletedAt?: string;
+  deletedBy?: string;
+  deletionReason?: string;
   kind: RiskKind;
   processId: string;
   cycle: number;
@@ -58,6 +61,12 @@ export interface RiskRecord {
   initial: RiskAssessment;
   latest?: RiskAssessment;
   source: string;
+}
+
+export interface AdministrativeDeletionMark {
+  deletedAt?: string;
+  deletedBy?: string;
+  deletionReason?: string;
 }
 
 export interface RiskAction {
@@ -97,7 +106,7 @@ export interface CrossContribution {
   linkedSwotItemId?: string;
 }
 
-export interface StrategicAxis {
+export interface StrategicAxis extends AdministrativeDeletionMark {
   id: string;
   title: string;
   originalTarget: string;
@@ -115,7 +124,7 @@ export interface ImportIssue {
 
 export type DirectionCandidateKind = "pending" | "objective" | "key_result" | "risk" | "opportunity" | "initiative" | "control" | "activity";
 
-export interface DirectionCandidate {
+export interface DirectionCandidate extends AdministrativeDeletionMark {
   id: string;
   sourceRow: number;
   description: string;
@@ -143,6 +152,64 @@ export interface RiskWorkspaceState {
   contributions: CrossContribution[];
   importIssues: ImportIssue[];
   directionCandidates: DirectionCandidate[];
+}
+
+const historicalCollections = ["axes", "swotItems", "risks", "actions", "contributions", "importIssues", "directionCandidates"] as const;
+
+/** Ordinary edits cannot silently remove records or forge an administrative deletion. */
+export function validateRiskWorkspaceEdit(current: RiskWorkspaceState, incoming: RiskWorkspaceState): string | null {
+  for (const key of historicalCollections) {
+    const proposed = new Map(incoming[key].map((item) => [item.id, item]));
+    for (const oldItem of current[key]) {
+      const nextItem = proposed.get(oldItem.id);
+      if (!nextItem) return `El registro ${oldItem.id} debe conservarse en el historial.`;
+      if (key === "risks" || key === "axes" || key === "directionCandidates") {
+        const oldRisk = oldItem as RiskRecord & AdministrativeDeletionMark;
+        const nextRisk = nextItem as RiskRecord & AdministrativeDeletionMark;
+        if (oldRisk.deletedAt !== nextRisk.deletedAt || oldRisk.deletedBy !== nextRisk.deletedBy ||
+          oldRisk.deletionReason !== nextRisk.deletionReason) {
+          return `El retiro de ${oldRisk.id} requiere la operación administrativa.`;
+        }
+      }
+      if (key === "risks") {
+        const oldRisk = oldItem as RiskRecord;
+        const nextRisk = nextItem as RiskRecord;
+        if (oldRisk.processId !== nextRisk.processId) return `El cambio de proceso de ${oldRisk.id} requiere revisión administrativa.`;
+      }
+    }
+  }
+  for (const key of ["risks", "axes", "directionCandidates"] as const) {
+    if (incoming[key].some((item) => item.deletedAt && !current[key].some((old) => old.id === item.id))) {
+      return "No se pueden crear registros ya eliminados.";
+    }
+  }
+  return null;
+}
+
+export function softDeleteRiskInWorkspace(state: RiskWorkspaceState, id: string, actorId: string, reason: string, at: string): RiskWorkspaceState {
+  const target = state.risks.find((risk) => risk.id === id && !risk.deletedAt);
+  if (!target || !reason.trim()) throw new Error("Registro y motivo obligatorios.");
+  return { ...state, risks: state.risks.map((risk) => risk.id === id
+    ? { ...risk, deletedAt: at, deletedBy: actorId, deletionReason: reason.trim() }
+    : risk) };
+}
+
+export type RiskWorkspaceDeleteKind = "risk" | "axis" | "directionCandidate";
+
+export function softDeleteRiskWorkspaceItem(state: RiskWorkspaceState, kind: RiskWorkspaceDeleteKind, id: string, actorId: string, reason: string, at: string): RiskWorkspaceState {
+  if (kind === "risk") return softDeleteRiskInWorkspace(state, id, actorId, reason, at);
+  if (!reason.trim()) throw new Error("Motivo obligatorio.");
+  if (kind === "axis") {
+    const target = state.axes.find((axis) => axis.id === id && !axis.deletedAt);
+    if (!target || state.risks.some((risk) => risk.strategicAxisId === id) ||
+      state.swotItems.some((item) => item.strategicAxisId === id)) throw new Error("El eje no existe o conserva relaciones históricas.");
+    return { ...state, axes: state.axes.map((axis) => axis.id === id
+      ? { ...axis, deletedAt: at, deletedBy: actorId, deletionReason: reason.trim() } : axis) };
+  }
+  const target = state.directionCandidates.find((item) => item.id === id && !item.deletedAt);
+  if (!target) throw new Error("El registro no existe o ya fue retirado.");
+  return { ...state, directionCandidates: state.directionCandidates.map((item) => item.id === id
+    ? { ...item, deletedAt: at, deletedBy: actorId, deletionReason: reason.trim() } : item) };
 }
 
 const axisSource: Array<[string, string]> = [

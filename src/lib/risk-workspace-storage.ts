@@ -16,6 +16,13 @@ export async function saveRiskWorkspace(state: RiskWorkspaceState) {
   return parseResponse<{ ok: true; updatedAt: string }>(response);
 }
 
+export async function softDeleteStoredRisk(id: string, reason: string, kind: "risk" | "axis" | "directionCandidate" = "risk") {
+  const response = await fetch("/api/risks/workspace", {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, id, reason }),
+  });
+  return parseResponse<{ ok: true; state: RiskWorkspaceState; auditLogged: boolean }>(response);
+}
+
 export async function startRiskAnalysis() {
   const response = await fetch("/api/risks/workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start_analysis" }) });
   return parseResponse<{ ok: true; state: RiskWorkspaceState; notifiedUsers: number; processCount: number; uncoveredProcessIds: string[] }>(response);

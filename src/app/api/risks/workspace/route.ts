@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { authorize } from "@/lib/access/authorize";
 import { processCatalog } from "@/lib/configuration-data";
-import { buildEmptyRiskWorkspace, type RiskWorkspaceState } from "@/lib/risk-opportunity-data";
+import { buildEmptyRiskWorkspace, softDeleteRiskWorkspaceItem, validateRiskWorkspaceEdit, type RiskWorkspaceDeleteKind, type RiskWorkspaceState } from "@/lib/risk-opportunity-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
@@ -35,7 +35,8 @@ async function ensureWorkspace(actor: Actor, createIfMissing = false) {
     if (created.error) throw created.error;
     definition = created.data;
   }
-  const recordResult = await admin.from("form_records").select("id,values,updated_at").eq("record_number", recordNumber).maybeSingle();
+  const recordResult = await admin.from("form_records").select("id,values,updated_at")
+    .eq("form_id", definition.id).eq("record_number", recordNumber).maybeSingle();
   if (recordResult.error) throw recordResult.error;
   let record = recordResult.data;
   if (!record) {
@@ -82,6 +83,9 @@ export async function PUT(request: Request) {
     if (!isWorkspaceState(payload.state)) return NextResponse.json({ error: "La matriz enviada no tiene una estructura válida." }, { status: 400 });
     const record = await ensureWorkspace(actor, true);
     if (!record) return NextResponse.json({ error: "No fue posible inicializar la matriz." }, { status: 500 });
+    if (!isWorkspaceState(record.values)) return NextResponse.json({ error: "La matriz base no está disponible." }, { status: 500 });
+    const invalidEdit = validateRiskWorkspaceEdit(record.values, payload.state);
+    if (invalidEdit) return NextResponse.json({ error: invalidEdit }, { status: 409 });
     const admin = createAdminClient();
     let nextState = payload.state;
     if (actor.userType !== "administrator") {
@@ -91,13 +95,75 @@ export async function PUT(request: Request) {
       const allowed = new Set((permissions.data ?? []).map((permission) => permission.process_id));
       nextState = mergeScopedWorkspace(record.values, payload.state, allowed);
     }
-    const updated = await admin.from("form_records").update({ values: nextState }).eq("id", record.id).select("updated_at").single();
+    const invalidMergedEdit = validateRiskWorkspaceEdit(record.values, nextState);
+    if (invalidMergedEdit) return NextResponse.json({ error: invalidMergedEdit }, { status: 409 });
+    const updated = await admin.from("form_records").update({ values: nextState }).eq("id", record.id)
+      .eq("updated_at", record.updated_at).select("updated_at").maybeSingle();
     if (updated.error) throw updated.error;
+    if (!updated.data) return NextResponse.json({ error: "La matriz cambió. Recarga y vuelve a intentar." }, { status: 409 });
     await admin.from("audit_log").insert({ actor_id: actor.id, action: "risk.workspace_updated", resource_type: "risk_workspace", resource_id: record.id, metadata: { cycle: nextState.cycle, candidate_count: nextState.directionCandidates.length, risk_count: nextState.risks.length } });
     return NextResponse.json({ ok: true, updatedAt: updated.data.updated_at });
   } catch (error) {
     console.error("No fue posible guardar la matriz base de riesgos.", error);
     return NextResponse.json({ error: "No fue posible guardar la matriz base en Supabase." }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const actor = await requireInternalActor();
+    if (!actor || actor.userType !== "administrator") return NextResponse.json({ error: "Sólo un administrador activo puede retirar riesgos." }, { status: 403 });
+    const session = await getAuthenticatedSession();
+    if (!session || session.authUserId !== actor.id || session.userType !== "Administrador" || session.workspaceMode === "demo") {
+      return NextResponse.json({ error: "Sesión administrativa productiva requerida." }, { status: 403 });
+    }
+    const payload = await request.json() as { kind?: unknown; id?: unknown; reason?: unknown };
+    const kind = payload.kind === undefined ? "risk" : payload.kind;
+    if (kind !== "risk" && kind !== "axis" && kind !== "directionCandidate") {
+      return NextResponse.json({ error: "Tipo de registro inválido." }, { status: 400 });
+    }
+    const id = typeof payload.id === "string" ? payload.id.trim() : "";
+    const reason = typeof payload.reason === "string" ? payload.reason.trim() : "";
+    if (!id || !reason || reason.length > 1000) return NextResponse.json({ error: "Folio y motivo obligatorios." }, { status: 400 });
+    const admin = createAdminClient();
+    const [profile, process] = await Promise.all([
+      admin.from("profiles").select("organization_id,user_type,status,workspace_mode").eq("id", actor.id).maybeSingle(),
+      admin.from("processes").select("organization_id").eq("id", "P-03").maybeSingle(),
+    ]);
+    if (profile.error || process.error || !profile.data?.organization_id ||
+      profile.data.user_type !== "administrator" || profile.data.status !== "active" ||
+      profile.data.workspace_mode === "demo" || process.data?.organization_id !== profile.data.organization_id) {
+      return NextResponse.json({ error: "El expediente no pertenece a la organización administrativa." }, { status: 403 });
+    }
+    const record = await ensureWorkspace(actor);
+    if (!record || !isWorkspaceState(record.values)) return NextResponse.json({ error: "La matriz no está disponible." }, { status: 404 });
+    const item = kind === "risk" ? record.values.risks.find((entry) => entry.id === id && !entry.deletedAt)
+      : kind === "axis" ? record.values.axes.find((entry) => entry.id === id && !entry.deletedAt)
+        : record.values.directionCandidates.find((entry) => entry.id === id && !entry.deletedAt);
+    if (!item) return NextResponse.json({ error: "El registro no existe o ya fue retirado." }, { status: 404 });
+    if (kind === "risk") {
+      const risk = item as RiskWorkspaceState["risks"][number];
+      const processScope = await admin.from("processes").select("organization_id").eq("id", risk.processId).maybeSingle();
+      if (processScope.error || processScope.data?.organization_id !== profile.data.organization_id) {
+        return NextResponse.json({ error: "El proceso del riesgo está fuera de la organización." }, { status: 403 });
+      }
+    }
+    let state: RiskWorkspaceState;
+    try { state = softDeleteRiskWorkspaceItem(record.values, kind as RiskWorkspaceDeleteKind, id, actor.id, reason, new Date().toISOString()); }
+    catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "El registro tiene relaciones vigentes." }, { status: 409 }); }
+    const changed = await admin.from("form_records").update({ values: state }).eq("id", record.id)
+      .eq("updated_at", record.updated_at).select("id").maybeSingle();
+    if (changed.error) throw changed.error;
+    if (!changed.data) return NextResponse.json({ error: "La matriz cambió. Recarga y vuelve a intentar." }, { status: 409 });
+    const logged = await admin.from("audit_log").insert({ actor_id: actor.id,
+      organization_id: profile.data.organization_id, action: "risk_workspace_item.soft_deleted", resource_type: kind,
+      resource_id: id, reason, metadata: { title: "title" in item ? item.title : "description" in item ? item.description : id,
+        process_id: "processId" in item ? item.processId : null,
+        preserved_actions: record.values.actions.filter((item) => item.riskId === id).length } });
+    return NextResponse.json({ ok: true, state, auditLogged: !logged.error });
+  } catch (error) {
+    console.error("No fue posible retirar el riesgo.", error);
+    return NextResponse.json({ error: "No fue posible retirar el riesgo en Supabase." }, { status: 500 });
   }
 }
 
