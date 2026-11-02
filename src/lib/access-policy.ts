@@ -30,7 +30,6 @@ export function canAccessModule(
   module: WorkspaceModuleId,
 ) {
   if (isAdministrator(session)) return true;
-  if (module === "documents") return true;
 
   const externalKind = getExternalKindForSession(session);
   if (externalKind) {
@@ -42,6 +41,8 @@ export function canAccessModule(
       hasValidExternalScope(session) && module === EXTERNAL_PORTALS[externalKind]
     );
   }
+
+  if (module === "documents") return true;
 
   if (module === "corrective-actions") return canPerformModuleAction(session, module, "view");
 

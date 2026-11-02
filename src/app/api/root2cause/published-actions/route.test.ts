@@ -35,6 +35,12 @@ const request = (method: string, body: unknown) => new Request("https://integraq
   method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
 const calls = (table: string, method: string) => state.calls.filter(call => call.table === table && call.method === method);
+const customerAction = {
+  id: actionId, folio: "AC-2026-015", source: "customer", relatedPartyId: customerA,
+  title: "Reclamación", problem: "Desviación documentada", owner: "Responsable",
+  dueDate: "2026-11-02", status: "action_plan", severity: "medium", progress: 55,
+  a3: { plans: [] },
+};
 
 beforeEach(() => {
   state.calls = [];
@@ -68,12 +74,67 @@ describe("Root2Cause portal authorization", () => {
     expect(calls("corrective_actions", "eq")).toContainEqual({ table: "corrective_actions", method: "eq", args: ["portal_visible", true] });
   });
 
+  it("scopes customer B to B and rejects a supplier even when portal access is otherwise granted", async () => {
+    state.session = { ...state.session!, userType: "Cliente", externalParty: { kind: "customer", companyId: customerB, companyName: "Cliente B" } };
+    const base = { id: actionId, folio: "AC-2026-015", title: "Caso B", status: "open", progress: 10,
+      due_date: "2026-11-02", source: "customer", portal_visible: true, deleted_at: null };
+    state.responses.corrective_actions = [{ data: [
+      { ...base, external_organization_id: customerA },
+      { ...base, external_organization_id: customerB },
+    ], error: null }];
+    const response = await GET();
+    expect(response.status).toBe(200);
+    expect((await response.json()).actions).toHaveLength(1);
+    expect(calls("corrective_actions", "eq")).toContainEqual({ table: "corrective_actions", method: "eq", args: ["external_organization_id", customerB] });
+
+    state.calls = [];
+    state.session = { ...state.session!, userType: "Proveedor", externalParty: { kind: "supplier", companyId: customerB, companyName: "Proveedor" } };
+    expect((await GET()).status).toBe(403);
+    expect(calls("corrective_actions", "from")).toHaveLength(0);
+  });
+
   it("rejects publication without a real customer and does not write", async () => {
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
     const response = await POST(request("POST", { action: { id: actionId, source: "customer", relatedPartyId: "customer-001" } }));
     expect(response.status).toBe(400);
     expect(calls("corrective_actions", "insert")).toHaveLength(0);
     expect(calls("corrective_actions", "update")).toHaveLength(0);
+  });
+
+  it("does not publish merely because an administrator selects a real customer", async () => {
+    state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
+    state.responses.organizations = [{ data: { id: customerA }, error: null }];
+    state.responses.corrective_actions = [{ data: null, error: null }, { data: null, error: null }];
+    state.responses.corrective_action_a3 = [{ data: null, error: null }];
+    state.responses.audit_log = [{ data: null, error: null }];
+    const response = await POST(request("POST", { action: customerAction, publish: false }));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ portalVisible: false });
+    expect(calls("corrective_actions", "insert")[0].args[0]).toMatchObject({
+      source: "customer", external_organization_id: customerA, portal_visible: false,
+    });
+    expect(calls("corrective_actions", "update")).toHaveLength(0);
+  });
+
+  it("lets only a verified administrator explicitly publish and withdraw a customer analysis", async () => {
+    state.responses.profiles = [
+      { data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null },
+      { data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null },
+    ];
+    state.responses.organizations = [{ data: { id: customerA }, error: null }];
+    state.responses.corrective_actions = [
+      { data: null, error: null }, { data: null, error: null }, { data: { id: actionId }, error: null },
+      { data: { id: actionId }, error: null },
+    ];
+    state.responses.corrective_action_a3 = [{ data: null, error: null }];
+    state.responses.audit_log = [{ data: null, error: null }, { data: null, error: null }];
+    const published = await POST(request("POST", { action: customerAction, publish: true }));
+    expect(published.status).toBe(200);
+    expect(await published.json()).toMatchObject({ portalVisible: true });
+    expect(calls("corrective_actions", "update")[0].args[0]).toEqual({ portal_visible: true });
+    const withdrawn = await PATCH(request("PATCH", { id: actionId }));
+    expect(withdrawn.status).toBe(200);
+    expect(calls("corrective_actions", "update")[1].args[0]).toEqual({ portal_visible: false });
   });
 
   it("saves an SGC analysis without publishing it to any portal", async () => {

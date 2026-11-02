@@ -1,5 +1,5 @@
 -- IQ-ROOT2CAUSE-ACCESS-01: proposed only. Do not apply without approval and isolated RLS tests.
--- Existing SELECT policies, grants, rows, files and historical permissions remain unchanged.
+-- Existing permissive SELECT policies, grants, rows, files and historical permissions remain unchanged.
 begin;
 
 -- RESTRICTIVE policies are ANDed with every existing permissive policy, including FOR ALL.
@@ -90,6 +90,17 @@ returns boolean language sql stable security invoker set search_path = '' as $ch
     else true
   end;
 $check$;
+
+-- The customer portal exposes only explicitly shared summary fields through its API.
+-- Root2Cause attachments are not published with an analysis; external accounts cannot
+-- read their metadata through a direct file_objects request. Other modules are unchanged.
+create policy iq_root2cause_internal_files_select on public.file_objects
+  as restrictive for select to authenticated using (
+    case when module_id = 'corrective-actions' or resource_type like 'corrective_action%'
+      then public.is_administrator() or public.is_internal_user()
+      else true
+    end
+  );
 create policy iq_root2cause_admin_files_insert on public.file_objects
   as restrictive for insert to authenticated with check (
     public.iq_root2cause_file_write_allowed(module_id, resource_type, resource_id)
