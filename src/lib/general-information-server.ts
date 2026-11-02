@@ -27,18 +27,17 @@ export async function requireGeneralInformationActor(requireAdministrator = fals
   if (profile.error || !profile.data || profile.data.status !== "active") {
     throw new GeneralInformationApiError("La cuenta no está activa.", 403);
   }
+  const expectedRole = session.userType === "Administrador" ? "administrator"
+    : session.userType === "Usuario interno" ? "internal" : null;
+  if (!expectedRole || profile.data.user_type !== expectedRole) {
+    throw new GeneralInformationApiError("Información General requiere una cuenta interna activa.", 403);
+  }
   const administrator = isAdministrator(session) && profile.data.user_type === "administrator";
   if (requireAdministrator && !administrator) {
     throw new GeneralInformationApiError("Acción exclusiva para administrador.", 403);
   }
-  let workspaceId = profile.data.organization_id as string | null;
-  if (!workspaceId) {
-    const workspace = await admin.from("organizations").select("id").eq("code", "TOWELL").maybeSingle();
-    if (workspace.error || !workspace.data) {
-      throw new GeneralInformationApiError("No se encontró el espacio de Información General.", 409);
-    }
-    workspaceId = String(workspace.data.id);
-  }
+  const workspaceId = profile.data.organization_id as string | null;
+  if (!workspaceId) throw new GeneralInformationApiError("La cuenta no tiene una organización asignada.", 403);
   return { id: session.authUserId, workspaceId, administrator } satisfies GeneralInformationActor;
 }
 

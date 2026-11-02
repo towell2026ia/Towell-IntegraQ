@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildEmptyRiskWorkspace, buildInitialRiskWorkspace, softDeleteRiskInWorkspace, softDeleteRiskWorkspaceItem, validateRiskWorkspaceEdit } from "@/lib/risk-opportunity-data";
 
-const sql = readFileSync("supabase/migrations/20261102170852_admin_delete_guard.sql", "utf8").toLowerCase();
+const sql = readFileSync("supabase/migrations/20261102170852_admin_delete_guard.sql", "utf8").toLowerCase().replace(/\r\n/g, "\n");
 
 describe("proposed administrative deletion guard", () => {
   it("adds restrictive physical DELETE guards that compose with permissive ALL policies", () => {

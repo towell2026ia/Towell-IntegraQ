@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const sql = readFileSync("supabase/migrations/20261102190001_root2cause_admin_writes.sql", "utf8").toLowerCase();
 const portalSql = readFileSync("supabase/migrations/202609240002_transversal_evidence_permissions.sql", "utf8").toLowerCase();
+const companySql = readFileSync("supabase/migrations/202610080002_external_company_master.sql", "utf8").toLowerCase();
 
 describe("proposed Root2Cause RLS restriction", () => {
   it("limits writes and preserves the existing permissive SELECT policies", () => {
@@ -26,6 +27,12 @@ describe("proposed Root2Cause RLS restriction", () => {
     expect(portalAccess).toContain("action.portal_visible");
     expect(portalAccess).toContain("has_external_organization_scope('customer', action.external_organization_id)");
     expect(portalAccess).toContain("has_permission('portal_clientes.acceder'");
+    const externalScope = companySql.split("create or replace function public.has_external_organization_scope(")[1]
+      .split("$$;")[0];
+    expect(externalScope).toContain("profile.external_party_kind = requested_kind");
+    expect(externalScope).toContain("profile.external_party_id = requested_organization_id");
+    expect(externalScope).toContain("profile.status = 'active'");
+    expect(externalScope).toContain("organization.active");
     expect(sql).toMatch(/on public\.file_objects\s+as restrictive for select to authenticated/);
     expect(sql).toContain("then public.is_administrator() or public.is_internal_user()");
     expect(sql).toContain("else true");
