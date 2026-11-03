@@ -58,15 +58,23 @@ export async function GET(request: Request) {
     const imageUrls: Record<string, string> = {};
     for (const d of institutional) {
       if (lifecycle.some(l => l.document_id === d.id && (l.is_deleted || l.lifecycle_status !== "active"))) continue;
+      // Institutional tiles are informational, not approval of the controlled document.
+      // Show the unique pending image if no current version exists; preserve its real status.
       const current = versions.filter(v => v.document_id === d.id && v.status === "current");
-      if (current.length !== 1) continue;
-      const v = current[0];
+      const pending = versions.filter(v => v.document_id === d.id && v.status === "pending");
+      const candidates = current.length ? current : pending;
+      if (candidates.length !== 1) continue;
+      const v = candidates[0];
       const files = await read("file_objects", "id,bucket_id,object_path,mime_type", [["id", "eq", v.file_id], ["deleted_at", "is", null]]);
-      const file = files[0]; if (!file || !text(file, "mime_type").startsWith("image/")) continue;
+      const file = files[0];
+      const fileName = text(v, "file_name");
+      const objectPath = file ? text(file, "object_path") : "";
+      const imageExtension = /\\.(png|jpe?g|webp|gif)$/i.test(fileName) && /\\.(png|jpe?g|webp|gif)$/i.test(objectPath);
+      if (!file || !(text(file, "mime_type").startsWith("image/") || (text(file, "mime_type") === "application/octet-stream" && imageExtension))) continue;
       const signed = await admin.storage.from(text(file, "bucket_id")).createSignedUrl(text(file, "object_path"), 300);
       if (signed.error) throw new Error("HOME_IMAGE_UNAVAILABLE");
       imageUrls[text(v, "id")] = signed.data.signedUrl;
-      imageDocuments.push({ id: text(d, "id"), processId: text(d, "process_id"), code: text(d, "code"), name: text(d, "title"), documentTypeId: text(d, "document_type_id"), owner: "", versions: [{ id: text(v, "id"), revision: Number(v.revision), status: "current", fileName: text(v, "file_name"), uploadedBy: "", validator: "", modifiedAt: text(v, "updated_at"), changeReason: "" }] });
+      imageDocuments.push({ id: text(d, "id"), processId: text(d, "process_id"), code: text(d, "code"), name: text(d, "title"), documentTypeId: text(d, "document_type_id"), owner: "", versions: [{ id: text(v, "id"), revision: Number(v.revision), status: v.status === "current" ? "current" : "pending", fileName: text(v, "file_name"), uploadedBy: "", validator: "", modifiedAt: text(v, "updated_at"), changeReason: "" }] });
     }
     const url = new URL(request.url);
     if (url.searchParams.has("image")) { const signedUrl = imageUrls[url.searchParams.get("image")!]; return signedUrl ? NextResponse.json({ signedUrl }, { headers: { "Cache-Control": "private, no-store" } }) : NextResponse.json({ error: "Imagen institucional no disponible." }, { status: 404 }); }
