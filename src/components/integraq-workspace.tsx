@@ -39,6 +39,7 @@ import { CustomersModule } from "@/components/modules/customers-module";
 import { DocumentsModule } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
+import { useHomeProcessData } from "@/lib/use-home-process-data";
 import { HomeSettingsModule } from "@/components/modules/home-settings-module";
 import { IndicatorsModule } from "@/components/modules/indicators-module";
 import { ManagementReviewModule } from "@/components/modules/management-review-module";
@@ -469,10 +470,12 @@ export function IntegraQWorkspace({
     }),
     [actions, assets, controlledDocuments, indicatorDefinitions, indicatorResults, session],
   );
-  const homeDashboard = useMemo(
+  const localHomeDashboard = useMemo(
     () => buildHomeDashboard(homeSources),
     [homeSources],
   );
+  const productionHome = useHomeProcessData(session);
+  const homeDashboard = demoMode ? localHomeDashboard : productionHome.dashboard;
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
     const authorizedModule = resolveAuthorizedModule(session, module);

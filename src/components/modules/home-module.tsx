@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { HomeInstitutionalImages } from "./home-institutional-images";
 import { HomeObjectiveCatalog } from "./home-objective-catalog";
+import { useHomeProcessData } from "@/lib/use-home-process-data";
 import type { LucideIcon } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
@@ -146,10 +147,13 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
     };
   }, [selectedInstitutionalText]);
 
-  const dashboard = useMemo(
+  const localDashboard = useMemo(
     () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
     [asOf, filters, sectionConfigurations, sources],
   );
+  const serverHome = useHomeProcessData(sources.session, filters);
+  const productionHome = sources.session.workspaceMode !== "demo";
+  const dashboard = productionHome ? serverHome.dashboard : localDashboard;
   const searchResults = useMemo(
     () => searchHomeDashboard(dashboard.searchIndex, searchQuery),
     [dashboard.searchIndex, searchQuery],
@@ -256,9 +260,9 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
         </section>
       ) : null}
 
-      {visibleSections.has("quality-policy") && sources.documentLoadError ? <p role="alert">{sources.documentLoadError} <button type="button" onClick={() => onNavigate("documents")}>Revisar carga documental</button></p> : null}
-      {visibleSections.has("quality-policy") && sources.documentsLoading ? <p role="status">Cargando imágenes del catálogo documental…</p> : null}
-      {visibleSections.has("quality-policy") && !sources.documentLoadError && !sources.documentsLoading ? <HomeInstitutionalImages documents={sources.documents} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
+      {!productionHome && visibleSections.has("quality-policy") && sources.documentLoadError ? <p role="alert">{sources.documentLoadError} <button type="button" onClick={() => onNavigate("documents")}>Revisar carga documental</button></p> : null}
+      {!productionHome && visibleSections.has("quality-policy") && sources.documentsLoading ? <p role="status">Cargando imágenes del catálogo documental…</p> : null}
+      {visibleSections.has("quality-policy") && (productionHome || (!sources.documentLoadError && !sources.documentsLoading)) ? <HomeInstitutionalImages documents={productionHome ? serverHome.imageDocuments : sources.documents} institutionalRead={productionHome} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
 
       {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
         <section className="home-dashboard-section home-institutional-section" aria-label="Información institucional">
