@@ -27,7 +27,7 @@ import { useExternalCompanies } from "@/hooks/use-external-companies";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import { useSupplierDashboard } from "@/hooks/use-supplier-dashboard";
-import type { ExternalCompany } from "@/lib/external-company-data";
+import { saveExternalCompany, type ExternalCompany } from "@/lib/external-company-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import {
   rncpDashboardSummary,
@@ -49,6 +49,8 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const [selectedId, setSelectedId] = useState("");
   const [checklistName, setChecklistName] = useState("");
   const [editingRncpId, setEditingRncpId] = useState<string | undefined>();
+  const [supplierNotice, setSupplierNotice] = useState("");
+  const [supplierError, setSupplierError] = useState("");
   const demo = isDemoSession(session);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
   const companyDirectory = useExternalCompanies();
@@ -78,6 +80,24 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
     filteredSuppliers[0] ??
     suppliers[0];
 
+  const deactivateSupplier = async () => {
+    if (!isAdministrator(session) || demo || !selected) return;
+    const company = companyDirectory.companies.find((item) => item.id === selected.id && item.kind === "supplier" && item.active);
+    if (!company) { setSupplierError("El proveedor ya no está activo en el maestro de empresas."); return; }
+    if (!window.confirm(`Se desactivará ${company.code} · ${company.name}. Los RNCP, auditorías, archivos y relaciones históricas se conservarán. ¿Continuar?`)) return;
+    const reason = window.prompt("Motivo obligatorio para desactivar el proveedor:")?.trim() ?? "";
+    if (!reason) { setSupplierError("La desactivación se canceló: debes indicar un motivo."); return; }
+    setSupplierError(""); setSupplierNotice("");
+    try {
+      const saved = await saveExternalCompany({ id: company.id, code: company.code, name: company.name, kind: "supplier", category: company.category, active: false, reason });
+      companyDirectory.setCompanies(saved.companies);
+      setSelectedId("");
+      setSupplierNotice(`${company.code} se desactivó. Su historial y sus relaciones se conservaron.`);
+    } catch (cause) {
+      setSupplierError(cause instanceof Error ? cause.message : "No fue posible desactivar el proveedor.");
+    }
+  };
+
   if (!demo && companyDirectory.loading) return <div className="access-empty"><ShieldCheck size={24} /><p>Cargando maestro de proveedores…</p></div>;
   if (!demo && companyDirectory.error) return <div className="access-empty"><AlertTriangle size={24} /><h3>No fue posible consultar proveedores</h3><p>{companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
 
@@ -93,6 +113,8 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
           <Plus size={17} /> Nuevo RNCP
         </button> : null}
       </section>
+      {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
+      {supplierError ? <p role="alert">{supplierError}</p> : null}
 
       <section className="metric-grid" aria-label="Resumen de proveedores">
         <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={suppliers.length} tone="neutral" />
@@ -127,7 +149,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
             </div>
           </div>
           {selected ? <div className="party-detail-panel">
-            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · Expediente de desempeño del proveedor</p></header>
+            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · Expediente de desempeño del proveedor</p>{isAdministrator(session) && !demo ? <button className="button button-secondary" type="button" onClick={() => void deactivateSupplier()}>Desactivar proveedor</button> : null}</header>
             <div className="party-detail-facts supplier-facts">
               <div><small>RNCP</small><strong>{selected.rncpTotal}</strong></div>
               <div><small>Cerrados</small><strong>{selected.rncpClosed}</strong></div>
@@ -149,7 +171,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
         </section>
       ) : null}
 
-      {view === "audits" ? <SemesterAuditCalendar /> : null}
+      {view === "audits" ? <SemesterAuditCalendar demo={demo} /> : null}
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
@@ -162,7 +184,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   );
 }
 
-function SemesterAuditCalendar() {
+function SemesterAuditCalendar({ demo }: { demo: boolean }) {
   const defaultSemester = getCurrentSemesterId();
   const [semesterId, setSemesterId] = useState(defaultSemester);
   const [eventsBySemester, setEventsBySemester] = useState<Record<string, SupplierAuditCalendarEvent[]>>(
@@ -188,6 +210,8 @@ function SemesterAuditCalendar() {
     }));
     setEditingId(null);
   };
+
+  if (!demo) return <section className="semester-calendar-panel"><p>Sin auditorías de proveedor registradas en una fuente persistente.</p></section>;
 
   return (
     <section className="semester-calendar-panel">
