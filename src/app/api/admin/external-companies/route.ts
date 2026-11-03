@@ -82,7 +82,6 @@ async function listCompanies(actor: Actor) {
   const externalActor = actor.userType === "customer" || actor.userType === "supplier";
   const companies = (companiesResult.data ?? []) as CompanyRow[];
   const ids = companies.map(company => company.id);
-  const ids = companies.map(company => company.id);
   let sitesQuery = admin
     .from("external_company_sites")
     .select("id,company_id,code,name,address,active,created_at,updated_at")
