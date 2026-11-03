@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildEmptyRiskWorkspace, buildInitialRiskWorkspace, softDeleteRiskInWorkspace, softDeleteRiskWorkspaceItem, validateRiskWorkspaceEdit } from "@/lib/risk-opportunity-data";
 
-const sql = readFileSync("supabase/migrations/20261102170852_admin_delete_guard.sql", "utf8").toLowerCase();
+const sql = readFileSync("supabase/migrations/20261102170852_admin_delete_guard.sql", "utf8").replace(/\r\n/g, "\n").toLowerCase();
 
 describe("proposed administrative deletion guard", () => {
   it("adds restrictive physical DELETE guards that compose with permissive ALL policies", () => {
@@ -12,6 +12,7 @@ describe("proposed administrative deletion guard", () => {
       "supplier_assessments", "improvement_projects", "measurement_assets", "workspace_data", "controlled_documents"]) {
       expect(sql).toContain(`on public.${table}\n  as restrictive for delete to authenticated using (false)`);
     }
+    expect(sql).toContain("on public.file_objects\n  as restrictive for delete to authenticated using (false)");
     expect(sql).not.toMatch(/\b(drop table|truncate|delete from|disable row level security)\b/);
   });
 
@@ -29,6 +30,17 @@ describe("proposed administrative deletion guard", () => {
     expect(sql).toContain("root2cause_retire_scope_immutable");
     expect(sql).toContain("before insert or update on public.workspace_data");
     expect(sql).not.toMatch(/\b(create policy|alter policy)\b[^;]*\bfor select\b/);
+  });
+
+  it("guards file retirement metadata without restricting normal file updates", () => {
+    expect(sql).toContain("create trigger iq_admin_delete_guard_file_objects before update on public.file_objects");
+    expect(sql).toContain("elsif tg_table_name = 'file_objects' then");
+    expect(sql).toContain("before_row->>'workspace_id'");
+    expect(sql).toContain("before_row->>'process_id'");
+    expect(sql).toContain("before_row->>'external_organization_id'");
+    expect(sql).toContain("public.is_administrator()");
+    expect(sql).toContain("delete_reason_actor_required");
+    expect(sql).not.toMatch(/create policy[^;]*on public\.file_objects[\s\S]{0,120}for update/i);
   });
 });
 
