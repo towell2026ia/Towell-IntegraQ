@@ -256,6 +256,44 @@ end;
 $guard$;
 revoke all on function public.iq_guard_admin_soft_delete() from public, anon, authenticated;
 
+-- Enforce ownership for direct PostgREST writes as well as the server route.
+-- Historical external rows with unknown ownership stay untouched and cannot be
+-- silently claimed by a tenant. The server route separately verifies its actor.
+create function public.iq_validate_external_company_owner() returns trigger
+language plpgsql security invoker set search_path = '' as $guard$
+declare
+  owner_kind public.organization_kind;
+  owner_active boolean;
+begin
+  if tg_op = 'UPDATE' and old.kind in ('customer', 'supplier') and (
+    new.kind is distinct from old.kind or
+    new.owning_organization_id is distinct from old.owning_organization_id
+  ) then
+    raise exception using errcode = '42501', message = 'EXTERNAL_COMPANY_OWNER_IMMUTABLE';
+  end if;
+  if new.kind not in ('customer', 'supplier') then return new; end if;
+  if new.owning_organization_id is null then
+    raise exception using errcode = '23514', message = 'EXTERNAL_COMPANY_OWNER_REQUIRED';
+  end if;
+  select owner.kind, owner.active into owner_kind, owner_active
+    from public.organizations owner where owner.id = new.owning_organization_id;
+  if not found or owner_kind <> 'internal' or not owner_active then
+    raise exception using errcode = '23514', message = 'EXTERNAL_COMPANY_OWNER_MUST_BE_ACTIVE_INTERNAL';
+  end if;
+  if current_user <> 'service_role' and (
+    not public.is_administrator() or
+    not exists (select 1 from public.current_organization_ids() as membership(organization_id)
+      where membership.organization_id = new.owning_organization_id)
+  ) then
+    raise exception using errcode = '42501', message = 'EXTERNAL_COMPANY_OWNER_SCOPE_DENIED';
+  end if;
+  return new;
+end;
+$guard$;
+revoke all on function public.iq_validate_external_company_owner() from public, anon, authenticated;
+create trigger iq_validate_external_company_owner before insert or update on public.organizations
+  for each row execute function public.iq_validate_external_company_owner();
+
 create trigger iq_admin_delete_guard_corrective_actions before update on public.corrective_actions
   for each row execute function public.iq_guard_admin_soft_delete();
 create trigger iq_admin_delete_guard_risk_items before update on public.risk_items
