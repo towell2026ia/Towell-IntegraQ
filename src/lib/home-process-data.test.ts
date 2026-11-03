@@ -49,9 +49,19 @@ describe("Inicio: datos reales por proceso y responsabilidad", () => {
   it("conserva la fecha y hora originales", () => {
     expect(aggregateProcessHome(session, data(), undefined, now).recentActivity[0].occurredAt).toBe("2026-07-03T09:08:07Z");
   });
-  it("no convierte frecuencias no trimestrales ni reglas ausentes", () => {
-    const rows = data(); rows.indicators[0].periodicity = "monthly";
-    expect(aggregateProcessHome(session, rows, undefined, now).trends[0].series).toEqual([]);
+  it.each(["monthly", "annual", "yearly"])("no convierte la frecuencia %s en valores trimestrales", periodicity => {
+    const rows = data(); rows.indicators[0].periodicity = periodicity;
+    const dashboard = aggregateProcessHome(session, rows, undefined, now);
+    expect(dashboard.trends[0].series).toEqual([]);
+    expect(dashboard.kpis[0].value).toBe("Sin datos");
+    expect(dashboard.pendingTasks.some(task => task.module === "indicators")).toBe(false);
+    expect(rows.results).toHaveLength(2);
+  });
+  it.each(["risks", "management-review"] as const)("%s permanece sin datos hasta disponer de fuente validada", moduleId => {
+    const dashboard = aggregateProcessHome({ ...session, assignedModuleIds: [...(session.assignedModuleIds ?? []), moduleId] }, data(), undefined, now);
+    expect(dashboard.moduleStatus.find(status => status.module === moduleId)).toMatchObject({
+      value: "Sin datos", detail: "Sin fuente conectada a Inicio", sourceConnected: false,
+    });
   });
   it("excluye valores vacíos y fechas inválidas sin convertirlos en cero", () => {
     const rows = data(); rows.results[0].value = ""; rows.results[1].submitted_at = "invalid";

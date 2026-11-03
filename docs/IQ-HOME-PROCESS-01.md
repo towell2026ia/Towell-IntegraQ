@@ -57,7 +57,7 @@ Las pruebas incluyen administrador limitado a su organización; interno limitado
 
 ## Limitaciones de aceptación
 
-- Capturas antes/después y sesiones reales: PENDING. El navegador falla al inicializar con `failed to write kernel assets: ... os error 3`. No se puede afirmar identidad visual renderizada ni cotejo de valores productivos por usuario.
+- Sesiones reales y comparación de plataforma autenticada: PENDING. Se completó una comparación aislada de HomeModule mediante Chrome headless con entradas idénticas y PNG idénticos; no sustituye las imágenes originales ni la sesión completa. Ver [evidencia de aceptación parcial y requisitos de entorno aislado](IQ-HOME-PROCESS-01-ACCEPTANCE.md).
 - La tabla de periodos disponible representa año/trimestre. Las frecuencias distintas de `quarterly`, reglas ausentes y resultados sin valor o timestamp válido se excluyen del cálculo; no se reinterpretan ni completan. Requieren verificación específica antes de aceptar indicadores de otra frecuencia.
 - Si un KPI carece de ID de líder y de responsable de proceso, no se inventa una asignación de captura. No se infieren responsabilidades a partir de nombres.
 - Riesgos y Revisión por la Dirección sin fuente operativa verificada en este endpoint muestran estado sin datos; sus aprobaciones explícitamente asignadas sí se consultan mediante `approval_requests`. No se cargan sus ejemplos locales.
