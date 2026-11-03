@@ -1,0 +1,20 @@
+{
+  "status": "RENDERED",
+  "base": "91430b6",
+  "head": "684961d1caa106d7fb85c257f23ed55b58dc0d4c",
+  "viewport": [
+    1440,
+    3200
+  ],
+  "containerWidth": 1200,
+  "profile": "Administrator fixture, identical input",
+  "productionData": false,
+  "network": "loopback only; application fetch mocked",
+  "images": "synthetic, not institutional originals",
+  "scope": "HomeModule only; common legacy dashboard payload; no authenticated application shell or live API",
+  "hashes": {
+    "main": "3dd3c8431cf8a53ea98ce97b51af045d65c2c6350cff189425c71502a9c5d4c6",
+    "pr21": "3dd3c8431cf8a53ea98ce97b51af045d65c2c6350cff189425c71502a9c5d4c6"
+  },
+  "identicalPng": true
+}

@@ -1,0 +1,11 @@
+{
+  "base": "91430b6",
+  "hashes": {
+    "src/app/globals.css": "bfab496602d237d61597dd8884361d2346e013f97e6ce1cfe3083c215f29c5d3",
+    "src/components/modules/home-objectives.module.css": "02fd1b93ea6681d6dd3f3eae3e548e4b7318cd24843400f473a8980031efca60",
+    "src/components/modules/home-institutional-images.module.css": "a19f11a66a62b4e0abc5e1c4f00140967364c26f8cd0b2d3cb0f62617d8e9289",
+    "src/components/modules/home-module.tsx": "2b0391d07d3494bf61cce0b5bad5d8edd2ac23c3737e18c1bb3a8597f660766b",
+    "src/components/modules/home-institutional-images.tsx": "b02b17bf1738d9e62353ec21f3f72e3a2e98df9ec8e39fefc614292872fcc89e",
+    "src/components/modules/home-objective-catalog.tsx": "9e9cc15a6e36f224e60f02c9977c088227e434365b26ee4d2de950929b729b15"
+  }
+}
