@@ -95,7 +95,8 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
       if (!result && windowOpen && canPerformModuleAction(session, "indicators", "update") && (definition.leader_id === session.authUserId || processes.some(p => p.process_owner_user_id === session.authUserId && (p.id === definition.process_id || relations.some(r => r.indicator_id === definition.id && r.process_id === p.id))))) addTask({ ...definition, id: period.id }, "indicators", `Capturar ${definition.code}`, text(definition, "code"), `${definition.name} · ${period.year} ${period.quarter}`);
       if (!result || Date.parse(text(result, "submitted_at")) > now.getTime()) continue;
       const indicator = { metric: text(definition, "metric_label"), evaluationRules: { compliant: text(rule, "compliant_rule"), marginal: text(rule, "marginal_rule"), noncompliant: text(rule, "noncompliant_rule") } } as ConfiguredIndicator;
-      const status = evaluateConfiguredIndicator(indicator, Number(result.value), Number(period.year), text(period, "quarter") as Quarter, now);
+      const recordedStatus = text(result, "evaluation_status");
+      const status = ["compliant", "marginal", "noncompliant"].includes(recordedStatus) ? recordedStatus : evaluateConfiguredIndicator(indicator, Number(result.value), Number(period.year), text(period, "quarter") as Quarter, now);
       const key = `${period.year} ${period.quarter}`;
       const total = history.get(key) ?? { passed: 0, total: 0 };
       total.total++; if (status === "compliant") total.passed++; history.set(key, total);

@@ -27,6 +27,10 @@ describe("Inicio: datos reales por proceso y responsabilidad", () => {
     expect(d.recentActivity.filter(a => a.module === "indicators")).toHaveLength(2);
     expect(d.kpis[0].value).toBe("100%");
   });
+  it("preserva la evaluación histórica registrada aunque la meta actual haya cambiado", () => {
+    const rows = data(); rows.results[0].evaluation_status = "compliant";
+    expect(aggregateProcessHome(session, rows, undefined, now).trends[0].series[0].value).toBe(100);
+  });
   it("Ventas no recibe documentos de Calidad", () => {
     const d = aggregateProcessHome(session, data(), { ...emptyHomeDashboardFilters, processId: "sales" }, now);
     expect(d.documentMetrics.every(m => m.value === 0)).toBe(true);

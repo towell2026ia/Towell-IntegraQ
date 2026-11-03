@@ -78,7 +78,7 @@ export async function GET(request: Request) {
     const records: HomeRecords = { processes, documents, versions, lifecycle, indicators: scopedIndicators, indicatorProcesses: relations, periods,
       homeSections: await read("home_sections", "id,active,visible_to_administrators"),
       rules: await children("indicator_evaluation_rules", "indicator_id,compliant_rule,marginal_rule,noncompliant_rule", "indicator_id", indicatorIds, "indicator_id"),
-      results: await children("indicator_results", "id,period_id,value,submitted_by,submitted_at", "period_id", periods.map(p => text(p, "id"))),
+      results: await children("indicator_results", "id,period_id,value,evaluation_status,submitted_by,submitted_at", "period_id", periods.map(p => text(p, "id"))),
       actions: canPerformModuleAction(session, "corrective-actions", "view") && processIds.length ? await read("corrective_actions", "id,folio,title,process_id,owner_id,owner_name,status,deleted_at,due_date,created_at", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]]) : [],
       audits: canPerformModuleAction(session, "audits", "view") && processIds.length ? await read("audits", "id,code,title,process_id,status,scheduled_date,completed_at,lead_auditor_id,responsible_user_id", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]]) : [],
       assets: canPerformModuleAction(session, "calibrations", "view") && processIds.length ? await read("measurement_assets", "id,code,name,process_id,owner_id,owner_name,next_due_date,schedule_pending", [["organization_id", "eq", org], ["process_id", "in", processIds], ["active", "eq", true]]) : [],

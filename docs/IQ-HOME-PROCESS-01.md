@@ -48,6 +48,8 @@ Producción, SQL, RLS, archivos y datos: sin cambios.
 
 Caso controlado: KPI trimestral con meta >=90, Q1=0 y Q2=95. Resultado: Q1=0% de cumplimiento, Q2=100%; Q3 sin medición no genera punto. Al vincular el mismo KPI a Calidad y Ventas, Q2 continúa teniendo una sola captura en el denominador. Se conserva `2026-07-03T09:08:07Z` como fecha original del evento.
 
+Si el resultado conserva `evaluation_status` (cumple, marginal o no cumple), prevalece esa evaluación registrada para evitar reinterpretar el histórico por una modificación posterior de metas. Sólo en su ausencia se evalúa la medición con las reglas persistidas actuales; no se reconstruyen metas históricas inexistentes.
+
 Las pruebas incluyen administrador limitado a su organización; interno limitado a procesos asignados; solicitud de proceso ajeno; cliente y proveedor denegados; usuario sin Inicio; error de consulta sin fallback; imágenes idénticas para administrador e interno sin edición; responsables distintos; documentos eliminados; usuario sin procesos; histórico vacío; KPI multiasignado; cero real y frecuencia incompatible.
 
 `home-layout-baseline.json` fija las firmas de estructura JSX (etiquetas, clases y estilos) y CSS de main `91430b6`. Se comparan seis archivos, incluidos los objetivos y las imágenes. Es una comprobación estática de preservación, no una captura del navegador.
