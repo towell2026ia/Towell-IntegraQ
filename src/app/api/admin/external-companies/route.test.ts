@@ -37,13 +37,14 @@ beforeEach(() => {
   state.calls = [];
   state.rows = {};
   state.profile = { user_type: "administrator", status: "active", organization_id: organizationId, external_party_id: null, external_site_id: null };
+  state.rows.organizations = [{ data: { id: organizationId }, error: null }];
   state.rows.external_company_sites = [{ data: [], error: null }];
   state.rows.supplier_quality_profiles = [{ data: [], error: null }];
 });
 
 describe("external company directory separation", () => {
   it("returns owned customers but not a foreign customer to an internal administrator", async () => {
-    state.rows.organizations = [{ data: [customerA, customerB], error: null }, { data: [supplier], error: null }];
+    state.rows.organizations = [{ data: { id: organizationId }, error: null }, { data: [customerA, supplier], error: null }];
     const response = await GET();
     expect(response.status).toBe(200);
     const body = await response.json();
@@ -51,11 +52,11 @@ describe("external company directory separation", () => {
     expect(state.calls).toContainEqual({ table: "organizations", method: "eq", args: ["owning_organization_id", organizationId] });
   });
 
-  it("keeps suppliers available while customer ownership has not been migrated", async () => {
-    state.rows.organizations = [{ data: null, error: { code: "42703" } }, { data: [supplier], error: null }];
+  it("fails closed while the ownership column has not been migrated", async () => {
+    state.rows.organizations = [{ data: { id: organizationId }, error: null }, { data: null, error: { code: "42703" } }];
     const response = await GET();
-    expect(response.status).toBe(200);
-    expect((await response.json()).companies.map((company: { id: string }) => company.id)).toEqual([supplier.id]);
+    expect(response.status).toBe(503);
+    expect((await response.json()).companies).toBeUndefined();
   });
 
   it("lets an external supplier see only its own supplier company", async () => {

@@ -193,6 +193,24 @@ begin
     end if;
   elsif tg_table_name = 'organizations' then
     tenant_id := nullif(before_row->>'owning_organization_id', '')::uuid;
+  elsif tg_table_name = 'file_objects' then
+    -- File rows carry several existing scope shapes. Prefer explicit workspace,
+    -- then the process owner, then the verified internal owner of an external
+    -- party. Unknown historical ownership fails closed; no row is backfilled.
+    tenant_id := nullif(before_row->>'workspace_id', '')::uuid;
+    if tenant_id is null and nullif(before_row->>'process_id', '') is not null then
+      select p.organization_id into tenant_id from public.processes p
+        where p.id = before_row->>'process_id';
+    end if;
+    if tenant_id is null and nullif(before_row->>'external_organization_id', '') is not null then
+      select organization.owning_organization_id into tenant_id from public.organizations organization
+        where organization.id = (before_row->>'external_organization_id')::uuid;
+    end if;
+    if tenant_id is null and nullif(before_row->>'resource_id', '') is not null
+      and coalesce(before_row->>'resource_type', '') like 'corrective_action%' then
+      select action.organization_id into tenant_id from public.corrective_actions action
+        where action.id = (before_row->>'resource_id')::uuid;
+    end if;
   elsif tg_table_name in ('corrective_actions', 'audits', 'improvement_projects', 'form_definitions', 'risk_items', 'measurement_assets') and tenant_id is null then
     select p.organization_id into tenant_id from public.processes p
       where p.id = before_row->>'process_id';
@@ -267,6 +285,10 @@ create trigger iq_admin_delete_guard_improvement_projects before update on publi
 create trigger iq_admin_delete_guard_measurement_assets before update on public.measurement_assets
   for each row execute function public.iq_guard_admin_soft_delete();
 create trigger iq_admin_delete_guard_workspace_data before update on public.workspace_data
+  for each row execute function public.iq_guard_admin_soft_delete();
+-- Only deletion metadata is checked by the shared guard. Upload, replacement,
+-- preview, read and download metadata remain governed by existing policies.
+create trigger iq_admin_delete_guard_file_objects before update on public.file_objects
   for each row execute function public.iq_guard_admin_soft_delete();
 
 -- A record inside either shared JSON workspace must never disappear as a

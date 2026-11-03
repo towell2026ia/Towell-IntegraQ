@@ -23,6 +23,7 @@ type CompanyRow = {
   active: boolean;
   created_at: string;
   updated_at: string;
+  owning_organization_id?: string | null;
 };
 
 type SiteRow = {
@@ -67,32 +68,20 @@ async function getActor(): Promise<Actor | null> {
 async function listCompanies(actor: Actor) {
   if (!actor.readableKinds.length) return [];
   const admin = createAdminClient();
-  const externalActor = actor.userType === "customer" || actor.userType === "supplier";
-  let companies: CompanyRow[];
-  if (externalActor) {
+  let companyQuery = admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").in("kind", actor.readableKinds).order("name");
+  if (actor.userType === "customer" || actor.userType === "supplier") {
     if (!actor.externalPartyId) return [];
-    const result = await admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at")
-      .in("kind", actor.readableKinds).eq("id", actor.externalPartyId).order("name");
-    if (result.error) throw result.error;
-    companies = (result.data ?? []) as CompanyRow[];
+    companyQuery = companyQuery.eq("id", actor.externalPartyId);
   } else {
     if (!actor.organizationId) return [];
-    companies = [];
-    if (actor.readableKinds.includes("customer")) {
-      const owned = await admin.from("organizations")
-        .select("id,code,name,kind,active,created_at,updated_at,owning_organization_id")
-        .eq("kind", "customer").eq("owning_organization_id", actor.organizationId).order("name");
-      if (owned.error && owned.error.code !== "42703") throw owned.error;
-      companies.push(...((owned.data ?? []) as (CompanyRow & { owning_organization_id: string | null })[])
-        .filter(company => company.owning_organization_id === actor.organizationId));
-    }
-    if (actor.readableKinds.includes("supplier")) {
-      const suppliers = await admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at")
-        .eq("kind", "supplier").order("name");
-      if (suppliers.error) throw suppliers.error;
-      companies.push(...((suppliers.data ?? []) as CompanyRow[]));
-    }
+    if (!await isActiveInternalOrganization(admin, actor.organizationId)) return [];
+    companyQuery = companyQuery.eq("owning_organization_id", actor.organizationId);
   }
+  const companiesResult = await companyQuery;
+  if (companiesResult.error) throw companiesResult.error;
+  const externalActor = actor.userType === "customer" || actor.userType === "supplier";
+  const companies = (companiesResult.data ?? []) as CompanyRow[];
+  const ids = companies.map(company => company.id);
   const ids = companies.map(company => company.id);
   let sitesQuery = admin
     .from("external_company_sites")
@@ -120,6 +109,7 @@ export async function GET() {
     return NextResponse.json({ companies: await listCompanies(actor) });
   } catch (error) {
     console.error("No fue posible consultar el maestro de empresas externas.", error);
+    if (hasCode(error, "42703")) return ownershipMigrationRequired();
     return NextResponse.json({ error: "No fue posible consultar las empresas externas." }, { status: 500 });
   }
 }
@@ -138,22 +128,28 @@ async function mutate(request: Request, create: boolean) {
     if (!actor || actor.userType !== "administrator") {
       return NextResponse.json({ error: "Sólo un administrador puede modificar empresas externas." }, { status: 403 });
     }
+    if (!actor.organizationId) return NextResponse.json({ error: "La cuenta administrativa no tiene una organización titular verificada." }, { status: 403 });
+    const admin = createAdminClient();
+    if (!await isActiveInternalOrganization(admin, actor.organizationId)) {
+      return NextResponse.json({ error: "La organización titular no existe, está inactiva o no es interna." }, { status: 403 });
+    }
     const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!payload || (payload.entity !== "company" && payload.entity !== "site")) {
       return NextResponse.json({ error: "Solicitud no válida." }, { status: 400 });
     }
     const result = payload.entity === "company"
-      ? await mutateCompany(payload, actor, create)
-      : await mutateSite(payload, actor, create);
+      ? await mutateCompany(payload, actor, create, admin)
+      : await mutateSite(payload, actor, create, admin);
     if (result instanceof NextResponse) return result;
     return NextResponse.json({ ...result, companies: await listCompanies(actor) });
   } catch (error) {
     console.error("No fue posible actualizar el maestro de empresas externas.", error);
+    if (hasCode(error, "42703")) return ownershipMigrationRequired();
     return NextResponse.json({ error: "No fue posible guardar la empresa o sucursal." }, { status: 500 });
   }
 }
 
-async function mutateCompany(payload: Record<string, unknown>, actor: Actor, create: boolean) {
+async function mutateCompany(payload: Record<string, unknown>, actor: Actor, create: boolean, admin = createAdminClient()) {
   const code = clean(payload.code).toLocaleUpperCase("es-MX");
   const name = clean(payload.name);
   const kind = payload.kind === "customer" || payload.kind === "supplier" ? payload.kind : null;
@@ -162,13 +158,30 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   if (!create && !validateExternalCompanyDeactivation(payload.active === false ? false : true, reason)) {
     return NextResponse.json({ error: "Indica el motivo para desactivar la empresa." }, { status: 400 });
   }
-  const admin = createAdminClient();
-  const values = { code, name, kind, active: payload.active !== false };
+  if (!create && !isUuid(payload.id)) return companyError("INVALID_ID");
+  let existingOwner: string | null = null;
+  if (!create) {
+    const existing = await admin.from("organizations").select("id,kind,owning_organization_id")
+      .eq("id", payload.id).in("kind", ["customer", "supplier"]).maybeSingle();
+    if (existing.error?.code === "42703") return ownershipMigrationRequired();
+    if (existing.error) throw existing.error;
+    if (!existing.data) return NextResponse.json({ error: "La empresa no existe." }, { status: 404 });
+    existingOwner = existing.data.owning_organization_id ?? null;
+    if (!existingOwner) return NextResponse.json({ error: "La titularidad histórica no está verificada; no se puede modificar ni desactivar." }, { status: 409 });
+    if (existingOwner !== actor.organizationId) return NextResponse.json({ error: "La empresa pertenece a otra organización." }, { status: 403 });
+    if (existing.data.kind !== kind) return NextResponse.json({ error: "No se puede cambiar el tipo de empresa." }, { status: 409 });
+  }
+  const deactivating = !create && payload.active === false;
+  const values = {
+    code, name, kind, active: payload.active !== false,
+    ...(create ? { owning_organization_id: actor.organizationId } : {}),
+    ...(deactivating ? { deleted_at: new Date().toISOString(), deleted_by: actor.id, deletion_reason: reason } : {}),
+  };
   const saved = create
-    ? await admin.from("organizations").insert(values).select("id,code,name,kind,active,created_at,updated_at").single()
-    : isUuid(payload.id)
-      ? await admin.from("organizations").update(values).eq("id", payload.id).in("kind", ["customer", "supplier"]).select("id,code,name,kind,active,created_at,updated_at").single()
-      : { data: null, error: new Error("INVALID_ID") };
+    ? await admin.from("organizations").insert(values).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").single()
+    : await admin.from("organizations").update(values).eq("id", payload.id).eq("owning_organization_id", actor.organizationId)
+      .in("kind", ["customer", "supplier"]).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").single();
+  if (saved.error?.code === "42703") return ownershipMigrationRequired();
   if (saved.error || !saved.data) return companyError(saved.error?.message);
   if (kind === "supplier") {
     const profile = await admin.from("supplier_quality_profiles").upsert({ organization_id: saved.data.id, category: clean(payload.category) || null, active: payload.active !== false, updated_by: actor.id }, { onConflict: "organization_id" });
@@ -178,15 +191,17 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   return { company: mapCompany(saved.data as CompanyRow, [], clean(payload.category) || undefined) };
 }
 
-async function mutateSite(payload: Record<string, unknown>, actor: Actor, create: boolean) {
+async function mutateSite(payload: Record<string, unknown>, actor: Actor, create: boolean, admin = createAdminClient()) {
   const companyId = clean(payload.companyId);
   const code = clean(payload.code).toLocaleUpperCase("es-MX");
   const name = clean(payload.name);
   if (!isUuid(companyId) || !code || !name) return NextResponse.json({ error: "Empresa, código y nombre de sucursal son obligatorios." }, { status: 400 });
-  const admin = createAdminClient();
-  const company = await admin.from("organizations").select("id").eq("id", companyId).in("kind", ["customer", "supplier"]).maybeSingle();
+  const company = await admin.from("organizations").select("id,owning_organization_id").eq("id", companyId).in("kind", ["customer", "supplier"]).maybeSingle();
+  if (company.error?.code === "42703") return ownershipMigrationRequired();
   if (company.error) throw company.error;
   if (!company.data) return NextResponse.json({ error: "Empresa no registrada. La empresa seleccionada todavía no está registrada en IntegraQ." }, { status: 400 });
+  if (!company.data.owning_organization_id) return NextResponse.json({ error: "La titularidad histórica no está verificada; no se puede modificar la sucursal." }, { status: 409 });
+  if (company.data.owning_organization_id !== actor.organizationId) return NextResponse.json({ error: "La empresa pertenece a otra organización." }, { status: 403 });
   const values = { company_id: companyId, code, name, address: clean(payload.address) || null, active: payload.active !== false };
   const saved = create
     ? await admin.from("external_company_sites").insert(values).select("id,company_id,code,name,address,active,created_at,updated_at").single()
@@ -212,7 +227,16 @@ function mapSite(site: SiteRow): ExternalCompanySite {
   return { id: site.id, companyId: site.company_id, code: site.code, name: site.name, address: site.address ?? undefined, active: site.active, createdAt: site.created_at, updatedAt: site.updated_at };
 }
 
+async function isActiveInternalOrganization(admin: ReturnType<typeof createAdminClient>, organizationId: string) {
+  const result = await admin.from("organizations").select("id")
+    .eq("id", organizationId).eq("kind", "internal").eq("active", true).maybeSingle();
+  if (result.error) throw result.error;
+  return Boolean(result.data);
+}
+
 function clean(value: unknown) { return typeof value === "string" ? value.trim() : ""; }
 function isUuid(value: unknown): value is string { return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value); }
+function hasCode(error: unknown, code: string) { return Boolean(error && typeof error === "object" && "code" in error && error.code === code); }
 function companyError(message?: string) { return NextResponse.json({ error: message?.includes("duplicate") ? "Ya existe una empresa con ese código." : "No fue posible guardar la empresa." }, { status: 400 }); }
 function siteError(message?: string) { return NextResponse.json({ error: message?.includes("duplicate") ? "Ya existe una sucursal con ese código para la empresa." : "No fue posible guardar la sucursal." }, { status: 400 }); }
+function ownershipMigrationRequired() { return NextResponse.json({ error: "El esquema de titularidad aún no está disponible. No se modificó ningún registro." }, { status: 503 }); }
