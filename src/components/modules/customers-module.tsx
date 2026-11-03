@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 
+import { useExternalCompanies } from "@/hooks/use-external-companies";
+import { saveExternalCompany } from "@/lib/external-company-data";
 import {
   activeCertifications,
   customerQualityCatalog,
@@ -20,15 +22,27 @@ import {
   type CustomerQualityRecord,
 } from "@/lib/quality-parties-data";
 import type { CorrectiveAction } from "@/lib/types";
+import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 
 type CustomerView = "customers" | "cases" | "audits" | "certifications";
 
-export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
+export function CustomersModule({ actions, demoMode, session }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession }) {
   const [view, setView] = useState<CustomerView>("customers");
-  const [customers, setCustomers] = useState(customerQualityCatalog);
+  const [demoCustomers, setDemoCustomers] = useState(customerQualityCatalog);
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(customerQualityCatalog[0].id);
+  const [selectedId, setSelectedId] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [operationError, setOperationError] = useState("");
+  const companyDirectory = useExternalCompanies();
+  const administrator = isAdministrator(session);
+  const customers = demoMode
+    ? demoCustomers
+    : companyDirectory.companies
+      .filter((company) => company.kind === "customer" && company.active)
+      .map((company) => ({ id: company.id, code: company.code, name: company.name, claims: 0, findings: 0, openActions: 0, nextExternalAudit: "Sin programar", certificates: 0 }));
+  const displayedAudits = demoMode ? externalAuditCalendar : [];
+  const displayedCertifications = demoMode ? activeCertifications : [];
 
   const filteredCustomers = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
@@ -42,12 +56,23 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
   }, [customers, query]);
 
   const selected =
-    filteredCustomers.find((customer) => customer.id === selectedId) ??
-    filteredCustomers[0] ??
-    customers[0];
+    filteredCustomers.find((customer) => customer.id === selectedId) ?? filteredCustomers[0];
   const customerActions = actions.filter((action) => action.source === "customer");
 
-  const addCustomer = (customer: Pick<CustomerQualityRecord, "code" | "name">) => {
+  const addCustomer = async (customer: Pick<CustomerQualityRecord, "code" | "name">) => {
+    setOperationError("");
+    if (!administrator) return;
+    if (!demoMode) {
+      try {
+        const saved = await saveExternalCompany({ ...customer, kind: "customer" });
+        companyDirectory.setCompanies(saved.companies);
+        setSelectedId(saved.company.id);
+        setCreateOpen(false);
+      } catch (cause) {
+        setOperationError(cause instanceof Error ? cause.message : "No fue posible guardar el cliente.");
+      }
+      return;
+    }
     const record: CustomerQualityRecord = {
       ...customer,
       id: crypto.randomUUID(),
@@ -57,10 +82,33 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
       nextExternalAudit: "Sin programar",
       certificates: 0,
     };
-    setCustomers((current) => [record, ...current]);
+    setDemoCustomers((current) => [record, ...current]);
     setSelectedId(record.id);
     setCreateOpen(false);
   };
+
+  const deactivateCustomer = async () => {
+    if (!administrator || demoMode || !selected) return;
+    if (!window.confirm(`Se desactivará ${selected.code} · ${selected.name}. Sus reclamaciones y relaciones históricas se conservarán. ¿Continuar?`)) return;
+    const reason = window.prompt("Motivo obligatorio para desactivar el cliente:")?.trim() ?? "";
+    if (!reason) {
+      setOperationError("La desactivación se canceló: debes indicar un motivo.");
+      return;
+    }
+    setOperationError("");
+    setNotice("");
+    try {
+      const saved = await saveExternalCompany({ id: selected.id, code: selected.code, name: selected.name, kind: "customer", active: false, reason });
+      companyDirectory.setCompanies(saved.companies);
+      setSelectedId("");
+      setNotice(`${selected.code} se desactivó. Sus relaciones e historial se conservaron.`);
+    } catch (cause) {
+      setOperationError(cause instanceof Error ? cause.message : "No fue posible desactivar el cliente.");
+    }
+  };
+
+  if (!demoMode && companyDirectory.loading) return <div className="access-empty" role="status"><p>Consultando clientes registrados…</p></div>;
+  if (!demoMode && companyDirectory.error) return <div className="access-empty" role="alert"><p>No fue posible consultar los clientes: {companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
 
   return (
     <>
@@ -70,16 +118,17 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
           <h2>Gestión de calidad de clientes</h2>
           <p>Expedientes de cliente conectados con reclamos y acciones de Root2Cause.</p>
         </div>
-        <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}>
-          <Plus size={17} /> Agregar cliente
-        </button>
+        {administrator ? <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Agregar cliente</button> : null}
       </section>
+
+      {notice ? <p role="status">{notice}</p> : null}
+      {operationError ? <p role="alert">{operationError}</p> : null}
 
       <section className="metric-grid" aria-label="Resumen de clientes">
         <QualityMetric icon={<Users size={18} />} label="Clientes registrados" value={customers.length} tone="neutral" />
         <QualityMetric icon={<ClipboardCheck size={18} />} label="Reclamos y hallazgos" value={customers.reduce((total, item) => total + item.claims + item.findings, 0)} tone="danger" />
         <QualityMetric icon={<CheckCircle2 size={18} />} label="Acciones abiertas" value={customers.reduce((total, item) => total + item.openActions, 0)} tone="warning" />
-        <QualityMetric icon={<CalendarDays size={18} />} label="Auditorías programadas" value={externalAuditCalendar.length} tone="success" />
+        <QualityMetric icon={<CalendarDays size={18} />} label="Auditorías programadas" value={displayedAudits.length} tone="success" />
       </section>
 
       <div className="quality-view-tabs" aria-label="Vistas de calidad de clientes">
@@ -99,7 +148,7 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
             <div className="configuration-count">{filteredCustomers.length} clientes</div>
             <div className="party-list">
               {filteredCustomers.map((customer) => (
-                <button className={customer.id === selected.id ? "selected" : ""} key={customer.id} type="button" onClick={() => setSelectedId(customer.id)}>
+                <button className={customer.id === selected?.id ? "selected" : ""} key={customer.id} type="button" onClick={() => setSelectedId(customer.id)}>
                   <span><strong>{customer.name}</strong><small>{customer.code}</small></span>
                   <span className={customer.openActions > 0 ? "quality-state warning" : "quality-state success"}>
                     {customer.openActions > 0 ? `${customer.openActions} abiertas` : "Sin pendientes"}
@@ -108,11 +157,12 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
               ))}
             </div>
           </div>
-          <div className="party-detail-panel">
+          {selected ? <div className="party-detail-panel">
             <header>
               <span className="detail-eyebrow"><Users size={14} /> {selected.code}</span>
               <h3>{selected.name}</h3>
               <p>Expediente interno y contenido autorizado para su portal.</p>
+              {administrator && !demoMode ? <button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button> : null}
             </header>
             <div className="party-detail-facts">
               <div><small>Reclamos</small><strong>{selected.claims}</strong></div>
@@ -128,7 +178,7 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
                 <div><CalendarDays size={17} /><span><strong>Próxima auditoría externa</strong><small>{formatDate(selected.nextExternalAudit)}</small></span></div>
               </div>
             </section>
-          </div>
+          </div> : <div className="party-detail-panel"><p>{demoMode ? "No hay clientes en el catálogo." : "No hay clientes activos registrados en Supabase."}</p></div>}
         </section>
       ) : null}
 
@@ -149,7 +199,7 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
         <QualityTablePanel title="Calendario de auditorías externas" subtitle="Vista autorizada también para clientes">
           <table className="quality-table">
             <thead><tr><th>Evento</th><th>Cliente u organismo</th><th>Fecha</th><th>Alcance</th><th>Estado</th></tr></thead>
-            <tbody>{externalAuditCalendar.map((audit) => <tr key={audit.id}><td><code>{audit.id}</code></td><td><strong>{audit.party}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}</tbody>
+            <tbody>{displayedAudits.map((audit) => <tr key={audit.id}><td><code>{audit.id}</code></td><td><strong>{audit.party}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}{!displayedAudits.length ? <tr><td colSpan={5}>Sin auditorías externas registradas en una fuente persistente.</td></tr> : null}</tbody>
           </table>
         </QualityTablePanel>
       ) : null}
@@ -158,7 +208,7 @@ export function CustomersModule({ actions }: { actions: CorrectiveAction[] }) {
         <QualityTablePanel title="Certificaciones y certificados vigentes" subtitle="Solo se publican documentos vigentes">
           <table className="quality-table">
             <thead><tr><th>Certificación</th><th>Documento</th><th>Vigente hasta</th><th>Estado</th></tr></thead>
-            <tbody>{activeCertifications.map((certification) => <tr key={certification.name}><td><strong>{certification.name}</strong></td><td>{certification.certificate}</td><td>{formatDate(certification.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}</tbody>
+            <tbody>{displayedCertifications.map((certification) => <tr key={certification.name}><td><strong>{certification.name}</strong></td><td>{certification.certificate}</td><td>{formatDate(certification.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}{!displayedCertifications.length ? <tr><td colSpan={4}>Sin certificaciones registradas en una fuente persistente.</td></tr> : null}</tbody>
           </table>
         </QualityTablePanel>
       ) : null}
@@ -176,12 +226,12 @@ function QualityTablePanel({ title, subtitle, children }: { title: string; subti
   return <section className="quality-table-panel"><header><div><h3>{title}</h3><p>{subtitle}</p></div><FileCheck2 size={19} /></header><div className="quality-table-wrap">{children}</div></section>;
 }
 
-function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Pick<CustomerQualityRecord, "code" | "name">) => void }) {
+function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Pick<CustomerQualityRecord, "code" | "name">) => void | Promise<void> }) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (code.trim() && name.trim()) onCreate({ code: code.trim(), name: name.trim() });
+    if (code.trim() && name.trim()) void onCreate({ code: code.trim(), name: name.trim() });
   };
   return (
     <div className="modal-backdrop" role="presentation">

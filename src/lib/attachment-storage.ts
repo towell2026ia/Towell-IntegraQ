@@ -147,17 +147,21 @@ export async function uploadAttachment(
   return result.data.id;
 }
 
-export async function softDeleteAttachment(attachment: AttachmentRecord) {
+export async function softDeleteAttachment(attachment: AttachmentRecord, reason: string) {
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) throw new Error("El motivo de eliminación es obligatorio.");
   const supabase = createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
   await assertAdministrator(supabase, userData.user.id);
-  const { error } = await supabase.from("file_objects").update({
+  const { data, error } = await supabase.from("file_objects").update({
     deleted_at: new Date().toISOString(),
     deleted_by: userData.user.id,
+    deletion_reason: normalizedReason,
     is_current: false,
-  }).eq("id", attachment.id).is("deleted_at", null);
+  }).eq("id", attachment.id).is("deleted_at", null).select("id").maybeSingle();
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("El servidor no confirmó el retiro del archivo. No se modificó el catálogo.");
 }
 
 export async function getAttachmentSignedUrl(

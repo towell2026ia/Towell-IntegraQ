@@ -30,6 +30,7 @@ export interface SaveExternalCompanyInput {
   kind: ExternalCompanyKind;
   active?: boolean;
   category?: string;
+  reason?: string;
 }
 
 export interface SaveExternalCompanySiteInput {
@@ -39,6 +40,10 @@ export interface SaveExternalCompanySiteInput {
   name: string;
   address?: string;
   active?: boolean;
+}
+
+export function validateExternalCompanyDeactivation(active: boolean | undefined, reason: string | undefined) {
+  return active !== false || Boolean(reason?.trim());
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

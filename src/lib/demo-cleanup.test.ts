@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { buildInitialImprovementProjects, normalizeImprovementProjects } from "@/lib/continuous-improvement-data";
+import { initialAuditOccurrences } from "@/lib/audit-data";
 import { demoCorrectiveActions, restoreInitialCorrectiveActions } from "@/lib/demo-data";
-import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
+import { withoutKnownDemoManagementReviews, withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { appFormCatalog } from "@/lib/form-data";
 import { validateHistoricalMinutes } from "@/lib/historical-minutes";
 import { buildDemoManagementReviewHistory } from "@/lib/management-review-data";
@@ -35,6 +36,17 @@ describe("limpieza conservadora de muestras", () => {
     const edited = { ...form.records[0], status: "real" };
     expect(withoutUnchangedSamples([...form.records, edited], form.records)).toEqual([edited]);
     expect(appFormCatalog.map(item => item.id)).toEqual(["FORM-VE-01", "FORM-CA-25", "FORM-TE-01"]);
+  });
+
+  it("retira sólo las revisiones de Dirección de ejemplo identificadas", () => {
+    const records = [{ id: "RPD-2024-01" }, { id: "RPD-2025-01" }, { id: "RPD-2026-01" }];
+    expect(withoutKnownDemoManagementReviews(records)).toEqual([{ id: "RPD-2026-01" }]);
+  });
+
+  it("auditorías: elimina semillas intactas y conserva cambios hechos por usuarios", () => {
+    const changed = { ...initialAuditOccurrences[0], title: "Auditoría real editada" };
+    expect(withoutUnchangedSamples(initialAuditOccurrences, initialAuditOccurrences)).toEqual([]);
+    expect(withoutUnchangedSamples([...initialAuditOccurrences, changed], initialAuditOccurrences)).toEqual([changed]);
   });
 
   it("inicia riesgos sin registros de ejemplo y conserva los datos cargados", () => {

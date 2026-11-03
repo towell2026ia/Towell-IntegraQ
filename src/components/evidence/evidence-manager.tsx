@@ -111,9 +111,14 @@ export function EvidenceManager({
       return;
     }
     if (!window.confirm(`¿Deseas eliminar ${attachment.originalName}? El registro se conservará en el histórico.`)) return;
+    const reason = window.prompt("Motivo obligatorio para retirar la evidencia:")?.trim() ?? "";
+    if (!reason) {
+      setError("La eliminación se canceló: debes indicar un motivo.");
+      return;
+    }
     setBusy(attachment.id); setError("");
     try {
-      await softDeleteAttachment(attachment);
+      await softDeleteAttachment(attachment, reason);
       await refresh();
     } catch (deleteError) {
       setError(deleteError instanceof Error ? deleteError.message : "No fue posible eliminar la evidencia.");

@@ -51,7 +51,7 @@ import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal
 import { SuppliersModule } from "@/components/modules/suppliers-module";
 import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import { useHomeAppearance } from "@/lib/use-home-appearance";
-import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
+import { withoutKnownDemoManagementReviews, withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { loadStoredCorrectiveActions } from "@/lib/corrective-action-storage";
 import { loadRetiredDemoCorrectiveActions } from "@/lib/root-cause-publication";
 import {
@@ -229,7 +229,7 @@ export function IntegraQWorkspace({
     () => [],
   );
   const [auditOccurrences, setAuditOccurrences] = useState<AuditOccurrence[]>(
-    initialAuditOccurrences,
+    () => demoMode ? initialAuditOccurrences : [],
   );
   const [storageReady, setStorageReady] = useState(false);
   const [actionLoadError, setActionLoadError] = useState("");
@@ -299,17 +299,20 @@ export function IntegraQWorkspace({
           }));
         }
         if (savedManagementReviews) {
-          setManagementReviews(withoutUnchangedSamples(JSON.parse(savedManagementReviews) as ManagementReviewRecord[], buildDemoManagementReviewHistory()));
+          const saved = withoutUnchangedSamples(JSON.parse(savedManagementReviews) as ManagementReviewRecord[], buildDemoManagementReviewHistory());
+          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
         } else if (savedManagementReview) {
           const migrated = JSON.parse(savedManagementReview) as ManagementReviewRecord;
-          setManagementReviews(withoutUnchangedSamples([migrated], buildDemoManagementReviewHistory()));
+          const saved = withoutUnchangedSamples([migrated], buildDemoManagementReviewHistory());
+          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
         }
         if (savedImprovementProjects) {
           const samples = buildInitialImprovementProjects();
           setImprovementProjects(normalizeImprovementProjects(withoutUnchangedSamples(JSON.parse(savedImprovementProjects) as ImprovementProject[], [...samples, ...normalizeImprovementProjects(samples)], ["createdAt", "updatedAt"])));
         }
         if (savedAudits) {
-          setAuditOccurrences(JSON.parse(savedAudits) as AuditOccurrence[]);
+          const saved = JSON.parse(savedAudits) as AuditOccurrence[];
+          setAuditOccurrences(demoMode ? saved : withoutUnchangedSamples(saved, initialAuditOccurrences));
         }
       } catch {
         // Keep the empty state when browser storage is unavailable.
@@ -625,7 +628,7 @@ export function IntegraQWorkspace({
           {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== session ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
           {activeModule === "corrective-actions" && (demoMode || actionLoadedSession === session) ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
+          {activeModule === "customers" ? <CustomersModule actions={actions} demoMode={demoMode} session={session} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}

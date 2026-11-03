@@ -43,19 +43,18 @@ import {
 } from "@/lib/audit-data";
 import { processCatalog } from "@/lib/configuration-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import { customerQualityCatalog } from "@/lib/quality-parties-data";
-import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { isAdministrator, isDemoSession, type ActiveSession } from "@/lib/session-data";
+import { useExternalCompanies } from "@/hooks/use-external-companies";
 
 type AuditView = "calendar" | "registry" | "create" | "success";
 type CalendarMonth = { year: number; month: number };
 
-const customers = [
+const demoCustomers = [
   { id: "walmart", name: "Walmart" },
   { id: "target", name: "Target" },
   { id: "costco", name: "Costco" },
   { id: "amazon", name: "Amazon" },
   { id: "liverpool", name: "Liverpool" },
-  ...customerQualityCatalog.map((customer) => ({ id: customer.id, name: customer.name })),
 ];
 
 const auditUsers = [
@@ -81,6 +80,10 @@ export function AuditsModule({
   const [created, setCreated] = useState<AuditOccurrence | null>(null);
   const [calendarMonth, setCalendarMonth] = useState<CalendarMonth>(() => initialAuditMonth(occurrences));
   const [selectedAudit, setSelectedAudit] = useState<AuditOccurrence | null>(null);
+  const companyDirectory = useExternalCompanies();
+  const customerOptions = isDemoSession(session)
+    ? demoCustomers
+    : companyDirectory.companies.filter((company) => company.kind === "customer" && company.active).map(({ id, name }) => ({ id, name }));
   const canCreate = canPerformModuleAction(session, "audits", "manage") || canPerformModuleAction(session, "audits", "create");
 
   const filtered = useMemo(() => {
@@ -106,7 +109,7 @@ export function AuditsModule({
   };
 
   if (view === "create") {
-    return <AuditCreateForm existing={occurrences} onCancel={() => setView("calendar")} onSave={save} session={session} />;
+    return <AuditCreateForm customers={customerOptions} existing={occurrences} onCancel={() => setView("calendar")} onSave={save} session={session} />;
   }
 
   if (view === "success" && created) {
@@ -353,11 +356,13 @@ function getCalendarCells(year: number, month: number) {
 }
 
 function AuditCreateForm({
+  customers,
   existing,
   onCancel,
   onSave,
   session,
 }: {
+  customers: Array<{ id: string; name: string }>;
   existing: AuditOccurrence[];
   onCancel: () => void;
   onSave: (draft: AuditDraft, confirmed: boolean) => void;

@@ -149,7 +149,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
         </section>
       ) : null}
 
-      {view === "audits" ? <SemesterAuditCalendar /> : null}
+      {view === "audits" ? <SemesterAuditCalendar demo={demo} /> : null}
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
@@ -162,7 +162,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   );
 }
 
-function SemesterAuditCalendar() {
+function SemesterAuditCalendar({ demo }: { demo: boolean }) {
   const defaultSemester = getCurrentSemesterId();
   const [semesterId, setSemesterId] = useState(defaultSemester);
   const [eventsBySemester, setEventsBySemester] = useState<Record<string, SupplierAuditCalendarEvent[]>>(
@@ -188,6 +188,8 @@ function SemesterAuditCalendar() {
     }));
     setEditingId(null);
   };
+
+  if (!demo) return <section className="semester-calendar-panel"><p>Sin auditorías de proveedor registradas en una fuente persistente.</p></section>;
 
   return (
     <section className="semester-calendar-panel">

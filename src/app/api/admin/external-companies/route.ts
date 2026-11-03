@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import type { ExternalCompany, ExternalCompanySite } from "@/lib/external-company-data";
+import { validateExternalCompanyDeactivation, type ExternalCompany, type ExternalCompanySite } from "@/lib/external-company-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -138,6 +138,10 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   const name = clean(payload.name);
   const kind = payload.kind === "customer" || payload.kind === "supplier" ? payload.kind : null;
   if (!code || !name || !kind) return NextResponse.json({ error: "Código, nombre y tipo de empresa son obligatorios." }, { status: 400 });
+  const reason = clean(payload.reason);
+  if (!create && !validateExternalCompanyDeactivation(payload.active === false ? false : true, reason)) {
+    return NextResponse.json({ error: "Indica el motivo para desactivar la empresa." }, { status: 400 });
+  }
   const admin = createAdminClient();
   const values = { code, name, kind, active: payload.active !== false };
   const saved = create
@@ -150,7 +154,7 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
     const profile = await admin.from("supplier_quality_profiles").upsert({ organization_id: saved.data.id, category: clean(payload.category) || null, active: payload.active !== false, updated_by: actor.id }, { onConflict: "organization_id" });
     if (profile.error) throw profile.error;
   }
-  await writeAudit(actor.id, create ? "external_company.created" : "external_company.updated", saved.data.id, values);
+  await writeAudit(actor.id, create ? "external_company.created" : payload.active === false ? "external_company.deactivated" : "external_company.updated", saved.data.id, payload.active === false ? { ...values, reason } : values);
   return { company: mapCompany(saved.data as CompanyRow, [], clean(payload.category) || undefined) };
 }
 
