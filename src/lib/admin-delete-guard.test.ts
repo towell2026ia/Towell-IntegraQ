@@ -42,6 +42,17 @@ describe("proposed administrative deletion guard", () => {
     expect(sql).toContain("delete_reason_actor_required");
     expect(sql).not.toMatch(/create policy[^;]*on public\.file_objects[\s\S]{0,120}for update/i);
   });
+
+  it("validates internal company ownership for direct writes without claiming legacy rows", () => {
+    expect(sql).toContain("create function public.iq_validate_external_company_owner()");
+    expect(sql).toContain("create trigger iq_validate_external_company_owner before insert or update on public.organizations");
+    expect(sql).toContain("owner_kind <> 'internal'");
+    expect(sql).toContain("owner.active");
+    expect(sql).toContain("public.current_organization_ids()");
+    expect(sql).toContain("external_company_owner_immutable");
+    expect(sql).toContain("external_company_owner_required");
+    expect(sql).not.toMatch(/\b(update public\.organizations|delete from public\.organizations)\b/);
+  });
 });
 
 describe("risk deletion state", () => {
