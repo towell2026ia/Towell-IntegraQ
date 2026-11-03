@@ -17,10 +17,10 @@ export async function GET(request: Request) {
     if (profile.error || !profile.data?.organization_id || profile.data.status !== "active" || !["administrator", "internal"].includes(profile.data.user_type) || profile.data.workspace_mode === "demo") return NextResponse.json({ error: "La cuenta no tiene un ámbito productivo válido." }, { status: 403 });
     const admin = createAdminClient();
     type Filter = [string, "eq" | "in" | "is", unknown];
-    async function read(table: string, columns: string, filters: Filter[] = [], order = "id"): Promise<HomeRow[]> {
+    async function read(table: string, columns: string, filters: Filter[] = [], order = "id", authenticated = false): Promise<HomeRow[]> {
       const rows: HomeRow[] = []; let total: number | null = null;
       for (;;) {
-        let query = admin.from(table).select(columns, { count: "exact" });
+        let query = (authenticated ? client : admin).from(table).select(columns, { count: "exact" });
         for (const [column, op, value] of filters) query = op === "in" ? query.in(column, value as string[]) : op === "is" ? query.is(column, value as null) : query.eq(column, value);
         query = query.order(order);
         if (table === "indicator_definition_processes") query = query.order("process_id");
@@ -34,9 +34,9 @@ export async function GET(request: Request) {
         if (rows.length >= total) return rows;
       }
     }
-    async function children(table: string, columns: string, column: string, ids: string[], order = "id") {
+    async function children(table: string, columns: string, column: string, ids: string[], order = "id", authenticated = false) {
       const rows: HomeRow[] = [];
-      for (let i = 0; i < ids.length; i += 100) rows.push(...await read(table, columns, [[column, "in", ids.slice(i, i + 100)]], order));
+      for (let i = 0; i < ids.length; i += 100) rows.push(...await read(table, columns, [[column, "in", ids.slice(i, i + 100)]], order, authenticated));
       return rows;
     }
     const org = profile.data.organization_id;
@@ -51,7 +51,7 @@ export async function GET(request: Request) {
     const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\.[^.]+$/, "").trim().toLocaleLowerCase("es");
     const versions = await children("controlled_document_versions", "id,document_id,revision,status,file_id,file_name,uploaded_by,validator_id,updated_at", "document_id", ownedDocuments.map(d => text(d, "id")));
     const institutional = ownedDocuments.filter(d => institutionalImageTitles.some(title => normalize(title) === normalize(text(d, "title")) || versions.some(v => v.document_id === d.id && normalize(title) === normalize(text(v, "file_name")))) && d.active === true && !d.deleted_at);
-    const documents = ownedDocuments.filter(d => processIds.includes(text(d, "process_id")) && canPerformModuleAction(session, "documents", "view"));
+    const documents = canPerformModuleAction(session, "documents", "view") ? (await children("controlled_documents", "id,process_id,organization_id,code,title,document_type_id,active,deleted_at", "process_id", processIds, "id", true)).filter(d => d.organization_id === org || d.organization_id === null) : [];
     const documentIds = [...new Set([...documents, ...institutional].map(d => text(d, "id")))];
     const lifecycle = await children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", documentIds, "document_id");
     const imageDocuments: ControlledDocument[] = [];
@@ -70,7 +70,7 @@ export async function GET(request: Request) {
     }
     const url = new URL(request.url);
     if (url.searchParams.has("image")) { const signedUrl = imageUrls[url.searchParams.get("image")!]; return signedUrl ? NextResponse.json({ signedUrl }, { headers: { "Cache-Control": "private, no-store" } }) : NextResponse.json({ error: "Imagen institucional no disponible." }, { status: 404 }); }
-    const indicators = canPerformModuleAction(session, "indicators", "view") ? await read("indicator_definitions", "id,code,name,process_id,active,leader_id,leader_name,metric_label,periodicity", [["organization_id", "eq", org], ["workspace_mode", "eq", "production"], ["active", "eq", true]]) : [];
+    const indicators = canPerformModuleAction(session, "indicators", "view") ? await read("indicator_definitions", "id,code,name,process_id,active,leader_id,leader_name,metric_label,periodicity", [["organization_id", "eq", org], ["workspace_mode", "eq", "production"], ["active", "eq", true]], "id", true) : [];
     const relations = await children("indicator_definition_processes", "indicator_id,process_id", "indicator_id", indicators.map(d => text(d, "id")), "indicator_id");
     const scopedIndicators = indicators.filter(d => processIds.includes(text(d, "process_id")) || relations.some(r => r.indicator_id === d.id && processIds.includes(text(r, "process_id"))));
     const indicatorIds = scopedIndicators.map(d => text(d, "id"));
@@ -79,9 +79,9 @@ export async function GET(request: Request) {
       homeSections: await read("home_sections", "id,active,visible_to_administrators"),
       rules: await children("indicator_evaluation_rules", "indicator_id,compliant_rule,marginal_rule,noncompliant_rule", "indicator_id", indicatorIds, "indicator_id"),
       results: await children("indicator_results", "id,period_id,value,evaluation_status,submitted_by,submitted_at", "period_id", periods.map(p => text(p, "id"))),
-      actions: canPerformModuleAction(session, "corrective-actions", "view") && processIds.length ? await read("corrective_actions", "id,folio,title,process_id,owner_id,owner_name,status,deleted_at,due_date,created_at", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]]) : [],
-      audits: canPerformModuleAction(session, "audits", "view") && processIds.length ? await read("audits", "id,code,title,process_id,status,scheduled_date,completed_at,lead_auditor_id,responsible_user_id", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]]) : [],
-      assets: canPerformModuleAction(session, "calibrations", "view") && processIds.length ? await read("measurement_assets", "id,code,name,process_id,owner_id,owner_name,next_due_date,schedule_pending", [["organization_id", "eq", org], ["process_id", "in", processIds], ["active", "eq", true]]) : [],
+      actions: canPerformModuleAction(session, "corrective-actions", "view") && processIds.length ? await read("corrective_actions", "id,folio,title,process_id,owner_id,owner_name,status,deleted_at,due_date,created_at", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]], "id", true) : [],
+      audits: canPerformModuleAction(session, "audits", "view") && processIds.length ? await read("audits", "id,code,title,process_id,status,scheduled_date,completed_at,lead_auditor_id,responsible_user_id", [["organization_id", "eq", org], ["process_id", "in", processIds], ["deleted_at", "is", null]], "id", true) : [],
+      assets: canPerformModuleAction(session, "calibrations", "view") && processIds.length ? await read("measurement_assets", "id,code,name,process_id,owner_id,owner_name,next_due_date,schedule_pending", [["organization_id", "eq", org], ["process_id", "in", processIds], ["active", "eq", true]], "id", true) : [],
       documentActivity: await children("document_audit_log", "id,document_id,event_type,performed_by,performed_at", "document_id", documents.map(d => text(d, "id"))),
       activity: await read("audit_log", "id,resource_type,resource_id,action,created_at,user_name_snapshot", [["organization_id", "eq", org]]),
       approvals: [],

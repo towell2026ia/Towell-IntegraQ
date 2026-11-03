@@ -35,6 +35,7 @@ Producción, SQL, RLS, archivos y datos: sin cambios.
 ## Implementación
 
 - `/api/home/process-dashboard`: sesión interna activa con permiso de Inicio; perfil persistido; organización y procesos autorizados antes de responder. Las credenciales de servicio sólo se utilizan después de comprobar ese contexto. Clientes y proveedores rechazados antes de acceder a ellas.
+- Los documentos operativos, indicadores, acciones, auditorías y equipos se leen con la sesión autenticada además del filtro de organización/proceso, conservando las restricciones RLS particulares de cada módulo. Las consultas auxiliares privilegiadas sólo usan referencias de padres autorizados, salvo la resolución institucional explícitamente compartida. Las restricciones de Root2Cause todavía vigentes en main siguen aplicando; este PR no incorpora ni sustituye el PR #20.
 - Lecturas paginadas con orden estable, total comprobado y detección de duplicados/cambios durante la consulta. Un error devuelve 503 y el cliente muestra datos no disponibles; no recurre al catálogo local.
 - Documentos vigentes/activos y eliminación lógica; versiones y auditoría documental. Pendientes por ID del validador/cargador y permisos efectivos, no por coincidencia de nombres.
 - KPI de `indicator_definitions`, relaciones de procesos, reglas, periodos y resultados. Cada indicador se cuenta una vez aun si pertenece a varios procesos. Captura pendiente sólo durante ventana abierta, sin resultado y bajo responsabilidad explícita (líder o responsable de proceso) y permiso de actualización.

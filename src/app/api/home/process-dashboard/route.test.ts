@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { activeSession } from "@/lib/session-data";
-const state = vi.hoisted(() => ({ session: null as unknown, rows: {} as Record<string, Record<string, unknown>[]>, fail: "", calls: [] as string[] }));
+const state = vi.hoisted(() => ({ session: null as unknown, rows: {} as Record<string, Record<string, unknown>[]>, fail: "", calls: [] as string[], authenticatedTables: [] as string[] }));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 function query(table: string) {
   state.calls.push(table);
@@ -16,11 +16,11 @@ function query(table: string) {
     then: (resolve: (value: unknown) => unknown) => resolve({ data: rows, count, error: state.fail === table ? { code: "failure" } : null }),
   }; return q;
 }
-vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: query, rpc: async () => ({ data: true }) }) }));
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: (table: string) => { state.authenticatedTables.push(table); return query(table); }, rpc: async () => ({ data: true }) }) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: query, storage: { from: () => ({ createSignedUrl: async () => ({ data: { signedUrl: "https://test/image" }, error: null }) }) } }) }));
 import { GET } from "./route";
 beforeEach(() => {
-  state.calls = []; state.fail = "";
+  state.calls = []; state.authenticatedTables = []; state.fail = "";
   state.session = { ...activeSession, authUserId: "user", workspaceMode: "production" };
   state.rows = { profiles: [{ id: "user", status: "active", user_type: "administrator", organization_id: "org", workspace_mode: "production" }], processes: [{ id: "quality", name: "Calidad", organization_id: "org", active: true }, { id: "foreign", name: "Ajeno", organization_id: "other", active: true }] };
 });
@@ -29,6 +29,7 @@ describe("API de Inicio: alcance en servidor", () => {
     const response = await GET(new Request("https://test/api/home/process-dashboard"));
     expect(response.status).toBe(200);
     expect((await response.json()).dashboard.processScope.ids).toEqual(["quality"]);
+    expect(state.authenticatedTables).toEqual(expect.arrayContaining(["controlled_documents", "indicator_definitions", "corrective_actions", "audits", "measurement_assets"]));
   });
   it("usuario interno sólo recibe sus procesos persistidos", async () => {
     state.session = { ...activeSession, authUserId: "user", userType: "Usuario interno", assignedModuleIds: ["home"], assignedProcessIds: ["foreign"] };
@@ -59,7 +60,7 @@ describe("API de Inicio: alcance en servidor", () => {
     expect(response.status).toBe(200);
     const body = await response.json();
     expect(body.dashboard.documentMetrics.find((m: { id: string }) => m.id === "current").value).toBe(501);
-    expect(state.calls.filter(table => table === "controlled_documents")).toHaveLength(2);
+    expect(state.authenticatedTables.filter(table => table === "controlled_documents")).toHaveLength(2);
   });
   it("comparte la misma imagen vigente con internos sin permiso de edición ni proceso documental", async () => {
     state.rows.controlled_documents = [{ id: "doc", organization_id: "org", process_id: "quality", title: "Política de Calidad", active: true, deleted_at: null }];
