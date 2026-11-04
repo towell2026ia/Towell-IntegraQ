@@ -118,12 +118,17 @@ export function ProcessOrganizationChart({
   }
 
   async function removeCurrent() {
-    if (!source || !window.confirm("¿Deseas eliminar el organigrama actual?")) return;
+    if (!source || !permissions.delete || !window.confirm("¿Deseas retirar el organigrama actual?")) return;
+    const reason = window.prompt("Motivo obligatorio para retirar el archivo del organigrama:")?.trim();
+    if (!reason) {
+      setFeedback("Retiro cancelado: debes indicar el motivo.");
+      return;
+    }
     setDeleting(true); setFeedback("");
     try {
-      await deleteProcessOrganizationChart(source);
+      await deleteProcessOrganizationChart(source, reason);
       setSourceUrl(""); setShowImage(false);
-      setFeedback("Organigrama eliminado. Ya puedes cargar uno nuevo.");
+      setFeedback("Organigrama retirado. Ya puedes cargar uno nuevo.");
       await onSaved();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "No fue posible eliminar el organigrama.");

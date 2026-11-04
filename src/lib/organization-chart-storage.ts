@@ -141,16 +141,21 @@ export async function getProcessOrganizationChartUrl(source: ProcessOrganization
   return data.signedUrl;
 }
 
-export async function deleteProcessOrganizationChart(source: ProcessOrganizationSource) {
+export async function deleteProcessOrganizationChart(source: ProcessOrganizationSource, reason: string) {
+  const normalizedReason = reason.trim();
+  if (!normalizedReason) throw new Error("El motivo para retirar el organigrama es obligatorio.");
   const supabase = createClient();
   const { data: userData, error: userError } = await supabase.auth.getUser();
   if (userError || !userData.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
-  const { error } = await supabase.from("file_objects").update({
+  const { data, error } = await supabase.from("file_objects").update({
     is_current: false,
     deleted_at: new Date().toISOString(),
     deleted_by: userData.user.id,
-  }).eq("id", source.id).is("deleted_at", null);
+    deletion_reason: normalizedReason,
+  }).eq("id", source.id).eq("process_id", source.processId).eq("resource_type", "process_organization_chart")
+    .is("deleted_at", null).select("id").maybeSingle();
   if (error) throw new Error(error.message);
+  if (!data) throw new Error("El servidor no confirmó el retiro del organigrama.");
 }
 
 function safeName(value: string) {
