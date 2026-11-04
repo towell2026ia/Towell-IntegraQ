@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { DocumentPreviewViewer } from "@/components/modules/document-preview-viewer";
-import { getAttachmentSignedUrl, listAttachments, listModuleAttachments, uploadAttachment, type AttachmentRecord } from "@/lib/attachment-storage";
+import { getAttachmentSignedUrl, listAttachments, listModuleAttachments, softDeleteAttachment, uploadAttachment, type AttachmentRecord } from "@/lib/attachment-storage";
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { validateHistoricalMinutes } from "@/lib/historical-minutes";
 import type { ActiveSession } from "@/lib/session-data";
@@ -20,6 +20,7 @@ export function ManagementReviewMinutes({ session }: { session: ActiveSession })
   const [status, setStatus] = useState("Finalizada");
   const [file, setFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [selected, setSelected] = useState<AttachmentRecord | null>(null);
   const isAdministrator = session.userType === "Administrador";
 
@@ -57,6 +58,20 @@ export function ManagementReviewMinutes({ session }: { session: ActiveSession })
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible descargar el acta."); }
   }
 
+  async function remove(attachment: AttachmentRecord) {
+    if (!isAdministrator || removingId) return;
+    if (!window.confirm(`Se retirará el acta ${attachment.resourceKey} · ${attachment.originalName} del catálogo vigente. El archivo y su historial se conservarán. ¿Continuar?`)) return;
+    const reason = window.prompt("Motivo obligatorio para retirar esta acta:")?.trim() ?? "";
+    if (!reason) { setError("El retiro se canceló: debes indicar un motivo."); return; }
+    setRemovingId(attachment.id); setError("");
+    try {
+      await softDeleteAttachment(attachment, reason);
+      setRetry(value => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No fue posible retirar el acta.");
+    } finally { setRemovingId(null); }
+  }
+
   const sourceUrl = useCallback(async () => selected
     ? getAttachmentSignedUrl(selected, selected.previewStatus === "ready" && selected.previewPath ? "preview" : "original")
     : null, [selected]);
@@ -80,7 +95,7 @@ export function ManagementReviewMinutes({ session }: { session: ActiveSession })
       <button className="button button-primary" type="submit" disabled={saving}>{saving ? "Guardando…" : files.some(item => item.resourceKey === year && item.isCurrent) ? "Adjuntar nueva versión" : "Adjuntar acta"}</button>
     </form> : null}
     {error ? <p role="alert">{error} <button type="button" onClick={() => setRetry(value => value + 1)}>Reintentar</button></p> : null}
-    {loading ? <p role="status">Consultando actas históricas…</p> : files.length ? <div className="management-history-table-wrap"><table className="management-history-table"><thead><tr><th>Año</th><th>Fecha</th><th>Responsable</th><th>Estado</th><th>Archivo</th><th>Versión</th><th>Consulta</th></tr></thead><tbody>{files.map(item => <tr key={item.id}><td>{item.resourceKey}</td><td>{item.validFrom || "—"}</td><td>{item.displayName || "—"}</td><td>{item.description || "—"}</td><td>{item.originalName}</td><td>{item.version}</td><td><button className="button button-secondary" type="button" onClick={() => setSelected(item)}>Ver</button> <button className="button button-secondary" type="button" onClick={() => void download(item)}>Descargar original</button></td></tr>)}</tbody></table></div> : <p>No hay actas históricas adjuntas.</p>}
+    {loading ? <p role="status">Consultando actas históricas…</p> : files.length ? <div className="management-history-table-wrap"><table className="management-history-table"><thead><tr><th>Año</th><th>Fecha</th><th>Responsable</th><th>Estado</th><th>Archivo</th><th>Versión</th><th>Consulta</th>{isAdministrator ? <th>Administración</th> : null}</tr></thead><tbody>{files.map(item => <tr key={item.id}><td>{item.resourceKey}</td><td>{item.validFrom || "—"}</td><td>{item.displayName || "—"}</td><td>{item.description || "—"}</td><td>{item.originalName}</td><td>{item.version}</td><td><button className="button button-secondary" type="button" onClick={() => setSelected(item)}>Ver</button> <button className="button button-secondary" type="button" onClick={() => void download(item)}>Descargar original</button></td>{isAdministrator ? <td><button className="button button-secondary" disabled={removingId !== null} type="button" onClick={() => void remove(item)}>{removingId === item.id ? "Retirando…" : "Retirar"}</button></td> : null}</tr>)}</tbody></table></div> : <p>No hay actas históricas adjuntas.</p>}
     {version ? <div className="historical-minutes-backdrop" role="presentation" onMouseDown={() => setSelected(null)}><section role="dialog" aria-modal="true" aria-label={`Vista de ${version.fileName}`} onMouseDown={event => event.stopPropagation()}><button className="button button-secondary" type="button" onClick={() => setSelected(null)}>Cerrar</button><DocumentPreviewViewer code={selected?.resourceKey || "RPD"} version={version} sourceUrl={sourceUrl} onReadyChange={onReadyChange} /></section></div> : null}
   </section>;
 }

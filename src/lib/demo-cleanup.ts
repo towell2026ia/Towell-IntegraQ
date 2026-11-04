@@ -19,3 +19,9 @@ export function withoutUnchangedSamples<T extends { id: string }>(saved: T[], sa
     return !variants?.some(sample => comparable(item) === comparable(sample));
   });
 }
+
+/** Remove only the two management-review examples explicitly identified by the customer. */
+export function withoutKnownDemoManagementReviews<T extends { id: string }>(records: T[]): T[] {
+  const demoIds = new Set(["RPD-2024-01", "RPD-2025-01"]);
+  return records.filter((record) => !demoIds.has(record.id));
+}

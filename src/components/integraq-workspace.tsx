@@ -51,8 +51,9 @@ import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal
 import { SuppliersModule } from "@/components/modules/suppliers-module";
 import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import { useHomeAppearance } from "@/lib/use-home-appearance";
-import { withoutUnchangedSamples } from "@/lib/demo-cleanup";
+import { withoutKnownDemoManagementReviews, withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { loadStoredCorrectiveActions } from "@/lib/corrective-action-storage";
+import { loadRetiredDemoCorrectiveActions } from "@/lib/root-cause-publication";
 import {
   demoCorrectiveActions,
   demoMeasurementAssets,
@@ -105,6 +106,7 @@ import { isDemoSession, isExternalUser, type ActiveSession } from "@/lib/session
 import {
   loadRiskWorkspace,
   saveRiskWorkspace,
+  softDeleteStoredRisk,
   startRiskAnalysis,
 } from "@/lib/risk-workspace-storage";
 import {
@@ -227,10 +229,11 @@ export function IntegraQWorkspace({
     () => [],
   );
   const [auditOccurrences, setAuditOccurrences] = useState<AuditOccurrence[]>(
-    initialAuditOccurrences,
+    () => demoMode ? initialAuditOccurrences : [],
   );
   const [storageReady, setStorageReady] = useState(false);
   const [actionLoadError, setActionLoadError] = useState("");
+  const [actionLoadedSession, setActionLoadedSession] = useState<ActiveSession | null>(null);
   const [actionRetry, setActionRetry] = useState(0);
   const [riskServerReady, setRiskServerReady] = useState(false);
   const [riskLoadError, setRiskLoadError] = useState("");
@@ -296,17 +299,20 @@ export function IntegraQWorkspace({
           }));
         }
         if (savedManagementReviews) {
-          setManagementReviews(withoutUnchangedSamples(JSON.parse(savedManagementReviews) as ManagementReviewRecord[], buildDemoManagementReviewHistory()));
+          const saved = withoutUnchangedSamples(JSON.parse(savedManagementReviews) as ManagementReviewRecord[], buildDemoManagementReviewHistory());
+          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
         } else if (savedManagementReview) {
           const migrated = JSON.parse(savedManagementReview) as ManagementReviewRecord;
-          setManagementReviews(withoutUnchangedSamples([migrated], buildDemoManagementReviewHistory()));
+          const saved = withoutUnchangedSamples([migrated], buildDemoManagementReviewHistory());
+          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
         }
         if (savedImprovementProjects) {
           const samples = buildInitialImprovementProjects();
           setImprovementProjects(normalizeImprovementProjects(withoutUnchangedSamples(JSON.parse(savedImprovementProjects) as ImprovementProject[], [...samples, ...normalizeImprovementProjects(samples)], ["createdAt", "updatedAt"])));
         }
         if (savedAudits) {
-          setAuditOccurrences(JSON.parse(savedAudits) as AuditOccurrence[]);
+          const saved = JSON.parse(savedAudits) as AuditOccurrence[];
+          setAuditOccurrences(demoMode ? saved : withoutUnchangedSamples(saved, initialAuditOccurrences));
         }
       } catch {
         // Keep the empty state when browser storage is unavailable.
@@ -326,18 +332,28 @@ export function IntegraQWorkspace({
   useEffect(() => {
     if (!storageReady || demoMode || isExternalUser(session)) return;
     let active = true;
-    void loadStoredCorrectiveActions(session)
-      .then(stored => {
+    void Promise.all([loadStoredCorrectiveActions(session), loadRetiredDemoCorrectiveActions()])
+      .then(([stored, retirements]) => {
         if (!active) return;
+        const retired = new Map(retirements.map((item) => [item.id, item]));
+        const sampleIds = new Set(demoCorrectiveActions.map((action) => action.id));
         setActions(current => {
           const remote = new Map(stored.map(action => [action.id, action]));
-          const merged = current.map(action => remote.get(action.id) ?? action);
+          const merged = current.map(action => {
+            if (sampleIds.has(action.id)) {
+              const item = retired.get(action.id);
+              return { ...action, deletedAt: item?.deletedAt, deletedBy: item?.deletedBy,
+                deletionReason: item?.reason, portalVisible: item ? false : action.portalVisible };
+            }
+            return remote.get(action.id) ?? action;
+          });
           const known = new Set(merged.map(action => action.id));
           return [...merged, ...stored.filter(action => !known.has(action.id))];
         });
+        setActionLoadedSession(session);
         setActionLoadError("");
       })
-      .catch(cause => { if (active) setActionLoadError(cause instanceof Error ? cause.message : "No fue posible consultar Root2Cause."); });
+      .catch(cause => { if (active) { setActionLoadedSession(null); setActionLoadError(cause instanceof Error ? cause.message : "No fue posible consultar Root2Cause."); } });
     return () => { active = false; };
   }, [storageReady, demoMode, session, actionRetry]);
 
@@ -401,15 +417,17 @@ export function IntegraQWorkspace({
     if (!riskServerReady || isExternalUser(session)) return;
     const snapshot = JSON.stringify(riskWorkspace);
     if (snapshot === loadedRiskSnapshot.current) return;
+    let active = true;
     const timer = window.setTimeout(() => {
       void saveRiskWorkspace(riskWorkspace)
-        .then(() => { loadedRiskSnapshot.current = snapshot; })
+        .then(() => { if (active) loadedRiskSnapshot.current = snapshot; })
         .catch((cause: unknown) => {
+          if (!active) return;
           setRiskServerReady(false);
           setRiskLoadError(cause instanceof Error ? cause.message : "No se pudo guardar la matriz de riesgos.");
         });
     }, 700);
-    return () => window.clearTimeout(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [riskServerReady, riskWorkspace, session]);
 
   useEffect(() => {
@@ -605,12 +623,12 @@ export function IntegraQWorkspace({
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
           {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{riskLoadError || "Consultando riesgos autorizados en Supabase…"}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
-          {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
+          {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onDeleteRisk={async (id, reason, kind) => { const result = await softDeleteStoredRisk(id, reason, kind); const normalized = normalizeRiskWorkspace(result.state); loadedRiskSnapshot.current = JSON.stringify(normalized); setRiskWorkspace(normalized); return result.auditLogged; }} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
-          {activeModule === "corrective-actions" && actionLoadError ? <section role="alert"><p>{actionLoadError}</p><button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button></section> : null}
-          {activeModule === "corrective-actions" ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
+          {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== session ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
+          {activeModule === "corrective-actions" && (demoMode || actionLoadedSession === session) ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule actions={actions} /> : null}
+          {activeModule === "customers" ? <CustomersModule actions={actions} demoMode={demoMode} session={session} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
