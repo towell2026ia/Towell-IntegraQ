@@ -1,0 +1,46 @@
+.riskTable :global(.risk-table-head),
+.riskTable :global(article) {
+  grid-template-columns: minmax(200px, 1.4fr) minmax(120px, 0.8fr) 130px 140px minmax(150px, 0.9fr) 34px;
+}
+
+.riskActionsCell {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.riskRetireButton {
+  color: var(--muted);
+}
+
+.riskRetireButton:hover,
+.riskRetireButton:focus-visible {
+  color: #a94138;
+  border-color: #d7a29e;
+}
+
+@media (max-width: 900px) {
+  .riskTable :global(.risk-table-head) {
+    display: none;
+  }
+
+  .riskTable :global(article) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .riskTable :global(article > span:first-child),
+  .riskTable :global(article > span:last-child) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 680px) {
+  .riskTable :global(article) {
+    grid-template-columns: 1fr;
+  }
+
+  .riskTable :global(article > span:first-child),
+  .riskTable :global(article > span:last-child) {
+    grid-column: auto;
+  }
+}

@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   FileCheck2,
+  Pencil,
   Plus,
   Search,
   ShieldCheck,
@@ -32,6 +33,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [isCreateOpen, setCreateOpen] = useState(false);
+  const [isEditOpen, setEditOpen] = useState(false);
   const [notice, setNotice] = useState("");
   const [operationError, setOperationError] = useState("");
   const companyDirectory = useExternalCompanies();
@@ -40,7 +42,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
     ? demoCustomers
     : companyDirectory.companies
       .filter((company) => company.kind === "customer" && company.active)
-      .map((company) => ({ id: company.id, code: company.code, name: company.name, claims: 0, findings: 0, openActions: 0, nextExternalAudit: "Sin programar", certificates: 0 }));
+      .map((company) => ({ id: company.id, code: company.code, name: company.name, legalName: company.legalName, taxId: company.taxId, address: company.address, contactName: company.contactName, contactEmail: company.contactEmail, claims: 0, findings: 0, openActions: 0, nextExternalAudit: "Sin programar", certificates: 0 }));
   const displayedAudits = demoMode ? externalAuditCalendar : [];
   const displayedCertifications = demoMode ? activeCertifications : [];
 
@@ -107,6 +109,21 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
     }
   };
 
+  const editCustomer = async (customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">) => {
+    if (!administrator || demoMode) return;
+    setOperationError("");
+    setNotice("");
+    try {
+      const saved = await saveExternalCompany({ ...customer, kind: "customer" });
+      companyDirectory.setCompanies(saved.companies);
+      setSelectedId(saved.company.id);
+      setEditOpen(false);
+      setNotice("Cliente actualizado.");
+    } catch (cause) {
+      setOperationError(cause instanceof Error ? cause.message : "No fue posible actualizar el cliente.");
+    }
+  };
+
   if (!demoMode && companyDirectory.loading) return <div className="access-empty" role="status"><p>Consultando clientes registrados…</p></div>;
   if (!demoMode && companyDirectory.error) return <div className="access-empty" role="alert"><p>No fue posible consultar los clientes: {companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
 
@@ -162,7 +179,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
               <span className="detail-eyebrow"><Users size={14} /> {selected.code}</span>
               <h3>{selected.name}</h3>
               <p>Expediente interno y contenido autorizado para su portal.</p>
-              {administrator && !demoMode ? <button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button> : null}
+              {administrator && !demoMode ? <div className="customer-detail-actions"><button className="button button-secondary" type="button" onClick={() => setEditOpen(true)}><Pencil size={15} /> Editar cliente</button><button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button></div> : null}
             </header>
             <div className="party-detail-facts">
               <div><small>Reclamos</small><strong>{selected.claims}</strong></div>
@@ -213,9 +230,23 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
         </QualityTablePanel>
       ) : null}
 
+      {isEditOpen && selected && !demoMode ? <EditCustomerModal customer={selected} onClose={() => setEditOpen(false)} onSave={editCustomer} /> : null}
       {isCreateOpen ? <CreateCustomerModal onClose={() => setCreateOpen(false)} onCreate={addCustomer} /> : null}
     </>
   );
+}
+
+function EditCustomerModal({ customer, onClose, onSave }: { customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">; onClose: () => void; onSave: (customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">) => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setSaving(true);
+    try {
+      await onSave({ id: customer.id, code: String(form.get("code")).trim(), name: String(form.get("name")).trim(), legalName: String(form.get("legalName")).trim() || undefined, taxId: String(form.get("taxId")).trim() || undefined, address: String(form.get("address")).trim() || undefined, contactName: String(form.get("contactName")).trim() || undefined, contactEmail: String(form.get("contactEmail")).trim() || undefined });
+    } finally { setSaving(false); }
+  }
+  return <div className="modal-backdrop" role="presentation"><div className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="edit-customer-title"><div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="edit-customer-title">Editar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={18} /></button></div><form onSubmit={(event) => void submit(event)}><div className="form-grid single-column"><label><span>Abreviatura</span><input name="code" required defaultValue={customer.code} /></label><label><span>Nombre comercial</span><input name="name" required defaultValue={customer.name} /></label><label><span>Razón social (opcional)</span><input name="legalName" defaultValue={customer.legalName ?? ""} /></label><label><span>RFC (opcional)</span><input name="taxId" defaultValue={customer.taxId ?? ""} /></label><label><span>Domicilio (opcional)</span><textarea name="address" rows={2} defaultValue={customer.address ?? ""} /></label><label><span>Contacto (opcional)</span><input name="contactName" defaultValue={customer.contactName ?? ""} /></label><label><span>Correo (opcional)</span><input name="contactEmail" type="email" defaultValue={customer.contactEmail ?? ""} /></label></div><div className="modal-footer"><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</button></div></form></div></div>;
 }
 
 function QualityMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: "neutral" | "success" | "warning" | "danger" }) {

@@ -24,6 +24,11 @@ type CompanyRow = {
   created_at: string;
   updated_at: string;
   owning_organization_id?: string | null;
+  legal_name?: string | null;
+  tax_id?: string | null;
+  address?: string | null;
+  contact_name?: string | null;
+  contact_email?: string | null;
 };
 
 type SiteRow = {
@@ -68,7 +73,7 @@ async function getActor(): Promise<Actor | null> {
 async function listCompanies(actor: Actor) {
   if (!actor.readableKinds.length) return [];
   const admin = createAdminClient();
-  let companyQuery = admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").in("kind", actor.readableKinds).order("name");
+  let companyQuery = admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email").in("kind", actor.readableKinds).order("name");
   if (actor.userType === "customer" || actor.userType === "supplier") {
     if (!actor.externalPartyId) return [];
     companyQuery = companyQuery.eq("id", actor.externalPartyId);
@@ -160,7 +165,7 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   if (!create && !isUuid(payload.id)) return companyError("INVALID_ID");
   let existingOwner: string | null = null;
   if (!create) {
-    const existing = await admin.from("organizations").select("id,kind,owning_organization_id")
+    const existing = await admin.from("organizations").select("id,kind,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email")
       .eq("id", payload.id).in("kind", ["customer", "supplier"]).maybeSingle();
     if (existing.error?.code === "42703") return ownershipMigrationRequired();
     if (existing.error) throw existing.error;
@@ -174,12 +179,17 @@ async function mutateCompany(payload: Record<string, unknown>, actor: Actor, cre
   const values = {
     code, name, kind, active: payload.active !== false,
     ...(create ? { owning_organization_id: actor.organizationId } : {}),
+    ...(Object.prototype.hasOwnProperty.call(payload, "legalName") ? { legal_name: clean(payload.legalName) || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(payload, "taxId") ? { tax_id: clean(payload.taxId) || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(payload, "address") ? { address: clean(payload.address) || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(payload, "contactName") ? { contact_name: clean(payload.contactName) || null } : {}),
+    ...(Object.prototype.hasOwnProperty.call(payload, "contactEmail") ? { contact_email: clean(payload.contactEmail).toLocaleLowerCase("es-MX") || null } : {}),
     ...(deactivating ? { deleted_at: new Date().toISOString(), deleted_by: actor.id, deletion_reason: reason } : {}),
   };
   const saved = create
-    ? await admin.from("organizations").insert(values).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").single()
+    ? await admin.from("organizations").insert(values).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email").single()
     : await admin.from("organizations").update(values).eq("id", payload.id).eq("owning_organization_id", actor.organizationId)
-      .in("kind", ["customer", "supplier"]).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id").single();
+      .in("kind", ["customer", "supplier"]).select("id,code,name,kind,active,created_at,updated_at,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email").single();
   if (saved.error?.code === "42703") return ownershipMigrationRequired();
   if (saved.error || !saved.data) return companyError(saved.error?.message);
   if (kind === "supplier") {
@@ -219,7 +229,7 @@ async function writeAudit(actorId: string, action: string, resourceId: string, v
 }
 
 function mapCompany(company: CompanyRow, sites: SiteRow[], category?: string): ExternalCompany {
-  return { id: company.id, code: company.code, name: company.name, kind: company.kind, active: company.active, category, sites: sites.map(mapSite), createdAt: company.created_at, updatedAt: company.updated_at };
+  return { id: company.id, code: company.code, name: company.name, kind: company.kind, active: company.active, category, legalName: company.legal_name ?? undefined, taxId: company.tax_id ?? undefined, address: company.address ?? undefined, contactName: company.contact_name ?? undefined, contactEmail: company.contact_email ?? undefined, sites: sites.map(mapSite), createdAt: company.created_at, updatedAt: company.updated_at };
 }
 
 function mapSite(site: SiteRow): ExternalCompanySite {

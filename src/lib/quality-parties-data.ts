@@ -2,6 +2,11 @@ export type CustomerQualityRecord = {
   id: string;
   code: string;
   name: string;
+  legalName?: string;
+  taxId?: string;
+  address?: string;
+  contactName?: string;
+  contactEmail?: string;
   claims: number;
   findings: number;
   openActions: number;

@@ -18,6 +18,11 @@ export interface ExternalCompany {
   kind: ExternalCompanyKind;
   active: boolean;
   category?: string;
+  legalName?: string;
+  taxId?: string;
+  address?: string;
+  contactName?: string;
+  contactEmail?: string;
   sites: ExternalCompanySite[];
   createdAt: string;
   updatedAt: string;
@@ -30,6 +35,11 @@ export interface SaveExternalCompanyInput {
   kind: ExternalCompanyKind;
   active?: boolean;
   category?: string;
+  legalName?: string;
+  taxId?: string;
+  address?: string;
+  contactName?: string;
+  contactEmail?: string;
   reason?: string;
 }
 

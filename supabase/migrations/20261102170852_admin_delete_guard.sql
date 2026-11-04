@@ -27,6 +27,19 @@ alter table public.audit_findings add column if not exists deleted_at timestampt
 alter table public.organizations add column if not exists owning_organization_id uuid,
   add column if not exists deleted_at timestamptz, add column if not exists deleted_by uuid,
   add column if not exists deletion_reason text;
+do $ownership_fk$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.organizations'::regclass
+      and conname = 'organizations_owning_organization_id_fkey'
+  ) then
+    alter table public.organizations
+      add constraint organizations_owning_organization_id_fkey
+      foreign key (owning_organization_id) references public.organizations(id) on delete restrict;
+  end if;
+end
+$ownership_fk$;
 alter table public.measurement_assets add column if not exists deleted_at timestamptz,
   add column if not exists deleted_by uuid, add column if not exists deletion_reason text;
 
@@ -265,22 +278,27 @@ declare
   owner_kind public.organization_kind;
   owner_active boolean;
 begin
-  if tg_op = 'UPDATE' and old.kind in ('customer', 'supplier') and (
-    new.kind is distinct from old.kind or
-    new.owning_organization_id is distinct from old.owning_organization_id
-  ) then
-    raise exception using errcode = '42501', message = 'EXTERNAL_COMPANY_OWNER_IMMUTABLE';
+  if tg_op = 'UPDATE' and old.kind in ('customer', 'supplier') then
+    if new.kind is distinct from old.kind or
+      new.owning_organization_id is distinct from old.owning_organization_id then
+      raise exception using errcode = '42501', message = 'EXTERNAL_COMPANY_OWNER_IMMUTABLE';
+    end if;
+    -- Historical rows with unknown ownership remain editable without being claimed.
+    if old.owning_organization_id is null then return new; end if;
   end if;
   if new.kind not in ('customer', 'supplier') then return new; end if;
   if new.owning_organization_id is null then
-    raise exception using errcode = '23514', message = 'EXTERNAL_COMPANY_OWNER_REQUIRED';
+    if tg_op = 'INSERT' then
+      raise exception using errcode = '23514', message = 'EXTERNAL_COMPANY_OWNER_REQUIRED';
+    end if;
+    return new;
   end if;
   select owner.kind, owner.active into owner_kind, owner_active
     from public.organizations owner where owner.id = new.owning_organization_id;
   if not found or owner_kind <> 'internal' or not owner_active then
     raise exception using errcode = '23514', message = 'EXTERNAL_COMPANY_OWNER_MUST_BE_ACTIVE_INTERNAL';
   end if;
-  if current_user <> 'service_role' and (
+  if current_user not in ('service_role', 'postgres', 'supabase_admin') and (
     not public.is_administrator() or
     not exists (select 1 from public.current_organization_ids() as membership(organization_id)
       where membership.organization_id = new.owning_organization_id)
