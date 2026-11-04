@@ -103,9 +103,7 @@ export const editableModulePermissionGroups: ModulePermissionGroup[] = [
     moduleId: "corrective-actions",
     label: "Root2Cause",
     capabilities: [
-      { action: "view", label: "Consultar asignadas", description: "Ve únicamente acciones y análisis donde participa." },
-      { action: "create", label: "Abrir acción", description: "Inicia una nueva acción correctiva." },
-      { action: "update", label: "Trabajar análisis", description: "Actualiza A3, planes y evidencias donde participa." },
+      { action: "view", label: "Consultar", description: "Ve análisis de su organización y procesos autorizados; los expedientes sin proceso son de alcance organizacional." },
     ],
   },
   {
@@ -154,6 +152,7 @@ export function canPerformModuleAction(
   action: ModulePermissionAction,
 ) {
   if (isAdministrator(session)) return true;
+  if (moduleId === "corrective-actions" && (session.userType !== "Usuario interno" || action !== "view")) return false;
   if (action === "view" && session.assignedModuleIds?.includes(moduleId)) {
     return true;
   }

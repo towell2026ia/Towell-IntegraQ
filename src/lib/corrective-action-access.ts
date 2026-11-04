@@ -10,25 +10,14 @@ export function canViewCorrectiveAction(
   if (!canPerformModuleAction(session, "corrective-actions", "view")) {
     return false;
   }
-  const identityIds = [session.userId, session.authUserId].filter(Boolean);
-  const participant = action.participantUserIds?.some((id) =>
-    identityIds.includes(id),
-  );
-  const ownerById = Boolean(action.ownerId && identityIds.includes(action.ownerId));
-  const ownerByName = normalizeName(action.owner) === normalizeName(session.name);
-  return Boolean(participant || ownerById || ownerByName);
+  if (action.organizationId && action.organizationId !== session.organizationId) return false;
+  if (!action.organizationId && session.workspaceMode !== "demo") return false;
+  return !action.processId || session.assignedProcessIds.includes(action.processId);
 }
 
 export function canEditCorrectiveAction(
   session: ActiveSession,
   action: CorrectiveAction,
 ) {
-  return (
-    canViewCorrectiveAction(session, action) &&
-    canPerformModuleAction(session, "corrective-actions", "update")
-  );
-}
-
-function normalizeName(value: string) {
-  return value.trim().toLocaleLowerCase("es-MX");
+  return isAdministrator(session) && canViewCorrectiveAction(session, action);
 }

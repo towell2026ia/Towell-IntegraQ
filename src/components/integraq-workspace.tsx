@@ -53,7 +53,6 @@ import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import { useHomeAppearance } from "@/lib/use-home-appearance";
 import { withoutKnownDemoManagementReviews, withoutUnchangedSamples } from "@/lib/demo-cleanup";
 import { loadStoredCorrectiveActions } from "@/lib/corrective-action-storage";
-import { loadRetiredDemoCorrectiveActions } from "@/lib/root-cause-publication";
 import {
   demoCorrectiveActions,
   demoMeasurementAssets,
@@ -189,7 +188,7 @@ export function IntegraQWorkspace({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
-  const [actions, setActions] = useState<CorrectiveAction[]>(demoCorrectiveActions);
+  const [actions, setActions] = useState<CorrectiveAction[]>(() => demoMode ? demoCorrectiveActions : []);
   const [assets, setAssets] = useState<MeasurementAsset[]>(demoMeasurementAssets);
   const [loadedDocuments, setControlledDocuments] = useState<ControlledDocument[]>(
     () => demoMode ? buildInitialControlledDocuments() : [],
@@ -262,7 +261,7 @@ export function IntegraQWorkspace({
   useEffect(() => {
     const hydrationTask = window.setTimeout(() => {
       try {
-        const savedActions = window.localStorage.getItem("integraq.correctiveActions");
+        const savedActions = demoMode ? window.localStorage.getItem("integraq.correctiveActions") : null;
         const savedAssets = window.localStorage.getItem("integraq.measurementAssets.v2");
         const savedDocuments = demoMode ? window.localStorage.getItem("integraq.controlledDocuments.v1") : null;
         const savedForms = window.localStorage.getItem("integraq.appForms.v1");
@@ -324,32 +323,18 @@ export function IntegraQWorkspace({
   }, [demoMode]);
 
   useEffect(() => {
-    if (storageReady) {
+    if (storageReady && demoMode) {
       window.localStorage.setItem("integraq.correctiveActions", JSON.stringify(actions));
     }
-  }, [actions, storageReady]);
+  }, [actions, storageReady, demoMode]);
 
   useEffect(() => {
     if (!storageReady || demoMode || isExternalUser(session)) return;
     let active = true;
-    void Promise.all([loadStoredCorrectiveActions(session), loadRetiredDemoCorrectiveActions()])
-      .then(([stored, retirements]) => {
+    void loadStoredCorrectiveActions()
+      .then(stored => {
         if (!active) return;
-        const retired = new Map(retirements.map((item) => [item.id, item]));
-        const sampleIds = new Set(demoCorrectiveActions.map((action) => action.id));
-        setActions(current => {
-          const remote = new Map(stored.map(action => [action.id, action]));
-          const merged = current.map(action => {
-            if (sampleIds.has(action.id)) {
-              const item = retired.get(action.id);
-              return { ...action, deletedAt: item?.deletedAt, deletedBy: item?.deletedBy,
-                deletionReason: item?.reason, portalVisible: item ? false : action.portalVisible };
-            }
-            return remote.get(action.id) ?? action;
-          });
-          const known = new Set(merged.map(action => action.id));
-          return [...merged, ...stored.filter(action => !known.has(action.id))];
-        });
+        setActions(stored);
         setActionLoadedSession(session);
         setActionLoadError("");
       })

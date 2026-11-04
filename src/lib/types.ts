@@ -81,6 +81,7 @@ export interface AiContextSources {
 
 export interface CorrectiveAction {
   id: string;
+  organizationId?: string;
   folio: string;
   title: string;
   problem: string;

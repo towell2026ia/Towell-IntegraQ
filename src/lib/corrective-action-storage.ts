@@ -1,24 +1,13 @@
-import { createClient } from "@/lib/supabase/client";
-import type { ActiveSession } from "@/lib/session-data";
 import type { A3Analysis, CorrectiveAction } from "@/lib/types";
 
-const pageSize = 500;
-const columns = "id,folio,title,problem,source,severity,process_id,area,owner_id,owner_name,due_date,status,progress,root_cause,portal_visible,created_at,quality_case_id,external_organization_id,deleted_at,deleted_by,deletion_reason,corrective_action_a3(event_type,severity_justification,five_w_two_h,brainstorm,ishikawa,non_detection_cause,non_detection_whys,root_cause,root_cause_whys,ai_draft),corrective_action_plans(id,description,owner_name,due_date,status,evidence_file_id)";
-
-export async function loadStoredCorrectiveActions(session: ActiveSession): Promise<CorrectiveAction[]> {
-  const supabase = createClient();
-  const rows: Record<string, unknown>[] = [];
-  for (let start = 0; ; start += pageSize) {
-    const result = await supabase.from("corrective_actions").select(columns)
-      .order("created_at", { ascending: false }).range(start, start + pageSize - 1);
-    if (result.error) throw new Error(`No fue posible consultar Root2Cause: ${result.error.message}`);
-    rows.push(...((result.data ?? []) as Record<string, unknown>[]));
-    if ((result.data ?? []).length < pageSize) break;
-  }
-  return rows.map(row => mapStoredAction(row, session));
+export async function loadStoredCorrectiveActions(): Promise<CorrectiveAction[]> {
+  const response = await fetch("/api/root2cause/internal-actions", { cache: "no-store" });
+  const body = await response.json() as { actions?: Record<string, unknown>[]; error?: string };
+  if (!response.ok) throw new Error(body.error ?? "No fue posible consultar Root2Cause.");
+  return (body.actions ?? []).map(mapStoredAction);
 }
 
-function mapStoredAction(row: Record<string, unknown>, session: ActiveSession): CorrectiveAction {
+function mapStoredAction(row: Record<string, unknown>): CorrectiveAction {
   const a3Row = row.corrective_action_a3 as Record<string, unknown> | null;
   const plans = (row.corrective_action_plans ?? []) as Record<string, unknown>[];
   const a3: A3Analysis | undefined = a3Row ? {
@@ -33,11 +22,11 @@ function mapStoredAction(row: Record<string, unknown>, session: ActiveSession): 
       status: plan.status as A3Analysis["plans"][number]["status"] })),
   } : undefined;
   return {
-    id: String(row.id), folio: String(row.folio), title: String(row.title), problem: String(row.problem),
+    id: String(row.id), organizationId: row.organization_id ? String(row.organization_id) : undefined,
+    folio: String(row.folio), title: String(row.title), problem: String(row.problem),
     source: row.source as CorrectiveAction["source"], severity: row.severity as CorrectiveAction["severity"],
     processId: row.process_id ? String(row.process_id) : undefined, area: String(row.area ?? ""),
     owner: String(row.owner_name ?? ""), ownerId: row.owner_id ? String(row.owner_id) : undefined,
-    participantUserIds: session.authUserId ? [session.authUserId] : undefined,
     createdAt: String(row.created_at).slice(0, 10), dueDate: String(row.due_date),
     status: row.status as CorrectiveAction["status"], progress: Number(row.progress ?? 0),
     evidenceCount: plans.filter(plan => plan.evidence_file_id).length,

@@ -1,6 +1,7 @@
 import type { WorkspaceModuleId } from "@/lib/navigation";
 import type { ActiveSession, ExternalPartyKind } from "@/lib/session-data";
 import { isAdministrator } from "@/lib/session-data";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 
 const EXTERNAL_PORTALS: Record<ExternalPartyKind, WorkspaceModuleId> = {
   customer: "customer-portal",
@@ -29,7 +30,6 @@ export function canAccessModule(
   module: WorkspaceModuleId,
 ) {
   if (isAdministrator(session)) return true;
-  if (module === "documents") return true;
 
   const externalKind = getExternalKindForSession(session);
   if (externalKind) {
@@ -41,6 +41,10 @@ export function canAccessModule(
       hasValidExternalScope(session) && module === EXTERNAL_PORTALS[externalKind]
     );
   }
+
+  if (module === "documents") return true;
+
+  if (module === "corrective-actions") return canPerformModuleAction(session, module, "view");
 
   const requiredSpecificPermission = module === "customers"
     ? "clientes.acceder"

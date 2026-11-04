@@ -47,6 +47,7 @@ export interface ProcessDocumentAccess {
 export interface ActiveSession {
   userId: string;
   authUserId?: string;
+  organizationId?: string;
   name: string;
   shortName: string;
   initials: string;

@@ -41,6 +41,14 @@ describe("access policy", () => {
     expect(canAccessModule({ ...baseSession, assignedModuleIds: [] }, "documents")).toBe(true);
   });
 
+  it("opens Root2Cause with an explicit view grant and denies absent grants", () => {
+    const viewer = { ...baseSession, assignedModuleIds: [],
+      moduleActionPermissions: [{ moduleId: "corrective-actions" as const, action: "view" as const }] };
+    expect(canAccessModule(viewer, "corrective-actions")).toBe(true);
+    expect(canAccessModule({ ...viewer, moduleActionPermissions: [] }, "corrective-actions")).toBe(false);
+    expect(canAccessModule({ ...viewer, userType: "Cliente" }, "corrective-actions")).toBe(false);
+  });
+
   it("denies clients and suppliers explicitly even when a legacy menu assignment remains", () => {
     expect(canAccessModule({
       ...baseSession,
@@ -73,7 +81,7 @@ describe("access policy", () => {
     };
 
     expect(canAccessModule(customer, "customer-portal")).toBe(true);
-    expect(canAccessModule(customer, "documents")).toBe(true);
+    expect(canAccessModule(customer, "documents")).toBe(false);
     expect(canAccessModule(customer, "home")).toBe(false);
     expect(canAccessModule(customer, "customers")).toBe(false);
     expect(canAccessModule(customer, "supplier-portal")).toBe(false);
@@ -81,7 +89,7 @@ describe("access policy", () => {
     expect(resolveAuthorizedModule(customer, "indicators")).toBe(
       "customer-portal",
     );
-    expect(resolveAuthorizedModule(customer, "documents")).toBe("documents");
+    expect(resolveAuthorizedModule(customer, "documents")).toBe("customer-portal");
     expect(canAccessCompanyRecord(customer, "customer", "customer-001")).toBe(true);
     expect(canAccessCompanyRecord(customer, "customer", "customer-002")).toBe(false);
   });
@@ -99,7 +107,7 @@ describe("access policy", () => {
     };
 
     expect(canAccessModule(supplier, "supplier-portal")).toBe(true);
-    expect(canAccessModule(supplier, "documents")).toBe(true);
+    expect(canAccessModule(supplier, "documents")).toBe(false);
     expect(canAccessModule(supplier, "suppliers")).toBe(false);
     expect(canAccessModule(supplier, "corrective-actions")).toBe(false);
     expect(canAccessModule(supplier, "customer-portal")).toBe(false);
@@ -117,8 +125,6 @@ describe("access policy", () => {
       externalParty: undefined,
     };
     expect(canAccessModule(invalidCustomer, "customer-portal")).toBe(false);
-    expect(resolveAuthorizedModule(invalidCustomer, "documents")).toBe(
-      "documents",
-    );
+    expect(resolveAuthorizedModule(invalidCustomer, "documents")).toBe("customer-portal");
   });
 });

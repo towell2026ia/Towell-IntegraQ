@@ -74,7 +74,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   const scope = await internalScope(session);
-  if (!scope || !session) return NextResponse.json({ error: "Acceso interno no autorizado." }, { status: 403 });
+  if (!scope?.administrator || !session) return NextResponse.json({ error: "Sólo un administrador activo puede crear o modificar análisis." }, { status: 403 });
   const { organizationId } = scope;
   const body = await request.json() as { action?: unknown; publish?: boolean };
   if (!validAction(body.action)) return NextResponse.json({ error: "El análisis está incompleto o no tiene un cliente real." }, { status: 400 });
@@ -85,12 +85,22 @@ export async function POST(request: Request) {
   const admin = createAdminClient();
   let companyId: string | null = null;
   if (action.source === "customer") {
-    const company = await admin.from("organizations").select("id").eq("id", action.relatedPartyId!).eq("kind", "customer").eq("active", true).maybeSingle();
-    if (company.error || !company.data) return NextResponse.json({ error: "El cliente seleccionado no está activo en el catálogo real." }, { status: 400 });
+    const company = await admin.from("organizations").select("id,owning_organization_id")
+      .eq("id", action.relatedPartyId!).eq("kind", "customer").eq("active", true)
+      .eq("owning_organization_id", organizationId).maybeSingle();
+    if (company.error) return NextResponse.json({ error: "No fue posible verificar la titularidad del cliente." }, { status: 409 });
+    if (!company.data || company.data.owning_organization_id !== organizationId) {
+      return NextResponse.json({ error: "El cliente no pertenece a la organización o carece de titularidad verificada." }, { status: 403 });
+    }
     companyId = company.data.id;
     if (action.qualityCaseId) {
-      const claim = await admin.from("quality_cases").select("id").eq("id", action.qualityCaseId).eq("external_organization_id", companyId).maybeSingle();
-      if (claim.error || !claim.data) return NextResponse.json({ error: "La reclamación no pertenece al cliente seleccionado." }, { status: 400 });
+      const claim = await admin.from("quality_cases").select("id,organization_id")
+        .eq("id", action.qualityCaseId).eq("external_organization_id", companyId)
+        .eq("organization_id", organizationId).maybeSingle();
+      if (claim.error) return NextResponse.json({ error: "No fue posible verificar la titularidad de la reclamación." }, { status: 409 });
+      if (!claim.data || claim.data.organization_id !== organizationId) {
+        return NextResponse.json({ error: "La reclamación no pertenece a la organización y cliente seleccionados." }, { status: 403 });
+      }
     }
   }
   const current = await admin.from("corrective_actions")

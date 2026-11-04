@@ -79,8 +79,9 @@ async function listCompanies(actor: Actor) {
   }
   const companiesResult = await companyQuery;
   if (companiesResult.error) throw companiesResult.error;
-  const ids = (companiesResult.data ?? []).map((company) => company.id);
   const externalActor = actor.userType === "customer" || actor.userType === "supplier";
+  const companies = (companiesResult.data ?? []) as CompanyRow[];
+  const ids = companies.map(company => company.id);
   let sitesQuery = admin
     .from("external_company_sites")
     .select("id,company_id,code,name,address,active,created_at,updated_at")
@@ -97,7 +98,7 @@ async function listCompanies(actor: Actor) {
   if (profilesResult.error) throw profilesResult.error;
   const categories = new Map((profilesResult.data ?? []).map((profile) => [profile.organization_id, profile.category ?? undefined]));
   const sites = (sitesResult.data ?? []) as SiteRow[];
-  return ((companiesResult.data ?? []) as CompanyRow[]).map((company) => mapCompany(company, sites.filter((site) => site.company_id === company.id), categories.get(company.id)));
+  return companies.map((company) => mapCompany(company, sites.filter((site) => site.company_id === company.id), categories.get(company.id)));
 }
 
 export async function GET() {
