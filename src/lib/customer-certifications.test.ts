@@ -1,0 +1,14 @@
+import { describe, expect, it } from "vitest";
+import { certificationCanPublish, certificationStatus, certificationToday, certificationVisibleToCustomer, validateCertification } from "./customer-certifications";
+import { certificationFileMime, CERTIFICATION_FILE_LIMIT } from "./certification-files";
+const org="dddddddd-dddd-4ddd-8ddd-dddddddddddd",a="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",b="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const current={workspace_id:org,external_organization_id:null,active:true,customer_visible:true,valid_from:"2026-01-01",valid_until:"2026-12-31"};
+describe("real certification dates and publication",()=>{
+  it("uses the Mexico calendar without inventing dates",()=>expect(certificationToday(new Date("2026-11-06T02:00:00Z"))).toBe("2026-11-05"));
+  it.each([["2026-11-01","Vigente"],["2026-12-01","Próxima a vencer"],["2026-12-31","Próxima a vencer"],["2027-01-01","Vencida"],["2025-12-31","Pendiente de vigencia"]])("calculates %s as %s",(today,status)=>expect(certificationStatus(current,today)).toBe(status));
+  it("does not publish expired, future or retired records",()=>{expect(certificationCanPublish(current,"2027-01-01")).toBe(false);expect(certificationCanPublish(current,"2025-01-01")).toBe(false);expect(certificationCanPublish({...current,active:false},"2026-11-05")).toBe(false);});
+  it("shares an explicitly published general record with either verified customer in the same workspace",()=>{for(const id of[a,b])expect(certificationVisibleToCustomer(current,org,id,"2026-11-05")).toBe(true);});
+  it("isolates customers, workspaces, drafts and expired documents",()=>{expect(certificationVisibleToCustomer({...current,external_organization_id:a},org,b,"2026-11-05")).toBe(false);expect(certificationVisibleToCustomer(current,a,b,"2026-11-05")).toBe(false);expect(certificationVisibleToCustomer({...current,customer_visible:false},org,a,"2026-11-05")).toBe(false);expect(certificationVisibleToCustomer(current,org,a,"2027-01-01")).toBe(false);});
+  it("validates real dates, ordered validity and UUID customer/responsible",()=>{const body={id:a,name:"Real",type:"Sistema",issuer:"Emisor",responsibleId:b,validFrom:"2026-01-01",validUntil:"2026-12-31"};expect(()=>validateCertification(body)).not.toThrow();for(const changes of[{validFrom:"2026-02-30"},{validUntil:"2025-01-01"},{customerId:"Cliente A"},{responsibleId:"Nombre"},{name:""}])expect(()=>validateCertification({...body,...changes})).toThrow();});
+  it("preserves PDF bytes and rejects renamed executables, mail, empty and oversized files",()=>{const pdf=new TextEncoder().encode("%PDF-1.7\noriginal");const copy=pdf.slice();expect(certificationFileMime("cert.pdf",pdf)).toBe("application/pdf");expect(pdf).toEqual(copy);for(const [name,data] of[["fake.pdf",new Uint8Array([77,90])],["mail.eml",pdf],["empty.pdf",new Uint8Array()],["big.pdf",new Uint8Array(CERTIFICATION_FILE_LIMIT+1)]] as const)expect(()=>certificationFileMime(name,data)).toThrow();});
+});

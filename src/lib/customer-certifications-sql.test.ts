@@ -1,0 +1,11 @@
+import {readFileSync,readdirSync} from "node:fs";
+import {join} from "node:path";
+import {describe,it,expect} from "vitest";
+const path=readdirSync(join(process.cwd(),"supabase/migrations")).find(f=>f.endsWith("_customer_certifications.sql"))!;
+const sql=readFileSync(join(process.cwd(),"supabase/migrations",path),"utf8").toLowerCase();
+describe("certification migration boundaries",()=>{
+ it("reuses certifications and does not update historical entities or create tables",()=>{expect(sql).not.toMatch(/\b(create table|drop table|drop policy|truncate|delete from|security definer)\b/);expect(sql).not.toMatch(/alter table public\.(?!certifications\b)/);expect(sql).not.toMatch(/(?:insert into|update) public\.(?:organizations|profiles|quality_cases|corrective_actions)\b/);});
+ it("constrains the permissive policy union and prevents file reclassification",()=>{for(const cmd of["select","insert","update","delete"])for(const table of["certifications","file_objects"])expect(sql).toMatch(new RegExp(`on public\\.${table} as restrictive for ${cmd} to authenticated`));expect(sql).toContain("old.resource_type='customer_certification_document'");expect(sql).toContain("name not like 'customer-certifications/%'");});
+ it("checks active administrator, organization and real client in the service-only transaction",()=>{expect(sql).toContain("p.user_type='administrator'");expect(sql).toContain("p.status='active'");expect(sql).toContain("owning_organization_id=iq_certification_command.workspace_id");expect(sql).toContain("revoke all on function public.iq_certification_command(uuid,uuid,text,jsonb) from public,anon,authenticated");expect(sql).toContain("grant execute on function public.iq_certification_command(uuid,uuid,text,jsonb) to service_role");});
+ it("retains original files and audits every change, requiring explicit re-publication of edits",()=>{expect(sql).toContain("customer_visible=false,published_at=null,published_by=null");expect(sql).toContain("set is_current=false,updated_by=actor_id");expect(sql).toContain("insert into public.audit_log");expect(sql).toContain("certification_customer_immutable");expect(sql).toContain("certification_concurrent_edit");expect(sql).toContain("pg_advisory_xact_lock");expect(sql).toContain("retirement_reason_required");});
+});

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { customerPortalDate, resolveCustomerPortalActor } from "@/lib/customer-portal-server";
+import { publishedCertificationFiles } from "@/lib/certification-portal-server";
 
 const documentFields = "id,folder_id,display_name,original_name,mime_type,size_bytes,reference_type,validity_status,valid_from,valid_until,description,version,is_current,deleted_at,created_at";
 
@@ -33,11 +34,23 @@ export async function GET() {
         version: row.version ?? 1, createdAt: row.created_at,
       }));
 
+  // Only an explicitly published certificate's current files enter the existing Documents section.
+  try {
+    const certificationFiles = await publishedCertificationFiles(actor);
+    documents.push(...certificationFiles.map(file => ({
+      id:file.id,folderId:null,name:file.certification_name,originalName:file.original_name,
+      mimeType:file.mime_type,sizeBytes:file.size_bytes,referenceType:"external",validityStatus:"current",
+      validFrom:null,validUntil:null,description:"Certificación publicada",version:file.version,createdAt:file.created_at,
+      fileHref:`/api/customer-portal/certifications/${file.id}`,managedInCertifications:true,
+    })));
+  } catch {
+    return NextResponse.json({error:"No fue posible consultar las certificaciones autorizadas. Reintenta."},{status:500,headers:{"Cache-Control":"private, no-store"}});
+  }
   if (actor.kind === "administrator") {
     const folders = await admin.from("document_folders").select("id,name")
       .eq("workspace_id", actor.workspaceId).is("deleted_at", null).is("archived_at", null).order("name");
     if (folders.error) return NextResponse.json({ error: "No fue posible consultar las carpetas documentales." }, { status: 500 });
-    return NextResponse.json({ documents, folders: folders.data ?? [] });
+    return NextResponse.json({ documents, folders: folders.data ?? [] },{headers:{"Cache-Control":"private, no-store"}});
   }
-  return NextResponse.json({ documents });
+  return NextResponse.json({ documents },{headers:{"Cache-Control":"private, no-store"}});
 }

@@ -14,7 +14,7 @@ function client() {
     state.calls.push({ table, method: "from", args: [] });
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};
-    for (const method of ["select", "eq", "is", "order"]) {
+    for (const method of ["select", "eq", "is", "order", "range", "in"]) {
       chain[method] = (...args: unknown[]) => { state.calls.push({ table, method, args }); return chain; };
     }
     chain.maybeSingle = async () => next();

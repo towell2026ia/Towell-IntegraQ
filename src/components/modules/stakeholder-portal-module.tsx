@@ -54,6 +54,7 @@ type CustomerPortalDocument = {
   id: string; folderId: string; name: string; originalName: string; mimeType: string; sizeBytes: number;
   referenceType: "internal" | "external"; validityStatus: "current" | "not_current";
   validFrom?: string | null; validUntil?: string | null; description?: string | null; version: number;
+  fileHref?: string; managedInCertifications?: boolean;
 };
 
 function CustomerPortal({ company, isAdministrator = false }: { company?: PortalCompany; isAdministrator?: boolean }) {
@@ -141,8 +142,8 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
         {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
         {!loading && !error ? documents.map(document => <article key={document.id}>
           <div><code>Versión {document.version}</code><h4>{document.name}</h4>{document.description ? <p>{document.description}</p> : null}<small>{document.originalName} · {formatFileSize(document.sizeBytes)}</small></div>
-          <div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`/api/customer-portal/documents/${document.id}/file?disposition=download`}>Descargar</a>
-            {isAdministrator ? document.referenceType === "external" && document.validityStatus === "current" ? <><button className="button button-ghost" type="button" onClick={() => { setReplaceDocumentId(document.id); setSelectedFolderId(document.folderId); setDisplayName(document.name); }}>Sustituir</button><button className="button button-ghost" type="button" onClick={() => void changePublication(document, false)}>Retirar publicación</button></> : <button className="button button-ghost" type="button" onClick={() => void changePublication(document, true)}>Publicar para clientes</button> : null}
+          <div className={portalStyles.documentLinks}><a className="button button-secondary" href={document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`${document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`}?disposition=download`}>Descargar</a>
+            {isAdministrator && document.managedInCertifications ? <small>Publicación y versiones: Gestión de Clientes → Certificaciones.</small> : isAdministrator ? document.referenceType === "external" && document.validityStatus === "current" ? <><button className="button button-ghost" type="button" onClick={() => { setReplaceDocumentId(document.id); setSelectedFolderId(document.folderId); setDisplayName(document.name); }}>Sustituir</button><button className="button button-ghost" type="button" onClick={() => void changePublication(document, false)}>Retirar publicación</button></> : <button className="button button-ghost" type="button" onClick={() => void changePublication(document, true)}>Publicar para clientes</button> : null}
           </div>
         </article>) : null}
         {!loading && !error && documents.length === 0 ? <PortalEmpty message={isAdministrator ? "No hay documentos vigentes en el catálogo." : "No hay documentos publicados y vigentes para clientes."} /> : null}

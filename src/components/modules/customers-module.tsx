@@ -1,10 +1,8 @@
 "use client";
 
 import {
-  CalendarDays,
   CheckCircle2,
   ClipboardCheck,
-  FileCheck2,
   Pencil,
   Plus,
   Search,
@@ -17,17 +15,16 @@ import { FormEvent, useMemo, useState } from "react";
 import { useExternalCompanies } from "@/hooks/use-external-companies";
 import { saveExternalCompany } from "@/lib/external-company-data";
 import {
-  activeCertifications,
   customerQualityCatalog,
-  externalAuditCalendar,
   type CustomerQualityRecord,
 } from "@/lib/quality-parties-data";
 import type { CorrectiveAction } from "@/lib/types";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { CustomerClaimsPanel, useClaimsCatalog } from "@/components/modules/customer-claims-panel";
 import { claimMetrics, type CustomerClaim } from "@/lib/customer-claims";
+import { CustomerCertificationsPanel } from "@/components/modules/customer-certifications-panel";
 
-type CustomerView = "customers" | "cases" | "audits" | "certifications";
+type CustomerView = "customers" | "cases" | "certifications";
 
 export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void }) {
   const [view, setView] = useState<CustomerView>("customers");
@@ -46,8 +43,6 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
     : companyDirectory.companies
       .filter((company) => company.kind === "customer" && company.active)
       .map((company) => ({ id: company.id, code: company.code, name: company.name, legalName: company.legalName, taxId: company.taxId, address: company.address, contactName: company.contactName, contactEmail: company.contactEmail, claims: claimMetrics(claimsDirectory.data?.claims??[],claimsDirectory.data?.actions??[],{customerId:company.id}).received, findings: 0, openActions: (claimsDirectory.data?.actions??[]).filter(a=>a.external_organization_id===company.id&&a.status!=="closed").length, nextExternalAudit: "Sin programar", certificates: 0 }));
-  const displayedAudits = demoMode ? externalAuditCalendar : [];
-  const displayedCertifications = demoMode ? activeCertifications : [];
 
   const filteredCustomers = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
@@ -148,13 +143,11 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
         <QualityMetric icon={<Users size={18} />} label="Clientes registrados" value={customers.length} tone="neutral" />
         <QualityMetric icon={<ClipboardCheck size={18} />} label="Reclamos recibidos" value={demoMode?customers.reduce((total,item)=>total+item.claims,0):claimsDirectory.data?claimMetrics(claimsDirectory.data.claims,claimsDirectory.data.actions).received:"—"} tone="danger" />
         <QualityMetric icon={<CheckCircle2 size={18} />} label="Acciones abiertas" value={customers.reduce((total, item) => total + item.openActions, 0)} tone="warning" />
-        <QualityMetric icon={<CalendarDays size={18} />} label="Auditorías programadas" value={displayedAudits.length} tone="success" />
       </section>
 
       <div className="quality-view-tabs" aria-label="Vistas de calidad de clientes">
         <button className={view === "customers" ? "active" : ""} type="button" onClick={() => setView("customers")}>Clientes</button>
         <button className={view === "cases" ? "active" : ""} type="button" onClick={() => setView("cases")}>Reclamos y hallazgos</button>
-        <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Auditorías externas</button>
         <button className={view === "certifications" ? "active" : ""} type="button" onClick={() => setView("certifications")}>Certificaciones</button>
       </div>
 
@@ -196,7 +189,6 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
               <div className="account-scope-list">
                 <div><ShieldCheck size={17} /><span><strong>Solo información propia</strong><small>Ningún cliente puede consultar expedientes de otra cuenta.</small></span></div>
                 <div><ClipboardCheck size={17} /><span><strong>Acciones desde Root2Cause</strong><small>Se muestran reclamos, acciones correctivas y planes vinculados.</small></span></div>
-                <div><CalendarDays size={17} /><span><strong>Próxima auditoría externa</strong><small>{formatDate(selected.nextExternalAudit)}</small></span></div>
               </div>
             </section>
           </div> : <div className="party-detail-panel"><p>{demoMode ? "No hay clientes en el catálogo." : "No hay clientes activos registrados en Supabase."}</p></div>}
@@ -207,23 +199,7 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
         demoMode?<p>El registro de reclamos reales requiere una sesión de producción autorizada.</p>:<CustomerClaimsPanel directory={claimsDirectory} session={session} onCustomerCatalog={()=>setView("customers")} onCreateA3={onCreateA3} onOpenA3={onOpenA3}/>
       ) : null}
 
-      {view === "audits" ? (
-        <QualityTablePanel title="Calendario de auditorías externas" subtitle="Vista autorizada también para clientes">
-          <table className="quality-table">
-            <thead><tr><th>Evento</th><th>Cliente u organismo</th><th>Fecha</th><th>Alcance</th><th>Estado</th></tr></thead>
-            <tbody>{displayedAudits.map((audit) => <tr key={audit.id}><td><code>{audit.id}</code></td><td><strong>{audit.party}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}{!displayedAudits.length ? <tr><td colSpan={5}>Sin auditorías externas registradas en una fuente persistente.</td></tr> : null}</tbody>
-          </table>
-        </QualityTablePanel>
-      ) : null}
-
-      {view === "certifications" ? (
-        <QualityTablePanel title="Certificaciones y certificados vigentes" subtitle="Solo se publican documentos vigentes">
-          <table className="quality-table">
-            <thead><tr><th>Certificación</th><th>Documento</th><th>Vigente hasta</th><th>Estado</th></tr></thead>
-            <tbody>{displayedCertifications.map((certification) => <tr key={certification.name}><td><strong>{certification.name}</strong></td><td>{certification.certificate}</td><td>{formatDate(certification.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}{!displayedCertifications.length ? <tr><td colSpan={4}>Sin certificaciones registradas en una fuente persistente.</td></tr> : null}</tbody>
-          </table>
-        </QualityTablePanel>
-      ) : null}
+      {view === "certifications" ? (demoMode ? <p>Las certificaciones reales requieren una sesión de producción autorizada.</p> : <CustomerCertificationsPanel />) : null}
 
       {isEditOpen && selected && !demoMode ? <EditCustomerModal customer={selected} onClose={() => setEditOpen(false)} onSave={editCustomer} /> : null}
       {isCreateOpen ? <CreateCustomerModal onClose={() => setCreateOpen(false)} onCreate={addCustomer} /> : null}
@@ -248,10 +224,6 @@ function QualityMetric({ icon, label, value, tone }: { icon: React.ReactNode; la
   return <div className={`metric metric-${tone}`}><span className="metric-icon">{icon}</span><div><strong>{value}</strong><span>{label}</span></div></div>;
 }
 
-function QualityTablePanel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-  return <section className="quality-table-panel"><header><div><h3>{title}</h3><p>{subtitle}</p></div><FileCheck2 size={19} /></header><div className="quality-table-wrap">{children}</div></section>;
-}
-
 function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Pick<CustomerQualityRecord, "code" | "name">) => void | Promise<void> }) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -273,9 +245,4 @@ function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCre
       </div>
     </div>
   );
-}
-
-function formatDate(value: string) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
 }
