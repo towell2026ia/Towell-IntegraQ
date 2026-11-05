@@ -1,3 +1,5 @@
+> **IQ-ARCH-DEPLOY-01 — CLOUD ONLY:** Las instrucciones de conexión PostgreSQL local de documentos anteriores quedan sustituidas por [el flujo cloud obligatorio](docs/deployment/IQ-ARCH-DEPLOY-01-CLOUD-ONLY.md). No conectar la PC a PostgreSQL de Supabase ni ejecutar db push local.
+
 # Towell IntegraQ
 
 IntegraQ es la plataforma web de Towell para centralizar la operacion del

@@ -69,7 +69,8 @@ export function formatBusinessDate(value: string) {
 
 export function formatBusinessWindow(window: IndicatorCaptureWindow | undefined) {
   if (!window) return "Ventana sin configurar";
-  return `${formatBusinessDate(window.opensAt)} – ${formatBusinessDate(window.closesAt)}`;
+  const origin = window.source === "exception" ? ` · Excepción: ${window.exceptionReason ?? "individual"}` : window.source === "global" ? " · Regla global" : window.source === "legacy" ? " · Ventana existente" : "";
+  return `${formatBusinessDate(window.opensAt)} – ${formatBusinessDate(window.closesAt)}${origin}`;
 }
 
 function defaultOpeningDate(year: number, quarter: Quarter) {

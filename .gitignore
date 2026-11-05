@@ -17,3 +17,6 @@ coverage/
 /.tmp/
 /PROJECT_MEMORY.md
 /carga-documental/
+
+# Ephemeral GitHub-hosted Preview fixture identity manifest.
+/.stb-concurrency-scope.json
