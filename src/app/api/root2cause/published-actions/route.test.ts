@@ -16,7 +16,10 @@ function client() {
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};
     for (const method of ["select", "eq", "is", "order", "update", "insert", "upsert", "in"]) {
-      chain[method] = (...args: unknown[]) => { state.calls.push({ table, method, args }); return chain; };
+      chain[method] = (...args: unknown[]) => {
+        if (table === "quality_cases" && String(args[0]).split(",").includes("organization_id")) throw new Error("42703: quality_cases.organization_id does not exist");
+        state.calls.push({ table, method, args }); return chain;
+      };
     }
     chain.maybeSingle = async () => next();
     chain.then = (resolve: (value: unknown) => unknown) => resolve(next());
@@ -127,10 +130,10 @@ describe("Root2Cause portal authorization", () => {
     state.calls = [];
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
     state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
-    state.responses.quality_cases = [{ data: { id: customerB, organization_id: customerB }, error: null }];
+    state.responses.quality_cases = [{ data: { id: customerB, external_organization_id: customerB }, error: null }];
     const response = await POST(request("POST", { action: { ...customerAction, qualityCaseId: customerB }, publish: true }));
     expect(response.status).toBe(403);
-    expect(calls("quality_cases", "eq")).toContainEqual({ table: "quality_cases", method: "eq", args: ["organization_id", organizationId] });
+    expect(calls("quality_cases", "eq")).toContainEqual({ table: "quality_cases", method: "eq", args: ["external_organization_id", customerA] });
     expect(calls("corrective_actions", "insert")).toHaveLength(0);
   });
 

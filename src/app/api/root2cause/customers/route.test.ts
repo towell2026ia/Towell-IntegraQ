@@ -14,7 +14,10 @@ function client() {
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};
     for (const method of ["select", "eq", "in", "order"]) {
-      chain[method] = (...args: unknown[]) => { state.calls.push({ table, method, args }); return chain; };
+      chain[method] = (...args: unknown[]) => {
+        if (table === "quality_cases" && String(args[0]).split(",").includes("organization_id")) throw new Error("42703: quality_cases.organization_id does not exist");
+        state.calls.push({ table, method, args }); return chain;
+      };
     }
     chain.maybeSingle = async () => next();
     chain.then = (resolve: (value: unknown) => unknown) => resolve(next());
@@ -48,7 +51,7 @@ describe("Root2Cause customer catalog ownership", () => {
       claims: [{ id: customerB, folio: "R-01", title: "Reclamación", external_organization_id: customerA }],
     });
     expect(state.calls).toContainEqual({ table: "organizations", method: "eq", args: ["owning_organization_id", organizationId] });
-    expect(state.calls).toContainEqual({ table: "quality_cases", method: "eq", args: ["organization_id", organizationId] });
+    expect(state.calls).toContainEqual({ table: "quality_cases", method: "in", args: ["external_organization_id", [customerA]] });
   });
 
   it("keeps unowned customers out of the catalog without guessing their organization", async () => {
@@ -64,7 +67,7 @@ describe("Root2Cause customer catalog ownership", () => {
     expect((await GET()).status).toBe(409);
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
     state.responses.organizations = [{ data: [{ id: customerA, code: "CLI-A", name: "Cliente A", owning_organization_id: organizationId }], error: null }];
-    state.responses.quality_cases = [{ data: [{ id: customerB, folio: "R-02", title: "Ajena", external_organization_id: customerA, organization_id: otherOrganizationId }], error: null }];
+    state.responses.quality_cases = [{ data: [{ id: customerB, folio: "R-02", title: "Ajena", external_organization_id: customerB }], error: null }];
     expect((await GET()).status).toBe(409);
   });
 

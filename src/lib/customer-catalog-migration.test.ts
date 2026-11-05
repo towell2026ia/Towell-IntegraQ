@@ -4,11 +4,15 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = process.cwd();
-const seed = readFileSync(join(root, "supabase/migrations/202611030001_av_pl_01_customer_catalog.sql"), "utf8").toLocaleLowerCase();
+const seed = readFileSync(join(root, "supabase/migrations/20261105180006_av_pl_01_customer_catalog.sql"), "utf8").toLocaleLowerCase();
 const deleteGuard = readFileSync(join(root, "supabase/migrations/20261102170852_admin_delete_guard.sql"), "utf8").toLocaleLowerCase();
 const customerUi = readFileSync(join(root, "src/components/modules/customers-module.tsx"), "utf8");
 
 describe("AV-PL-01 customer catalog migration", () => {
+  it("keeps automatic migration execution disabled", () => {
+    const config = readFileSync(join(root, "supabase/config.toml"), "utf8");
+    expect(config.split("[db.migrations]")[1].split("[db.seed]")[0]).toMatch(/enabled\s*=\s*false/);
+  });
   it("contains exactly the 33 official unique name-abbreviation pairs", () => {
     const rows = seed.split("with official(code, name) as (values").slice(1).flatMap((block) => {
       const ends = [block.indexOf("\n    )"), block.indexOf("\n)")].filter((index) => index >= 0);

@@ -94,11 +94,11 @@ export async function POST(request: Request) {
     }
     companyId = company.data.id;
     if (action.qualityCaseId) {
-      const claim = await admin.from("quality_cases").select("id,organization_id")
+      const claim = await admin.from("quality_cases").select("id,external_organization_id")
         .eq("id", action.qualityCaseId).eq("external_organization_id", companyId)
-        .eq("organization_id", organizationId).maybeSingle();
+        .maybeSingle();
       if (claim.error) return NextResponse.json({ error: "No fue posible verificar la titularidad de la reclamación." }, { status: 409 });
-      if (!claim.data || claim.data.organization_id !== organizationId) {
+      if (!claim.data || claim.data.external_organization_id !== companyId) {
         return NextResponse.json({ error: "La reclamación no pertenece a la organización y cliente seleccionados." }, { status: 403 });
       }
     }

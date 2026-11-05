@@ -27,11 +27,11 @@ export async function GET() {
   const companyIds = (companies.data ?? []).map(company => company.id);
   if (!companyIds.length) return NextResponse.json({ customers: [], claims: [] });
   const claims = await admin.from("quality_cases")
-    .select("id,folio,title,external_organization_id,organization_id")
-    .in("external_organization_id", companyIds).eq("organization_id", organizationId).order("folio");
+    .select("id,folio,title,external_organization_id")
+    .in("external_organization_id", companyIds).order("folio");
   if (claims.error) return NextResponse.json({ error: "No fue posible verificar la titularidad de las reclamaciones." }, { status: 409 });
   const ownedIds = new Set(companyIds);
-  if ((claims.data ?? []).some(claim => claim.organization_id !== organizationId || !ownedIds.has(claim.external_organization_id))) {
+  if ((claims.data ?? []).some(claim => !ownedIds.has(claim.external_organization_id))) {
     return NextResponse.json({ error: "Las reclamaciones incluyen una empresa ajena." }, { status: 409 });
   }
   return NextResponse.json({ customers: (companies.data ?? []).map(({ id, code, name }) => ({ id, code, name })),
