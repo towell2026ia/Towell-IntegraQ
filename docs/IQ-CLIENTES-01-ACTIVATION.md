@@ -11,4 +11,4 @@ Proyecto: `yptrqowmviixlkrxjrqr`.
 - Usuarios Auth: 45 antes y después; huella de IDs `b3e41867e47fff3ff14019700cf0c5aa`, idéntica. Perfiles: huella `2c52af5f85ed33654e5f3202a53e05a3`, idéntica. No se habilitaron accesos externos.
 - Reclamaciones: la clave foránea real es `quality_cases.external_organization_id -> organizations.id`. El selector y la validación al guardar A3 usan esa relación después de verificar la titularidad del cliente; no consultan la columna inexistente `quality_cases.organization_id`.
 
-Aceptación visual autenticada: pendiente hasta disponer de un navegador o confirmación de sesión real. No se declara cierre funcional basándose únicamente en consultas SQL o pruebas simuladas.
+Aceptación autenticada: el administrador confirmó el 2026-11-05, después del despliegue `5c41ccd`, que Gestión de Clientes muestra el catálogo sin error y que la búsqueda/selección de clientes reales en Nuevo análisis A3 funciona. Esta evidencia procede de su sesión real; las herramientas de navegador del agente no estuvieron disponibles. No se guardó un análisis de prueba.
