@@ -13,7 +13,9 @@ shadow_port = 54320
 major_version = 17
 
 [db.migrations]
-enabled = true
+# Production migrations are applied individually after authorization.
+# Prevent the GitHub integration from applying the pending migration queue.
+enabled = false
 schema_paths = []
 
 [db.seed]
