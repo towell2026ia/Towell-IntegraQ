@@ -10,7 +10,7 @@ function query(table: string) {
   state.calls.push({ table, method: "from", args: [] });
   const next = () => state.rows[table]?.shift() ?? { data: [], error: null };
   const chain: Record<string, unknown> = {};
-  for (const method of ["select", "eq", "in", "order"]) {
+  for (const method of ["select", "eq", "in", "is", "order"]) {
     chain[method] = (...args: unknown[]) => { state.calls.push({ table, method, args }); return chain; };
   }
   chain.maybeSingle = async () => table === "profiles" ? { data: state.profile, error: null } : next();
@@ -30,8 +30,8 @@ const organizationId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const otherOrganizationId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
 const customerA = { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", code: "A", name: "Cliente A", kind: "customer", active: true,
   owning_organization_id: organizationId, created_at: "2026-11-02", updated_at: "2026-11-02" };
-const customerB = { ...customerA, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", code: "B", name: "Cliente B", owning_organization_id: otherOrganizationId };
 const supplier = { ...customerA, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", code: "S", name: "Proveedor", kind: "supplier" };
+const legacySupplier = { ...supplier, id: "dddddddd-dddd-4ddd-8ddd-ddddddddddde", code: "LS", name: "Proveedor histórico", owning_organization_id: null };
 
 beforeEach(() => {
   state.calls = [];
@@ -44,16 +44,41 @@ beforeEach(() => {
 
 describe("external company directory separation", () => {
   it("returns owned customers but not a foreign customer to an internal administrator", async () => {
-    state.rows.organizations = [{ data: { id: organizationId }, error: null }, { data: [customerA, supplier], error: null }];
+    state.rows.organizations = [
+      { data: { id: organizationId }, error: null },
+      { data: [{ id: organizationId }], error: null },
+      { data: [customerA], error: null },
+      { data: [supplier], error: null },
+      { data: [legacySupplier], error: null },
+    ];
     const response = await GET();
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.companies.map((company: { id: string }) => company.id)).toEqual([customerA.id, supplier.id]);
+    expect(body.companies.map((company: { id: string }) => company.id)).toEqual([customerA.id, supplier.id, legacySupplier.id]);
     expect(state.calls).toContainEqual({ table: "organizations", method: "eq", args: ["owning_organization_id", organizationId] });
+    expect(state.calls).toContainEqual({ table: "organizations", method: "is", args: ["owning_organization_id", null] });
+    expect(state.calls).not.toContainEqual({ table: "organizations", method: "update", args: expect.anything() });
+  });
+
+  it("does not expose unowned suppliers when more than one active internal organization exists", async () => {
+    state.rows.organizations = [
+      { data: { id: organizationId }, error: null },
+      { data: [{ id: organizationId }, { id: otherOrganizationId }], error: null },
+      { data: [customerA], error: null },
+      { data: [supplier], error: null },
+    ];
+    const response = await GET();
+    expect(response.status).toBe(200);
+    expect((await response.json()).companies.map((company: { id: string }) => company.id)).toEqual([customerA.id, supplier.id]);
+    expect(state.calls).not.toContainEqual({ table: "organizations", method: "is", args: ["owning_organization_id", null] });
   });
 
   it("fails closed while the ownership column has not been migrated", async () => {
-    state.rows.organizations = [{ data: { id: organizationId }, error: null }, { data: null, error: { code: "42703" } }];
+    state.rows.organizations = [
+      { data: { id: organizationId }, error: null },
+      { data: [{ id: organizationId }], error: null },
+      { data: null, error: { code: "42703" } },
+    ];
     const response = await GET();
     expect(response.status).toBe(503);
     expect((await response.json()).companies).toBeUndefined();

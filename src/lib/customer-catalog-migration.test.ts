@@ -32,6 +32,15 @@ describe("AV-PL-01 customer catalog migration", () => {
     expect(seed).not.toContain("insert into public.profiles");
     expect(seed).not.toContain("portal_visible");
     expect(seed).not.toContain("grant ");
+    expect(seed).not.toMatch(/\b(create|alter|drop)\s+policy\b|\bdrop\s+trigger\b|create\s+or\s+replace\s+function/);
+  });
+
+  it("adds only the missing organization ownership and retirement fields needed by customer management", () => {
+    for (const field of ["owning_organization_id uuid", "legal_name text", "tax_id text", "address text", "deleted_at timestamptz", "deleted_by uuid", "deletion_reason text"]) {
+      expect(seed).toContain(`add column if not exists ${field}`);
+    }
+    expect(seed.match(/alter table public\.organizations\s+add column/g)).toHaveLength(1);
+    expect(seed).not.toMatch(/alter table public\.(?!organizations\b)/);
   });
 
   it("leaves historical null ownership untouched and requires ownership for new external companies", () => {

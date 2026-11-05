@@ -4,7 +4,10 @@ alter table public.organizations
   add column if not exists owning_organization_id uuid,
   add column if not exists legal_name text,
   add column if not exists tax_id text,
-  add column if not exists address text;
+  add column if not exists address text,
+  add column if not exists deleted_at timestamptz,
+  add column if not exists deleted_by uuid,
+  add column if not exists deletion_reason text;
 
 do $ownership_fk$
 begin
@@ -20,7 +23,7 @@ begin
 end
 $ownership_fk$;
 
-create or replace function public.iq_validate_external_company_owner() returns trigger
+create function public.iq_validate_external_company_owner() returns trigger
 language plpgsql security invoker set search_path = '' as $guard$
 declare
   owner_kind public.organization_kind;
@@ -56,7 +59,6 @@ begin
 end;
 $guard$;
 revoke all on function public.iq_validate_external_company_owner() from public, anon, authenticated;
-drop trigger if exists iq_validate_external_company_owner on public.organizations;
 create trigger iq_validate_external_company_owner before insert or update on public.organizations
   for each row execute function public.iq_validate_external_company_owner();
 

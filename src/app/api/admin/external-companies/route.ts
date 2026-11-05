@@ -73,19 +73,39 @@ async function getActor(): Promise<Actor | null> {
 async function listCompanies(actor: Actor) {
   if (!actor.readableKinds.length) return [];
   const admin = createAdminClient();
-  let companyQuery = admin.from("organizations").select("id,code,name,kind,active,created_at,updated_at,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email").in("kind", actor.readableKinds).order("name");
-  if (actor.userType === "customer" || actor.userType === "supplier") {
+  const select = "id,code,name,kind,active,created_at,updated_at,owning_organization_id,legal_name,tax_id,address,contact_name,contact_email";
+  const externalActor = actor.userType === "customer" || actor.userType === "supplier";
+  let companies: CompanyRow[];
+  if (externalActor) {
     if (!actor.externalPartyId) return [];
-    companyQuery = companyQuery.eq("id", actor.externalPartyId);
+    const result = await admin.from("organizations").select(select).in("kind", actor.readableKinds)
+      .eq("id", actor.externalPartyId).order("name");
+    if (result.error) throw result.error;
+    companies = (result.data ?? []) as CompanyRow[];
   } else {
     if (!actor.organizationId) return [];
     if (!await isActiveInternalOrganization(admin, actor.organizationId)) return [];
-    companyQuery = companyQuery.eq("owning_organization_id", actor.organizationId);
+    const canReadLegacySuppliers = actor.readableKinds.includes("supplier")
+      && await isOnlyActiveInternalOrganization(admin, actor.organizationId);
+    const [customersResult, ownedSuppliersResult, legacySuppliersResult] = await Promise.all([
+      actor.readableKinds.includes("customer")
+        ? admin.from("organizations").select(select).eq("kind", "customer").eq("owning_organization_id", actor.organizationId).order("name")
+        : Promise.resolve({ data: [], error: null }),
+      actor.readableKinds.includes("supplier")
+        ? admin.from("organizations").select(select).eq("kind", "supplier").eq("owning_organization_id", actor.organizationId).order("name")
+        : Promise.resolve({ data: [], error: null }),
+      canReadLegacySuppliers
+        ? admin.from("organizations").select(select).eq("kind", "supplier").is("owning_organization_id", null).order("name")
+        : Promise.resolve({ data: [], error: null }),
+    ]);
+    const failed = [customersResult, ownedSuppliersResult, legacySuppliersResult].find(result => result.error);
+    if (failed?.error) throw failed.error;
+    companies = [...new Map([
+      ...(customersResult.data ?? []),
+      ...(ownedSuppliersResult.data ?? []),
+      ...(legacySuppliersResult.data ?? []),
+    ].map(company => [(company as CompanyRow).id, company as CompanyRow])).values()];
   }
-  const companiesResult = await companyQuery;
-  if (companiesResult.error) throw companiesResult.error;
-  const externalActor = actor.userType === "customer" || actor.userType === "supplier";
-  const companies = (companiesResult.data ?? []) as CompanyRow[];
   const ids = companies.map(company => company.id);
   let sitesQuery = admin
     .from("external_company_sites")
@@ -241,6 +261,13 @@ async function isActiveInternalOrganization(admin: ReturnType<typeof createAdmin
     .eq("id", organizationId).eq("kind", "internal").eq("active", true).maybeSingle();
   if (result.error) throw result.error;
   return Boolean(result.data);
+}
+
+async function isOnlyActiveInternalOrganization(admin: ReturnType<typeof createAdminClient>, organizationId: string) {
+  const result = await admin.from("organizations").select("id").eq("kind", "internal").eq("active", true);
+  if (result.error) throw result.error;
+  const organizations = result.data ?? [];
+  return organizations.length === 1 && organizations[0].id === organizationId;
 }
 
 function clean(value: unknown) { return typeof value === "string" ? value.trim() : ""; }
