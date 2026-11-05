@@ -26,6 +26,6 @@ export function validateClaimInput(value: Record<string, unknown>) {
 export async function claimsRequest<T>(path = "", init?: RequestInit): Promise<T> {
   const response = await fetch(`/api/customers/claims${path}`, { cache: "no-store", ...init });
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || "No fue posible completar la operación del reclamo.");
+  if (!response.ok) throw Object.assign(new Error(body.error || "No fue posible completar la operación del reclamo."),{status:response.status});
   return body as T;
 }

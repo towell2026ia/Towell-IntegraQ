@@ -24,6 +24,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { useScopedDraft, useContinuityState } from "@/components/workspace-continuity";
+import { confirmLeaving } from "@/lib/workspace-continuity";
 import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
 import { ClaimEditor } from "@/components/modules/customer-claims-panel";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
@@ -78,7 +80,7 @@ interface A3Draft {
 
 type IshikawaKey = keyof A3Analysis["ishikawa"];
 
-const draftStorageKey = "integraq.a3Draft";
+const draftStorageKey = "a3";
 const stepLabels = [
   "Apertura",
   "Severidad",
@@ -149,8 +151,9 @@ function createInitialDraft(claim?: CustomerClaim): A3Draft {
 
 export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClaim, onCustomerCatalog }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void }) {
   const storageKey = initialClaim ? `${draftStorageKey}.claim.${initialClaim.id}` : draftStorageKey;
+  const persistence=useScopedDraft<{step:number;draft:A3Draft;aiDraft?:AiRootCauseDraft;newIdea?:string;causeInputs?:Record<IshikawaKey,string>}>(storageKey);
   const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useContinuityState(`${storageKey}:step`,0);
   const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft(initialClaim));
   const [loaded, setLoaded] = useState(false);
   const [newIdea, setNewIdea] = useState("");
@@ -175,27 +178,33 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
   useEffect(() => {
     const restoreDraft = window.setTimeout(() => {
-      const saved = window.localStorage.getItem(storageKey);
+      const saved = persistence.read();
       if (saved) {
         try {
-          const parsed = JSON.parse(saved) as { step?: number; draft?: A3Draft; aiDraft?: AiRootCauseDraft };
+          const parsed = saved;
           if (parsed.draft) setDraft({ ...createInitialDraft(), ...parsed.draft, relatedPartyId: parsed.draft.relatedPartyId ?? "", qualityCaseId: parsed.draft.qualityCaseId ?? "" });
+          if(parsed.newIdea)setNewIdea(parsed.newIdea);
+          if(parsed.causeInputs)setCauseInputs(parsed.causeInputs);
           if (parsed.aiDraft) setAiDraft(parsed.aiDraft);
           if (typeof parsed.step === "number") setStep(Math.min(Math.max(parsed.step, 0), stepLabels.length - 1));
         } catch {
-          window.localStorage.removeItem(storageKey);
+          persistence.clear();
         }
       }
       setLoaded(true);
     }, 0);
 
     return () => window.clearTimeout(restoreDraft);
-  }, [storageKey]);
+  }, [storageKey,persistence,setStep]);
 
   useEffect(() => {
-    if (loaded) window.localStorage.setItem(storageKey, JSON.stringify({ step, draft, aiDraft }));
-  }, [aiDraft, draft, loaded, step, storageKey]);
+    if (loaded) {
+      const hasText=JSON.stringify(draft)!==JSON.stringify(createInitialDraft(initialClaim))||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
+      if(hasText){persistence.write({ step, draft, ...(aiDraft?{aiDraft}:{}),newIdea,causeInputs });persistence.dirty(true);}
+    }
+  }, [aiDraft, draft, loaded, step, storageKey, newIdea, causeInputs, initialClaim,persistence]);
 
+  useEffect(()=>()=>persistence.dirty(false),[persistence]);
   const completedSteps = useMemo(() => stepLabels.map((_, index) => isStepComplete(index, draft)), [draft]);
   const canContinue = completedSteps[step];
 
@@ -322,7 +331,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   return (
     <section className="a3-workbench">
       <header className="a3-workbench-header">
-        <div><p className="module-kicker">Metodología A3</p><h3>Nuevo análisis de acción correctiva</h3><p>Flujo adaptado de CAPA-V01; el borrador se conserva localmente.</p></div>
+        <div><p className="module-kicker">Metodología A3</p><h3>Nuevo análisis de acción correctiva</h3><p>Flujo adaptado de CAPA-V01; el borrador se conserva en esta pestaña para tu usuario y organización.</p></div>
         <div className="a3-header-actions">
           <a className="button button-secondary" href="https://github.com/Gronk93/CAPA-V01" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Referencia</a>
           <button className="icon-button" type="button" title="Reiniciar borrador" aria-label="Reiniciar borrador" onClick={resetDraft}><RotateCcw size={17} /></button>
@@ -371,7 +380,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       </section>
 
       <footer className="a3-footer">
-        <button className="button button-ghost" type="button" onClick={onCancel}>Salir al listado</button>
+        <button className="button button-ghost" type="button" onClick={()=>{if(confirmLeaving())onCancel();}}>Salir al listado</button>
         <span>{canContinue ? <><Save size={14} /> Borrador guardado</> : <><AlertTriangle size={14} /> Completa la etapa</>}</span>
         <div>
           <button className="button button-secondary" type="button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft size={16} /> Anterior</button>

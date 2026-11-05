@@ -1,4 +1,6 @@
 "use client";
+import { useContinuityState, useNavigationScroll } from "@/components/workspace-continuity";
+import { continuityIdentity, sessionAccessKey, readContinuity, writeContinuity, confirmLeaving, traceContinuity } from "@/lib/workspace-continuity";
 
 import {
   Activity,
@@ -36,7 +38,7 @@ import { CalibrationsModule } from "@/components/modules/calibrations-module";
 import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { CustomersModule } from "@/components/modules/customers-module";
-import type { CustomerClaim } from "@/lib/customer-claims";
+import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
 import { DocumentsModule } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
@@ -175,18 +177,33 @@ const navigationGroups = [
 
 export function IntegraQWorkspace({
   onSignOut,
-  session,
+  session: incomingSession,
 }: {
   onSignOut: () => void;
   session: ActiveSession;
 }) {
+  const serializedSession = JSON.stringify(incomingSession);
+  const session = useMemo(() => JSON.parse(serializedSession) as ActiveSession, [serializedSession]);
+  const sessionKey=sessionAccessKey(session);
+  const externalScope=isExternalUser(session);
   const demoMode = isDemoSession(session);
   const { appearance, error: appearanceError, refresh: refreshAppearance } = useHomeAppearance();
   const [claimSeed, setClaimSeed] = useState<CustomerClaim | null>(null);
-  const [activeModule, setActiveModule] = useState<WorkspaceModuleId>(() =>
+  const [claimSeedId,setClaimSeedId]=useContinuityState("navigation:claim-seed","");
+  const [claimSeedError,setClaimSeedError]=useState("");
+  const [claimSeedRetry,setClaimSeedRetry]=useState(0);
+  const [storedActiveModule, setActiveModule] = useContinuityState<WorkspaceModuleId>("navigation:module", () =>
     getDefaultModuleForSession(session),
   );
-  const [navigationTarget, setNavigationTarget] = useState<{ module: WorkspaceModuleId; id: string } | null>(null);
+  const activeModule=resolveAuthorizedModule(session,isWorkspaceModuleId(storedActiveModule)?storedActiveModule:null);
+  const [navigationTarget, setNavigationTarget] = useContinuityState<{ module: WorkspaceModuleId; id: string } | null>("navigation:target", null);
+  useNavigationScroll(activeModule);
+  useEffect(()=>{
+    if(!claimSeedId||activeModule!=="corrective-actions"||claimSeed?.id===claimSeedId)return;
+    let active=true;
+    void claimsRequest<ClaimsCatalog>().then(catalog=>{if(!active)return;const found=catalog.claims.find(claim=>claim.id===claimSeedId&&!claim.cancelled_at);if(found){setClaimSeed(found);setClaimSeedError("");}else setClaimSeedError("El reclamo ya no está disponible en tu alcance autorizado. No se restauró el expediente.");}).catch(()=>{if(active)setClaimSeedError("No fue posible verificar el reclamo. El borrador sigue conservado; reintenta.");});
+    return()=>{active=false;};
+  },[claimSeedId,claimSeed?.id,activeModule,claimSeedRetry]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
@@ -195,11 +212,11 @@ export function IntegraQWorkspace({
   const [loadedDocuments, setControlledDocuments] = useState<ControlledDocument[]>(
     () => demoMode ? buildInitialControlledDocuments() : [],
   );
-  const [documentLoad, setDocumentLoad] = useState<{ session: ActiveSession; error: string | null } | null>(null);
+  const [documentLoad, setDocumentLoad] = useState<{ sessionKey: string; error: string | null } | null>(null);
   const [documentRetry, setDocumentRetry] = useState(0);
   const controlledDocuments = useMemo(
-    () => demoMode || (documentLoad?.session === session && !documentLoad.error) ? loadedDocuments : [],
-    [demoMode, documentLoad, session, loadedDocuments],
+    () => demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error) ? loadedDocuments : [],
+    [demoMode, documentLoad, sessionKey, loadedDocuments],
   );
   const [forms, setForms] = useState<AppFormDefinition[]>(() =>
     normalizeAppForms(appFormCatalog.map(form => ({ ...form, records: [] }))),
@@ -234,7 +251,7 @@ export function IntegraQWorkspace({
   );
   const [storageReady, setStorageReady] = useState(false);
   const [actionLoadError, setActionLoadError] = useState("");
-  const [actionLoadedSession, setActionLoadedSession] = useState<ActiveSession | null>(null);
+  const [actionLoadedSession, setActionLoadedSession] = useState<string | null>(null);
   const [actionRetry, setActionRetry] = useState(0);
   const [riskServerReady, setRiskServerReady] = useState(false);
   const [riskLoadError, setRiskLoadError] = useState("");
@@ -244,7 +261,8 @@ export function IntegraQWorkspace({
   useEffect(() => {
     const syncModuleFromHash = () => {
       const hash = window.location.hash.slice(1);
-      const requestedModule = isWorkspaceModuleId(hash) ? hash : null;
+      const saved = readContinuity<string>(continuityIdentity(session),sessionAccessKey(session),"navigation:module");
+      const requestedModule = isWorkspaceModuleId(hash) ? hash : typeof saved === "string" && isWorkspaceModuleId(saved) ? saved : null;
       const authorizedModule = resolveAuthorizedModule(
         session,
         requestedModule,
@@ -256,9 +274,10 @@ export function IntegraQWorkspace({
     };
 
     syncModuleFromHash();
-    window.addEventListener("hashchange", syncModuleFromHash);
-    return () => window.removeEventListener("hashchange", syncModuleFromHash);
-  }, [session]);
+    const onHashChange=()=>{if(!confirmLeaving()){const saved=readContinuity<string>(continuityIdentity(session),sessionAccessKey(session),"navigation:module");window.history.replaceState(null,"",`#${saved??getDefaultModuleForSession(session)}`);return;}syncModuleFromHash();};
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, [session,setActiveModule]);
 
   useEffect(() => {
     const hydrationTask = window.setTimeout(() => {
@@ -331,18 +350,18 @@ export function IntegraQWorkspace({
   }, [actions, storageReady, demoMode]);
 
   useEffect(() => {
-    if (!storageReady || demoMode || isExternalUser(session)) return;
+    if (!storageReady || demoMode || externalScope) return;
     let active = true;
     void loadStoredCorrectiveActions()
       .then(stored => {
         if (!active) return;
         setActions(stored);
-        setActionLoadedSession(session);
+        setActionLoadedSession(sessionKey);
         setActionLoadError("");
       })
       .catch(cause => { if (active) { setActionLoadedSession(null); setActionLoadError(cause instanceof Error ? cause.message : "No fue posible consultar Root2Cause."); } });
     return () => { active = false; };
-  }, [storageReady, demoMode, session, actionRetry]);
+  }, [storageReady, demoMode, sessionKey, externalScope, actionRetry]);
 
   useEffect(() => {
     if (storageReady) {
@@ -362,15 +381,15 @@ export function IntegraQWorkspace({
       .then((documents) => {
         if (!active) return;
         setControlledDocuments(documents);
-        setDocumentLoad({ session, error: null });
+        setDocumentLoad({ sessionKey, error: null });
       })
       .catch((error: unknown) => {
         if (!active) return;
         setControlledDocuments([]);
-        setDocumentLoad({ session, error: error instanceof Error ? error.message : "No fue posible consultar el catálogo de Supabase." });
+        setDocumentLoad({ sessionKey, error: error instanceof Error ? error.message : "No fue posible consultar el catálogo de Supabase." });
       });
     return () => { active = false; };
-  }, [storageReady, demoMode, session, documentRetry]);
+  }, [storageReady, demoMode, sessionKey, documentRetry]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -383,7 +402,7 @@ export function IntegraQWorkspace({
   }, [riskWorkspace, storageReady]);
 
   useEffect(() => {
-    if (!storageReady || isExternalUser(session)) return;
+    if (!storageReady || externalScope) return;
     let active = true;
     void loadRiskWorkspace()
       .then(({ state }) => {
@@ -398,10 +417,10 @@ export function IntegraQWorkspace({
         if (active) { setRiskServerReady(false); setRiskLoadError(cause instanceof Error ? cause.message : "No se pudo consultar la matriz de riesgos."); }
       });
     return () => { active = false; };
-  }, [session, storageReady, riskRetry]);
+  }, [sessionKey, externalScope, storageReady, riskRetry]);
 
   useEffect(() => {
-    if (!riskServerReady || isExternalUser(session)) return;
+    if (!riskServerReady || externalScope) return;
     const snapshot = JSON.stringify(riskWorkspace);
     if (snapshot === loadedRiskSnapshot.current) return;
     let active = true;
@@ -415,7 +434,7 @@ export function IntegraQWorkspace({
         });
     }, 700);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [riskServerReady, riskWorkspace, session]);
+  }, [riskServerReady, riskWorkspace, externalScope]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -445,8 +464,8 @@ export function IntegraQWorkspace({
     () => ({
       session,
       documents: controlledDocuments,
-      documentLoadError: !demoMode && documentLoad?.session === session ? documentLoad.error : undefined,
-      documentsLoading: !demoMode && documentLoad?.session !== session,
+      documentLoadError: !demoMode && documentLoad?.sessionKey === sessionKey ? documentLoad.error : undefined,
+      documentsLoading: !demoMode && documentLoad?.sessionKey !== sessionKey,
       actions,
       assets,
       indicators: indicatorDefinitions,
@@ -456,7 +475,7 @@ export function IntegraQWorkspace({
       managementReview: currentManagementReview,
       risks: riskWorkspace,
     }),
-    [demoMode, documentLoad, actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
+    [demoMode, documentLoad, sessionKey, actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
   );
   const managementReviewSources = useMemo(
     () => ({
@@ -483,8 +502,11 @@ export function IntegraQWorkspace({
   const homeDashboard = demoMode ? localHomeDashboard : productionHome.dashboard;
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
+    if(!confirmLeaving())return;
+    writeContinuity(continuityIdentity(session),sessionKey,`scroll:${activeModule}`,Math.max(0,window.scrollY));
+    traceContinuity("module-navigation",module);
     const authorizedModule = resolveAuthorizedModule(session, module);
-    if (authorizedModule !== "corrective-actions") setClaimSeed(null);
+    if (authorizedModule !== "corrective-actions") {setClaimSeed(null);setClaimSeedId("");}
     setActiveModule(authorizedModule);
     setNavigationTarget(
       authorizedModule === module && targetId ? { module, id: targetId } : null,
@@ -605,18 +627,19 @@ export function IntegraQWorkspace({
           {activeModule === "access" ? <AccessModule /> : null}
           {activeModule === "home-settings" ? <HomeSettingsModule onChangeDocument={(updated) => setControlledDocuments(current => current.map(document => document.id === updated.id ? updated : document))} documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
-          {activeModule === "documents" && !demoMode && documentLoad?.session !== session ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
-          {activeModule === "documents" && !demoMode && documentLoad?.session === session && documentLoad.error ? <section role="alert"><p>{documentLoad.error}</p><button type="button" onClick={() => { setDocumentLoad(null); setDocumentRetry(value => value + 1); }}>Reintentar</button></section> : null}
-          {activeModule === "documents" && (demoMode || (documentLoad?.session === session && !documentLoad.error)) ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
+          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey !== sessionKey ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
+          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey === sessionKey && documentLoad.error ? <section role="alert"><p>{documentLoad.error}</p><button type="button" onClick={() => { setDocumentLoad(null); setDocumentRetry(value => value + 1); }}>Reintentar</button></section> : null}
+          {activeModule === "documents" && (demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error)) ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
           {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{riskLoadError || "Consultando riesgos autorizados en Supabase…"}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
           {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onDeleteRisk={async (id, reason, kind) => { const result = await softDeleteStoredRisk(id, reason, kind); const normalized = normalizeRiskWorkspace(result.state); loadedRiskSnapshot.current = JSON.stringify(normalized); setRiskWorkspace(normalized); return result.auditLogged; }} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
-          {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== session ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
-          {activeModule === "corrective-actions" && (demoMode || actionLoadedSession === session) ? <CorrectiveActionsModule actions={actions} claimSeed={claimSeed??undefined} onClaimSeedClear={()=>setClaimSeed(null)} onNavigateCustomers={()=>changeModule("customers")} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${claimSeed?.id??(navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index")}`} onActionsChange={setActions} session={session} /> : null}
+          {activeModule === "corrective-actions" && claimSeedId && claimSeed?.id!==claimSeedId ? <section role={claimSeedError?"alert":"status"}><p>{claimSeedError||"Verificando el reclamo vinculado al borrador…"}</p>{claimSeedError?<><button type="button" onClick={()=>setClaimSeedRetry(value=>value+1)}>Reintentar</button><button type="button" onClick={()=>changeModule("customers")}>Volver a Clientes</button></>:null}</section>:null}
+          {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== sessionKey ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
+          {activeModule === "corrective-actions" && (!claimSeedId||claimSeed?.id===claimSeedId) && (demoMode || actionLoadedSession === sessionKey) ? <CorrectiveActionsModule actions={actions} claimSeed={claimSeed??undefined} onClaimSeedClear={()=>{setClaimSeed(null);setClaimSeedId("");}} onNavigateCustomers={()=>changeModule("customers")} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${claimSeed?.id??(navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index")}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
+          {activeModule === "customers" ? <CustomersModule key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimSeedId(claim.id);setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}

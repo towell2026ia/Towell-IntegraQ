@@ -1,0 +1,217 @@
+[
+  {
+    "stage": "focus-session-network",
+    "events": [
+      {
+        "type": "mount",
+        "source": "workspace",
+        "at": 1793917620952
+      },
+      {
+        "type": "document-navigation",
+        "source": "navigate",
+        "at": 1793917620952
+      },
+      {
+        "type": "server-session-snapshot",
+        "source": "access-change",
+        "at": 1793917620952
+      },
+      {
+        "type": "refetch-start",
+        "source": "companies",
+        "at": 1793917620952
+      },
+      {
+        "type": "refetch-start",
+        "source": "claims",
+        "at": 1793917620952
+      },
+      {
+        "type": "refetch-end",
+        "source": "companies",
+        "at": 1793917621053
+      },
+      {
+        "type": "refetch-end",
+        "source": "claims",
+        "at": 1793917621053
+      },
+      {
+        "type": "mount",
+        "source": "form",
+        "at": 1793917621164
+      },
+      {
+        "type": "background-refetch",
+        "source": "companies",
+        "at": 1793917682447
+      },
+      {
+        "type": "background-refetch",
+        "source": "claims",
+        "at": 1793917682447
+      },
+      {
+        "type": "refetch-start",
+        "source": "companies",
+        "at": 1793917682447
+      },
+      {
+        "type": "refetch-start",
+        "source": "claims",
+        "at": 1793917682447
+      },
+      {
+        "type": "refetch-end",
+        "source": "companies",
+        "at": 1793917682558
+      },
+      {
+        "type": "refetch-end",
+        "source": "claims",
+        "at": 1793917682558
+      },
+      {
+        "type": "auth-event",
+        "source": "TOKEN_REFRESHED",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "auth-event",
+        "source": "SIGNED_IN",
+        "at": 1793917682860
+      },
+      {
+        "type": "server-session-snapshot",
+        "source": "same-access",
+        "at": 1793917682863
+      },
+      {
+        "type": "background-refetch",
+        "source": "companies",
+        "at": 1793917744013
+      },
+      {
+        "type": "background-refetch",
+        "source": "claims",
+        "at": 1793917744013
+      },
+      {
+        "type": "refetch-start",
+        "source": "companies",
+        "at": 1793917744013
+      },
+      {
+        "type": "refetch-start",
+        "source": "claims",
+        "at": 1793917744013
+      },
+      {
+        "type": "refetch-end",
+        "source": "companies",
+        "at": 1793917744123
+      },
+      {
+        "type": "refetch-end",
+        "source": "claims",
+        "at": 1793917744123
+      },
+      {
+        "type": "background-refetch",
+        "source": "companies",
+        "at": 1793917805224
+      },
+      {
+        "type": "background-refetch",
+        "source": "claims",
+        "at": 1793917805224
+      },
+      {
+        "type": "refetch-start",
+        "source": "companies",
+        "at": 1793917805224
+      },
+      {
+        "type": "refetch-start",
+        "source": "claims",
+        "at": 1793917805224
+      },
+      {
+        "type": "refetch-end",
+        "source": "companies",
+        "at": 1793917805334
+      },
+      {
+        "type": "refetch-end",
+        "source": "claims",
+        "at": 1793917805334
+      }
+    ]
+  },
+  {
+    "stage": "after-reload",
+    "events": [
+      {
+        "type": "mount",
+        "source": "workspace",
+        "at": 1793917625475
+      },
+      {
+        "type": "document-navigation",
+        "source": "reload",
+        "at": 1793917625475
+      },
+      {
+        "type": "server-session-snapshot",
+        "source": "access-change",
+        "at": 1793917625475
+      }
+    ]
+  }
+]

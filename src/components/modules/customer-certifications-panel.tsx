@@ -1,5 +1,7 @@
 "use client";
 import { useEffect, useState, type FormEvent } from "react";
+import { useContinuityState, useFormDraft } from "@/components/workspace-continuity";
+import { confirmLeaving } from "@/lib/workspace-continuity";
 import { FileCheck2, Plus, X } from "lucide-react";
 import { DocumentPreviewViewer } from "@/components/modules/document-preview-viewer";
 import { certificationCanPublish, certificationStatus, certificationToday, type Certification, type CertificationCatalog, type CertificationFile } from "@/lib/customer-certifications";
@@ -7,7 +9,7 @@ import { certificationCanPublish, certificationStatus, certificationToday, type 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url,{...init,cache:"no-store"});
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || "No fue posible completar la operación.");
+  if (!response.ok) throw Object.assign(new Error(result.error || "No fue posible completar la operación."),{status:response.status});
   return result as T;
 }
 export function CustomerCertificationsPanel() {
@@ -15,11 +17,13 @@ export function CustomerCertificationsPanel() {
   const [error,setError]=useState("");
   const [loading,setLoading]=useState(true);
   const [retry,setRetry]=useState(0);
-  const [query,setQuery]=useState("");
-  const [customerId,setCustomerId]=useState("all");
-  const [showRetired,setShowRetired]=useState(false);
-  const [selectedId,setSelectedId]=useState("");
-  const [editing,setEditing]=useState<Certification|"new"|null>(null);
+  const [query,setQuery]=useContinuityState("certifications:query","");
+  const [customerId,setCustomerId]=useContinuityState("certifications:customer","all");
+  const [showRetired,setShowRetired]=useContinuityState("certifications:retired",false);
+  const [selectedId,setSelectedId]=useContinuityState("certifications:selected","");
+  const [editingId,setEditingId]=useContinuityState("certifications:editor","");
+  const editing=editingId==="new"&&catalog?.administrator?"new":catalog?.administrator?catalog.certifications.find(c=>c.id===editingId&&c.active)??null:null;
+  const setEditing=(record:Certification|"new"|null)=>setEditingId(typeof record==="string"?record:record?.id??"");
   const [preview,setPreview]=useState<CertificationFile|null>(null);
   const [busy,setBusy]=useState(false);
   const [notice,setNotice]=useState("");
@@ -31,7 +35,7 @@ export function CustomerCertificationsPanel() {
   },[]);
   useEffect(()=>{
     let active=true;
-    void requestJson<CertificationCatalog>("/api/customers/certifications").then(data=>{if(active){setCatalog(data);setError("");}}).catch(e=>{if(active){setError(e.message);setCatalog(null);}}).finally(()=>{if(active)setLoading(false);});
+    void requestJson<CertificationCatalog>("/api/customers/certifications").then(data=>{if(active){setCatalog(data);setError("");}}).catch(e=>{if(active){setError(e.message);if([401,403].includes(Number(e.status)))setCatalog(null);}}).finally(()=>{if(active)setLoading(false);});
     return ()=>{active=false;};
   },[retry]);
   const refresh=()=>{setLoading(true);setRetry(v=>v+1);};
@@ -83,26 +87,29 @@ export function CustomerCertificationsPanel() {
   </section>;
 }
 
-function CertificationEditor({record,catalog,onClose,onSaved,upload}:{record?:Certification;catalog:CertificationCatalog;onClose:()=>void;onSaved:(record:Certification)=>void;upload:(record:Certification,file:File)=>Promise<{certification:Certification}>}) {
-  const [id]=useState(()=>record?.id??crypto.randomUUID());
+function CertificationEditor({record:incomingRecord,catalog,onClose,onSaved,upload}:{record?:Certification;catalog:CertificationCatalog;onClose:()=>void;onSaved:(record:Certification)=>void;upload:(record:Certification,file:File)=>Promise<{certification:Certification}>}) {
+  const [record]=useState(incomingRecord);
+  const [draftId,setDraftId]=useContinuityState("certification:new-id",()=>crypto.randomUUID());
+  const id=record?.id??draftId;
   const [saved,setSaved]=useState(record);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [customerQuery,setCustomerQuery]=useState("");
   const [customerId,setCustomerId]=useState(record?.external_organization_id??"");
   const [files,setFiles]=useState<File[]>([]);
+  const {formRef:recoveryRef,notice:recoveryNotice,clear:clearRecovery}=useFormDraft(`certification:${record?.id??"new"}:${record?.revision??"new"}`,["name","type","reference","issuer","validFrom","validUntil","customerId","responsibleId","scope","observations"],values=>({...values,customerId:catalog.customers.some(c=>c.id===values.customerId&&c.active)?values.customerId:"",responsibleId:catalog.responsibleUsers.some(u=>u.id===values.responsibleId)?values.responsibleId:""}));
   async function submit(event:FormEvent<HTMLFormElement>) {
     event.preventDefault();const form=new FormData(event.currentTarget);setBusy(true);setError("");
     try {
-      let current=(await requestJson<{certification:Certification}>("/api/customers/certifications",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command:"save",id,revision:saved?.revision,name:form.get("name"),type:form.get("type"),reference:form.get("reference"),issuer:form.get("issuer"),validFrom:form.get("validFrom"),validUntil:form.get("validUntil"),scope:form.get("scope"),observations:form.get("observations"),responsibleId:form.get("responsibleId"),customerId})})).certification;
+      let current=(await requestJson<{certification:Certification}>("/api/customers/certifications",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({command:"save",id,revision:saved?.revision??catalog.certifications.find(c=>c.id===id)?.revision,name:form.get("name"),type:form.get("type"),reference:form.get("reference"),issuer:form.get("issuer"),validFrom:form.get("validFrom"),validUntil:form.get("validUntil"),scope:form.get("scope"),observations:form.get("observations"),responsibleId:form.get("responsibleId"),customerId})})).certification;
       setSaved(current);
       for(const file of files){current=(await upload(current,file)).certification;setSaved(current);setFiles(pending=>pending.filter(f=>f!==file));}
-      onSaved(current);
+      clearRecovery();if(!record)setDraftId(crypto.randomUUID());onSaved(current);
     } catch(e){setError(`${(e as Error).message} Si el expediente ya se guardó, se conserva privado; los archivos pendientes permanecen seleccionados para reintentar.`);}finally{setBusy(false);}
   }
-  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-label="Registro de certificación"><div className="modal-header"><h3>{record?"Editar certificación":"Nueva certificación"}</h3><button className="icon-button" type="button" aria-label="Cerrar" disabled={busy} onClick={onClose}><X size={18}/></button></div><form onSubmit={e=>void submit(e)}><fieldset disabled={busy}><div className="form-grid">
+  return <div className="modal-backdrop"><div className="modal" role="dialog" aria-modal="true" aria-label="Registro de certificación"><div className="modal-header"><h3>{record?"Editar certificación":"Nueva certificación"}</h3><button className="icon-button" type="button" aria-label="Cerrar" disabled={busy} onClick={()=>{if(confirmLeaving())onClose();}}><X size={18}/></button></div><form ref={recoveryRef} onSubmit={e=>void submit(e)}><fieldset disabled={busy}><div className="form-grid">
     <label><span>Nombre *</span><input name="name" maxLength={250} required defaultValue={record?.name}/></label><label><span>Tipo *</span><input name="type" maxLength={250} required defaultValue={record?.certification_type}/></label><label><span>Número o referencia</span><input name="reference" maxLength={5000} defaultValue={record?.reference_number??""}/></label><label><span>Organismo emisor *</span><input name="issuer" maxLength={250} required defaultValue={record?.issuer}/></label><label><span>Fecha de emisión *</span><input name="validFrom" type="date" required defaultValue={record?.valid_from}/></label><label><span>Fecha de vencimiento *</span><input name="validUntil" type="date" required defaultValue={record?.valid_until}/></label>
-    <label><span>Buscar cliente</span><input disabled={!!record} value={customerQuery} onChange={e=>setCustomerQuery(e.target.value)} placeholder="Nombre comercial o abreviatura"/></label><label><span>Cliente relacionado</span><select disabled={!!record} value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">General de Towell</option>{catalog.customers.filter(c=>(c.active||c.id===customerId)&&(c.id===customerId||`${c.name} ${c.code}`.toLowerCase().includes(customerQuery.toLowerCase()))).map(c=><option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><small>El alcance se fija al crear el expediente para proteger su historial.</small></label>
+    <label><span>Buscar cliente</span><input disabled={!!record} value={customerQuery} onChange={e=>setCustomerQuery(e.target.value)} placeholder="Nombre comercial o abreviatura"/></label><label><span>Cliente relacionado</span><select name="customerId" disabled={!!record} value={customerId} onChange={e=>setCustomerId(e.target.value)}><option value="">General de Towell</option>{catalog.customers.filter(c=>(c.active||c.id===customerId)&&(c.id===customerId||`${c.name} ${c.code}`.toLowerCase().includes(customerQuery.toLowerCase()))).map(c=><option key={c.id} value={c.id}>{c.code} · {c.name}</option>)}</select><small>El alcance se fija al crear el expediente para proteger su historial.</small></label>
     <label><span>Responsable *</span><select name="responsibleId" required defaultValue={record?.responsible_id??""}><option value="">Seleccionar responsable interno</option>{catalog.responsibleUsers.map(u=><option key={u.id} value={u.id}>{u.full_name}</option>)}</select></label><label><span>Alcance / descripción</span><textarea name="scope" maxLength={5000} defaultValue={record?.scope??""}/></label><label><span>Observaciones internas</span><textarea name="observations" maxLength={5000} defaultValue={record?.observations??""}/></label><label><span>Documentos (opcionales, hasta 4 MB por archivo)</span><input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.doc,.docx,.xlsx" onChange={e=>{setFiles(Array.from(e.target.files??[]));e.target.value="";}}/>{files.map((f,i)=><small key={`${f.name}-${i}`}>{f.name}</small>)}</label>
-    </div></fieldset>{error?<p role="alert">{error}</p>:null}<div className="modal-footer"><button className="button button-secondary" type="button" disabled={busy} onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit" disabled={busy}>{busy?"Guardando…":"Guardar como privada"}</button></div></form></div></div>;
+    </div></fieldset>{recoveryNotice?<p role="status">{recoveryNotice}</p>:null}{error?<p role="alert">{error}</p>:null}<div className="modal-footer"><button className="button button-secondary" type="button" disabled={busy} onClick={()=>{if(confirmLeaving())onClose();}}>Cancelar</button><button className="button button-primary" type="submit" disabled={busy}>{busy?"Guardando…":"Guardar como privada"}</button></div></form></div></div>;
 }

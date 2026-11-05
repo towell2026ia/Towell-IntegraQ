@@ -22,22 +22,25 @@ import type { CorrectiveAction } from "@/lib/types";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { CustomerClaimsPanel, useClaimsCatalog } from "@/components/modules/customer-claims-panel";
 import { claimMetrics, type CustomerClaim } from "@/lib/customer-claims";
+import { useContinuityState, useFormDraft } from "@/components/workspace-continuity";
+import { confirmLeaving } from "@/lib/workspace-continuity";
 import { CustomerCertificationsPanel } from "@/components/modules/customer-certifications-panel";
 
 type CustomerView = "customers" | "cases" | "certifications";
 
 export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void }) {
-  const [view, setView] = useState<CustomerView>("customers");
+  const [view, setView] = useContinuityState<CustomerView>("customers:tab","customers");
   const [demoCustomers, setDemoCustomers] = useState(customerQualityCatalog);
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState("");
-  const [isCreateOpen, setCreateOpen] = useState(false);
-  const [isEditOpen, setEditOpen] = useState(false);
+  const [query, setQuery] = useContinuityState("customers:query","");
+  const [selectedId, setSelectedId] = useContinuityState("customers:selected","");
+  const [isCreateOpen, setCreateOpen] = useContinuityState("customers:create-open",false);
+  const [isEditOpen, setEditOpen] = useContinuityState("customers:edit-open",false);
   const [notice, setNotice] = useState("");
   const [operationError, setOperationError] = useState("");
   const companyDirectory = useExternalCompanies();
   const claimsDirectory = useClaimsCatalog(!demoMode);
   const administrator = isAdministrator(session);
+  const navigateView=(next:CustomerView)=>{if(confirmLeaving())setView(next);};
   const customers = demoMode
     ? demoCustomers
     : companyDirectory.companies
@@ -68,8 +71,10 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
         companyDirectory.setCompanies(saved.companies);
         setSelectedId(saved.company.id);
         setCreateOpen(false);
+        return true;
       } catch (cause) {
         setOperationError(cause instanceof Error ? cause.message : "No fue posible guardar el cliente.");
+        return false;
       }
       return;
     }
@@ -85,6 +90,7 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
     setDemoCustomers((current) => [record, ...current]);
     setSelectedId(record.id);
     setCreateOpen(false);
+    return true;
   };
 
   const deactivateCustomer = async () => {
@@ -117,13 +123,15 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
       setSelectedId(saved.company.id);
       setEditOpen(false);
       setNotice("Cliente actualizado.");
+      return true;
     } catch (cause) {
       setOperationError(cause instanceof Error ? cause.message : "No fue posible actualizar el cliente.");
+      return false;
     }
   };
 
-  if (!demoMode && companyDirectory.loading) return <div className="access-empty" role="status"><p>Consultando clientes registrados…</p></div>;
-  if (!demoMode && companyDirectory.error) return <div className="access-empty" role="alert"><p>No fue posible consultar los clientes: {companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
+  if (!demoMode && companyDirectory.loading && !companyDirectory.hasLoaded) return <div className="access-empty" role="status"><p>Consultando clientes registrados…</p></div>;
+  if (!demoMode && companyDirectory.error && !companyDirectory.hasLoaded) return <div className="access-empty" role="alert"><p>No fue posible consultar los clientes: {companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
 
   return (
     <>
@@ -136,6 +144,7 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
         {administrator ? <button className="button button-primary" type="button" onClick={() => setCreateOpen(true)}><Plus size={17} /> Agregar cliente</button> : null}
       </section>
 
+      {companyDirectory.error && companyDirectory.hasLoaded ? <p role="alert">No se pudo actualizar el catálogo. Se conserva la vista cargada. <button type="button" onClick={()=>void companyDirectory.refresh()}>Reintentar</button></p> : null}
       {notice ? <p role="status">{notice}</p> : null}
       {operationError ? <p role="alert">{operationError}</p> : null}
 
@@ -146,9 +155,9 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
       </section>
 
       <div className="quality-view-tabs" aria-label="Vistas de calidad de clientes">
-        <button className={view === "customers" ? "active" : ""} type="button" onClick={() => setView("customers")}>Clientes</button>
-        <button className={view === "cases" ? "active" : ""} type="button" onClick={() => setView("cases")}>Reclamos y hallazgos</button>
-        <button className={view === "certifications" ? "active" : ""} type="button" onClick={() => setView("certifications")}>Certificaciones</button>
+        <button className={view === "customers" ? "active" : ""} type="button" onClick={() => navigateView("customers")}>Clientes</button>
+        <button className={view === "cases" ? "active" : ""} type="button" onClick={() => navigateView("cases")}>Reclamos y hallazgos</button>
+        <button className={view === "certifications" ? "active" : ""} type="button" onClick={() => navigateView("certifications")}>Certificaciones</button>
       </div>
 
       {view === "customers" ? (
@@ -161,7 +170,7 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
             <div className="configuration-count">{filteredCustomers.length} clientes</div>
             <div className="party-list">
               {filteredCustomers.map((customer) => (
-                <button className={customer.id === selected?.id ? "selected" : ""} key={customer.id} type="button" onClick={() => setSelectedId(customer.id)}>
+                <button className={customer.id === selected?.id ? "selected" : ""} key={customer.id} type="button" onClick={() => {if(confirmLeaving())setSelectedId(customer.id);}}>
                   <span><strong>{customer.name}</strong><small>{customer.code}</small></span>
                   <span className={customer.openActions > 0 ? "quality-state warning" : "quality-state success"}>
                     {customer.openActions > 0 ? `${customer.openActions} abiertas` : "Sin pendientes"}
@@ -201,46 +210,49 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
 
       {view === "certifications" ? (demoMode ? <p>Las certificaciones reales requieren una sesión de producción autorizada.</p> : <CustomerCertificationsPanel />) : null}
 
-      {isEditOpen && selected && !demoMode ? <EditCustomerModal customer={selected} onClose={() => setEditOpen(false)} onSave={editCustomer} /> : null}
-      {isCreateOpen ? <CreateCustomerModal onClose={() => setCreateOpen(false)} onCreate={addCustomer} /> : null}
+      {isEditOpen && selected && administrator && !demoMode ? <EditCustomerModal customer={selected} onClose={() => setEditOpen(false)} onSave={editCustomer} /> : null}
+      {isCreateOpen && administrator ? <CreateCustomerModal onClose={() => setCreateOpen(false)} onCreate={addCustomer} /> : null}
     </>
   );
 }
 
-function EditCustomerModal({ customer, onClose, onSave }: { customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">; onClose: () => void; onSave: (customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">) => Promise<void> }) {
+function EditCustomerModal({ customer, onClose, onSave }: { customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">; onClose: () => void; onSave: (customer: Pick<CustomerQualityRecord, "id" | "code" | "name" | "legalName" | "taxId" | "address" | "contactName" | "contactEmail">) => Promise<boolean | undefined> }) {
+  const {formRef:recoveryRef,notice:recoveryNotice,clear:clearRecovery}=useFormDraft(`customer:edit:${customer.id}`, ["code","name","legalName","taxId","address","contactName","contactEmail"]);
   const [saving, setSaving] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setSaving(true);
     try {
-      await onSave({ id: customer.id, code: String(form.get("code")).trim(), name: String(form.get("name")).trim(), legalName: String(form.get("legalName")).trim() || undefined, taxId: String(form.get("taxId")).trim() || undefined, address: String(form.get("address")).trim() || undefined, contactName: String(form.get("contactName")).trim() || undefined, contactEmail: String(form.get("contactEmail")).trim() || undefined });
+      const confirmed=await onSave({ id: customer.id, code: String(form.get("code")).trim(), name: String(form.get("name")).trim(), legalName: String(form.get("legalName")).trim() || undefined, taxId: String(form.get("taxId")).trim() || undefined, address: String(form.get("address")).trim() || undefined, contactName: String(form.get("contactName")).trim() || undefined, contactEmail: String(form.get("contactEmail")).trim() || undefined });
+      if(confirmed)clearRecovery();
     } finally { setSaving(false); }
   }
-  return <div className="modal-backdrop" role="presentation"><div className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="edit-customer-title"><div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="edit-customer-title">Editar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={18} /></button></div><form onSubmit={(event) => void submit(event)}><div className="form-grid single-column"><label><span>Abreviatura</span><input name="code" required defaultValue={customer.code} /></label><label><span>Nombre comercial</span><input name="name" required defaultValue={customer.name} /></label><label><span>Razón social (opcional)</span><input name="legalName" defaultValue={customer.legalName ?? ""} /></label><label><span>RFC (opcional)</span><input name="taxId" defaultValue={customer.taxId ?? ""} /></label><label><span>Domicilio (opcional)</span><textarea name="address" rows={2} defaultValue={customer.address ?? ""} /></label><label><span>Contacto (opcional)</span><input name="contactName" defaultValue={customer.contactName ?? ""} /></label><label><span>Correo (opcional)</span><input name="contactEmail" type="email" defaultValue={customer.contactEmail ?? ""} /></label></div><div className="modal-footer"><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</button></div></form></div></div>;
+  return <div className="modal-backdrop" role="presentation"><div className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="edit-customer-title"><div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="edit-customer-title">Editar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={()=>{if(confirmLeaving())onClose();}}><X size={18} /></button></div><form ref={recoveryRef} onSubmit={(event) => void submit(event)}><div className="form-grid single-column"><label><span>Abreviatura</span><input name="code" required defaultValue={customer.code} /></label><label><span>Nombre comercial</span><input name="name" required defaultValue={customer.name} /></label><label><span>Razón social (opcional)</span><input name="legalName" defaultValue={customer.legalName ?? ""} /></label><label><span>RFC (opcional)</span><input name="taxId" defaultValue={customer.taxId ?? ""} /></label><label><span>Domicilio (opcional)</span><textarea name="address" rows={2} defaultValue={customer.address ?? ""} /></label><label><span>Contacto (opcional)</span><input name="contactName" defaultValue={customer.contactName ?? ""} /></label><label><span>Correo (opcional)</span><input name="contactEmail" type="email" defaultValue={customer.contactEmail ?? ""} /></label></div>{recoveryNotice?<p role="status">{recoveryNotice}</p>:null}<div className="modal-footer"><button className="button button-secondary" type="button" onClick={()=>{if(confirmLeaving())onClose();}}>Cancelar</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</button></div></form></div></div>;
 }
 
 function QualityMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number|string; tone: "neutral" | "success" | "warning" | "danger" }) {
   return <div className={`metric metric-${tone}`}><span className="metric-icon">{icon}</span><div><strong>{value}</strong><span>{label}</span></div></div>;
 }
 
-function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Pick<CustomerQualityRecord, "code" | "name">) => void | Promise<void> }) {
+function CreateCustomerModal({ onClose, onCreate }: { onClose: () => void; onCreate: (customer: Pick<CustomerQualityRecord, "code" | "name">) => boolean | undefined | Promise<boolean | undefined> }) {
+  const {formRef:recoveryRef,notice:recoveryNotice,clear:clearRecovery}=useFormDraft("customer:new",["code","name"]);
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (code.trim() && name.trim()) void onCreate({ code: code.trim(), name: name.trim() });
+    if (code.trim() && name.trim()) void Promise.resolve(onCreate({ code: code.trim(), name: name.trim() })).then(confirmed=>{if(confirmed)clearRecovery();});
   };
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="new-customer-title">
-        <div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="new-customer-title">Agregar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={18} /></button></div>
-        <form onSubmit={submit}>
+        <div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="new-customer-title">Agregar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={()=>{if(confirmLeaving())onClose();}}><X size={18} /></button></div>
+        <form ref={recoveryRef} onSubmit={submit}>
           <div className="form-grid single-column">
-            <label><span>Código</span><input required value={code} onChange={(event) => setCode(event.target.value)} placeholder="CLI-004" /></label>
-            <label><span>Nombre del cliente</span><input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+            <label><span>Código</span><input name="code" required value={code} onChange={(event) => setCode(event.target.value)} placeholder="CLI-004" /></label>
+            <label><span>Nombre del cliente</span><input name="name" required value={name} onChange={(event) => setName(event.target.value)} /></label>
           </div>
-          <div className="modal-footer"><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit">Agregar cliente</button></div>
+          {recoveryNotice?<p role="status">{recoveryNotice}</p>:null}<div className="modal-footer"><button className="button button-secondary" type="button" onClick={()=>{if(confirmLeaving())onClose();}}>Cancelar</button><button className="button button-primary" type="submit">Agregar cliente</button></div>
         </form>
       </div>
     </div>

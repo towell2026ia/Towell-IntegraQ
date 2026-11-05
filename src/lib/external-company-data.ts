@@ -58,7 +58,7 @@ export function validateExternalCompanyDeactivation(active: boolean | undefined,
 
 async function parseResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null) as (T & { error?: string }) | null;
-  if (!response.ok || !payload) throw new Error(payload?.error ?? "No fue posible completar la operación.");
+  if (!response.ok || !payload) throw Object.assign(new Error(payload?.error ?? "No fue posible completar la operación."),{status:response.status});
   return payload;
 }
 

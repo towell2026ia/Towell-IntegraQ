@@ -1,0 +1,108 @@
+{
+  "checks": [
+    {
+      "test": "BEFORE: focus replaces the entire view during refetch",
+      "pass": true
+    },
+    {
+      "test": "BEFORE: the claim editor does not return after refetch",
+      "pass": true
+    },
+    {
+      "test": "AFTER: refetch does not unmount claim editor",
+      "pass": true
+    },
+    {
+      "test": "AFTER: form values survive focus refetch",
+      "pass": true
+    },
+    {
+      "test": "Focus/visibility storm does not duplicate queries",
+      "pass": true
+    },
+    {
+      "test": "Equivalent server sessions keep the same form node",
+      "pass": true
+    },
+    {
+      "test": "Token renewal does not call router.refresh",
+      "pass": true
+    },
+    {
+      "test": "Equivalent sessions do not requery companies",
+      "pass": true
+    },
+    {
+      "test": "Transient company/claim failures retain the editor and text",
+      "pass": true
+    },
+    {
+      "test": "No binary content is stored locally",
+      "pass": true
+    },
+    {
+      "test": "Dirty form registers a reload warning",
+      "pass": true
+    },
+    {
+      "test": "Draft identifier survives reload without creating another claim",
+      "pass": true
+    },
+    {
+      "test": "Claim draft restored after full reload",
+      "pass": true
+    },
+    {
+      "test": "Claim client and date restored",
+      "pass": true
+    },
+    {
+      "test": "Attachment must be reselected; no fake file restored",
+      "pass": true
+    },
+    {
+      "test": "Further edits retain the attachment reselection warning",
+      "pass": true
+    },
+    {
+      "test": "Latest edited text is recovered",
+      "pass": true
+    },
+    {
+      "test": "Claims tab and search restored",
+      "pass": true
+    },
+    {
+      "test": "Selected customer filter restored",
+      "pass": true
+    },
+    {
+      "test": "New customer draft restored",
+      "pass": true
+    },
+    {
+      "test": "Certification draft and responsible restored",
+      "pass": true
+    },
+    {
+      "test": "No business writes during tests",
+      "pass": true
+    },
+    {
+      "test": "Sign-out invalidates all scoped context",
+      "pass": true
+    },
+    {
+      "test": "Sign-out removes the authenticated workspace",
+      "pass": true
+    },
+    {
+      "test": "A3 text restored after reload",
+      "pass": true
+    },
+    {
+      "test": "No legacy global A3 draft is written",
+      "pass": true
+    }
+  ]
+}

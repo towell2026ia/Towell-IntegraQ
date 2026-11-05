@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
+import { listenForBackgroundRefresh } from "@/lib/workspace-continuity";
 import type { ConfiguredIndicator, IndicatorResults } from "@/lib/indicator-data";
 import {
   archiveIndicatorDefinition,
@@ -24,12 +25,16 @@ export function useIndicatorRuntime(enabled: boolean) {
   const [loading, setLoading] = useState(enabled);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const loaded=useRef(false);
+  const pending=useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!enabled) return;
-    setLoading(true);
+    if (!enabled||pending.current) return;
+    pending.current=true;
+    if(!loaded.current)setLoading(true);
     try {
       const snapshot = await loadIndicatorRuntime();
+      loaded.current=true;
       setDefinitions(snapshot.definitions);
       setResults(snapshot.results);
       setAccess(snapshot.access);
@@ -38,6 +43,7 @@ export function useIndicatorRuntime(enabled: boolean) {
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "No fue posible sincronizar indicadores.");
     } finally {
+      pending.current=false;
       setLoading(false);
     }
   }, [enabled]);
@@ -81,14 +87,7 @@ export function useIndicatorRuntime(enabled: boolean) {
   useEffect(() => {
     if (!enabled) return;
     void Promise.resolve().then(refresh);
-    const refreshOnFocus = () => { void refresh(); };
-    const refreshOnVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
-    window.addEventListener("focus", refreshOnFocus);
-    document.addEventListener("visibilitychange", refreshOnVisibility);
-    return () => {
-      window.removeEventListener("focus", refreshOnFocus);
-      document.removeEventListener("visibilitychange", refreshOnVisibility);
-    };
+    return listenForBackgroundRefresh("indicators",refresh);
   }, [enabled, refresh]);
 
   return {
