@@ -28,7 +28,7 @@ export async function GET() {
   if (!companyIds.length) return NextResponse.json({ customers: [], claims: [] });
   const claims = await admin.from("quality_cases")
     .select("id,folio,title,external_organization_id")
-    .in("external_organization_id", companyIds).order("folio");
+    .in("external_organization_id", companyIds).eq("kind","claim").is("cancelled_at",null).order("folio");
   if (claims.error) return NextResponse.json({ error: "No fue posible verificar la titularidad de las reclamaciones." }, { status: 409 });
   const ownedIds = new Set(companyIds);
   if ((claims.data ?? []).some(claim => !ownedIds.has(claim.external_organization_id))) {

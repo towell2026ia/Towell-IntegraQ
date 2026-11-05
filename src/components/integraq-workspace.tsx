@@ -36,6 +36,7 @@ import { CalibrationsModule } from "@/components/modules/calibrations-module";
 import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { CustomersModule } from "@/components/modules/customers-module";
+import type { CustomerClaim } from "@/lib/customer-claims";
 import { DocumentsModule } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
@@ -181,6 +182,7 @@ export function IntegraQWorkspace({
 }) {
   const demoMode = isDemoSession(session);
   const { appearance, error: appearanceError, refresh: refreshAppearance } = useHomeAppearance();
+  const [claimSeed, setClaimSeed] = useState<CustomerClaim | null>(null);
   const [activeModule, setActiveModule] = useState<WorkspaceModuleId>(() =>
     getDefaultModuleForSession(session),
   );
@@ -482,6 +484,7 @@ export function IntegraQWorkspace({
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
     const authorizedModule = resolveAuthorizedModule(session, module);
+    if (authorizedModule !== "corrective-actions") setClaimSeed(null);
     setActiveModule(authorizedModule);
     setNavigationTarget(
       authorizedModule === module && targetId ? { module, id: targetId } : null,
@@ -611,9 +614,9 @@ export function IntegraQWorkspace({
           {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onDeleteRisk={async (id, reason, kind) => { const result = await softDeleteStoredRisk(id, reason, kind); const normalized = normalizeRiskWorkspace(result.state); loadedRiskSnapshot.current = JSON.stringify(normalized); setRiskWorkspace(normalized); return result.auditLogged; }} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
           {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
           {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== session ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
-          {activeModule === "corrective-actions" && (demoMode || actionLoadedSession === session) ? <CorrectiveActionsModule actions={actions} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index"}`} onActionsChange={setActions} session={session} /> : null}
+          {activeModule === "corrective-actions" && (demoMode || actionLoadedSession === session) ? <CorrectiveActionsModule actions={actions} claimSeed={claimSeed??undefined} onClaimSeedClear={()=>setClaimSeed(null)} onNavigateCustomers={()=>changeModule("customers")} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${claimSeed?.id??(navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index")}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule actions={actions} demoMode={demoMode} session={session} /> : null}
+          {activeModule === "customers" ? <CustomersModule key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}

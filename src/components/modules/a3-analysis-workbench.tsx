@@ -25,6 +25,9 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
+import { ClaimEditor } from "@/components/modules/customer-claims-panel";
+import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 import { buildRootCauseAiRequest } from "@/lib/ai-context";
 import { loadRootCauseCustomers, type RootCauseClaim, type RootCauseCustomer } from "@/lib/root-cause-customers";
 import type { ActiveSession } from "@/lib/session-data";
@@ -119,15 +122,15 @@ const emptyFiveW2H: A3Analysis["fiveW2H"] = {
   howMuch: "",
 };
 
-function createInitialDraft(): A3Draft {
+function createInitialDraft(claim?: CustomerClaim): A3Draft {
   return {
-    origin: "internal",
-    eventType: eventTypes.internal[0],
+    origin: claim ? "customer" : "internal",
+    eventType: claim ? eventTypes.customer[0] : eventTypes.internal[0],
     relatedParty: "",
-    relatedPartyId: "",
-    qualityCaseId: "",
-    title: "",
-    problem: "",
+    relatedPartyId: claim?.external_organization_id ?? "",
+    qualityCaseId: claim?.id ?? "",
+    title: claim?.title ?? "",
+    problem: claim?.description ?? "",
     area: "",
     owner: "",
     dueDate: "",
@@ -144,9 +147,11 @@ function createInitialDraft(): A3Draft {
   };
 }
 
-export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession }) {
+export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClaim, onCustomerCatalog }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void }) {
+  const storageKey = initialClaim ? `${draftStorageKey}.claim.${initialClaim.id}` : draftStorageKey;
+  const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
   const [step, setStep] = useState(0);
-  const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft());
+  const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft(initialClaim));
   const [loaded, setLoaded] = useState(false);
   const [newIdea, setNewIdea] = useState("");
   const [causeInputs, setCauseInputs] = useState<Record<IshikawaKey, string>>({ workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" });
@@ -170,7 +175,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
 
   useEffect(() => {
     const restoreDraft = window.setTimeout(() => {
-      const saved = window.localStorage.getItem(draftStorageKey);
+      const saved = window.localStorage.getItem(storageKey);
       if (saved) {
         try {
           const parsed = JSON.parse(saved) as { step?: number; draft?: A3Draft; aiDraft?: AiRootCauseDraft };
@@ -178,18 +183,18 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
           if (parsed.aiDraft) setAiDraft(parsed.aiDraft);
           if (typeof parsed.step === "number") setStep(Math.min(Math.max(parsed.step, 0), stepLabels.length - 1));
         } catch {
-          window.localStorage.removeItem(draftStorageKey);
+          window.localStorage.removeItem(storageKey);
         }
       }
       setLoaded(true);
     }, 0);
 
     return () => window.clearTimeout(restoreDraft);
-  }, []);
+  }, [storageKey]);
 
   useEffect(() => {
-    if (loaded) window.localStorage.setItem(draftStorageKey, JSON.stringify({ step, draft, aiDraft }));
-  }, [aiDraft, draft, loaded, step]);
+    if (loaded) window.localStorage.setItem(storageKey, JSON.stringify({ step, draft, aiDraft }));
+  }, [aiDraft, draft, loaded, step, storageKey]);
 
   const completedSteps = useMemo(() => stepLabels.map((_, index) => isStepComplete(index, draft)), [draft]);
   const canContinue = completedSteps[step];
@@ -221,7 +226,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
   };
 
   const resetDraft = () => {
-    window.localStorage.removeItem(draftStorageKey);
+    window.localStorage.removeItem(storageKey);
     setDraft(createInitialDraft());
     setAiDraft(undefined);
     setAiError("");
@@ -308,7 +313,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
       a3: toA3Analysis(draft),
       aiDraft,
       });
-      window.localStorage.removeItem(draftStorageKey);
+      window.localStorage.removeItem(storageKey);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "No fue posible guardar el análisis.");
     } finally { setSaving(false); }
@@ -333,7 +338,8 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
       </nav>
 
       <div className="a3-stage">
-        {step === 0 ? <OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} claims={claims} customerError={customerError} /> : null}
+        {step === 0 ? <><OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} claims={claims} customerError={customerError} />{draft.origin==="customer"&&draft.relatedPartyId&&canPerformModuleAction(session,"customers","create")?<button className="button button-secondary" type="button" onClick={()=>{void claimsRequest<ClaimsCatalog>().then(setClaimEditorCatalog).catch(e=>setCustomerError((e as Error).message));}}>Registrar reclamo sin perder el avance del A3</button>:null}</> : null}
+        {claimEditorCatalog?<ClaimEditor onCustomerCatalog={onCustomerCatalog} catalog={claimEditorCatalog} customerId={draft.relatedPartyId} title={draft.title} description={draft.problem} administrator={session.userType==="Administrador"} onClose={()=>setClaimEditorCatalog(null)} onSaved={async claim=>{const result=await loadRootCauseCustomers();setClaims(result.claims);setCustomers(result.customers);setDraft(current=>({...current,relatedPartyId:claim.external_organization_id,relatedParty:result.customers.find(c=>c.id===claim.external_organization_id)?.name??"",qualityCaseId:claim.id}));setClaimEditorCatalog(null);}}/>:null}
         {step === 1 ? <SeverityStage draft={draft} setDraft={setDraft} /> : null}
         {step === 2 ? <FiveW2HStage value={draft.fiveW2H} onChange={(fiveW2H) => setDraft((current) => ({ ...current, fiveW2H }))} /> : null}
         {step === 3 ? <BrainstormStage ideas={draft.brainstorm} newIdea={newIdea} setNewIdea={setNewIdea} addIdea={addIdea} removeIdea={(index) => setDraft((current) => ({ ...current, brainstorm: current.brainstorm.filter((_, itemIndex) => itemIndex !== index) }))} /> : null}
@@ -378,6 +384,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session }: { onCance
 }
 
 function OpeningStage({ draft, setDraft, setOrigin, customers, claims, customerError }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; setOrigin: (origin: A3Draft["origin"]) => void; customers: RootCauseCustomer[]; claims: RootCauseClaim[]; customerError: string }) {
+  const [claimSearch,setClaimSearch]=useState("");
   const [customerSearch, setCustomerSearch] = useState("");
   const [showCustomerOptions, setShowCustomerOptions] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === draft.relatedPartyId);
@@ -397,7 +404,7 @@ function OpeningStage({ draft, setDraft, setOrigin, customers, claims, customerE
       </label> : <label><span>Área o proceso</span><input value={draft.area} onChange={(event) => setDraft((current) => ({ ...current, area: event.target.value }))} placeholder="Ej. Tintorería" /></label>}
       {draft.origin === "customer" && customerError ? <p role="alert">{customerError}</p> : null}
       {draft.origin === "customer" && !customerError && customers.length === 0 ? <p>No hay clientes reales activos en el catálogo. Registra el cliente antes de crear un análisis externo.</p> : null}
-      {draft.origin === "customer" && draft.relatedPartyId ? <label><span>Reclamación vinculada (opcional)</span><select value={draft.qualityCaseId} onChange={event => setDraft(current => ({ ...current, qualityCaseId: event.target.value }))}><option value="">Sin reclamación vinculada</option>{claims.filter(claim => claim.external_organization_id === draft.relatedPartyId).map(claim => <option key={claim.id} value={claim.id}>{claim.folio} · {claim.title}</option>)}</select></label> : null}
+      {draft.origin === "customer" && draft.relatedPartyId ? <label><span>Reclamación vinculada (opcional)</span><input type="search" placeholder="Buscar reclamo por folio o asunto" value={claimSearch} onChange={e=>setClaimSearch(e.target.value)}/><select value={draft.qualityCaseId} onChange={event => setDraft(current => ({ ...current, qualityCaseId: event.target.value }))}><option value="">Sin reclamación vinculada</option>{claims.filter(claim => claim.external_organization_id === draft.relatedPartyId&&(claim.id===draft.qualityCaseId||`${claim.folio} ${claim.title}`.toLowerCase().includes(claimSearch.toLowerCase()))).map(claim => <option key={claim.id} value={claim.id}>{claim.folio} · {claim.title}</option>)}</select></label> : null}
       {draft.origin === "customer" ? <label><span>Área o proceso</span><input value={draft.area} onChange={(event) => setDraft((current) => ({ ...current, area: event.target.value }))} placeholder="Ej. Tejido" /></label> : null}
       <label><span>Responsable del análisis</span><input value={draft.owner} onChange={(event) => setDraft((current) => ({ ...current, owner: event.target.value }))} /></label>
       <label className="wide"><span>Título</span><input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Resumen breve del problema" /></label>

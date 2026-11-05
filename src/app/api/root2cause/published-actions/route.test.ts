@@ -152,6 +152,15 @@ describe("Root2Cause portal authorization", () => {
     expect(calls("corrective_actions", "update")).toHaveLength(0);
   });
 
+  it("retains an existing claim link when following up after cancellation",async()=>{
+    state.responses.profiles=[{data:{organization_id:organizationId,user_type:"administrator",status:"active",workspace_mode:"production"},error:null}];
+    state.responses.organizations=[{data:{id:customerA,owning_organization_id:organizationId},error:null}];
+    state.responses.quality_cases=[{data:{id:customerB,external_organization_id:customerA,cancelled_at:"2026-11-06"},error:null}];
+    state.responses.corrective_actions=[{data:{id:actionId,source:"customer",external_organization_id:customerA,organization_id:organizationId,quality_case_id:customerB,deleted_at:null},error:null},{data:null,error:null}];
+    expect((await POST(request("POST",{action:{...customerAction,qualityCaseId:customerB},publish:false}))).status).toBe(200);
+    expect(calls("quality_cases","is")).toHaveLength(0);
+  });
+
   it("lets only a verified administrator explicitly publish and withdraw a customer analysis", async () => {
     state.responses.profiles = [
       { data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null },

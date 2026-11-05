@@ -24,10 +24,12 @@ import {
 } from "@/lib/quality-parties-data";
 import type { CorrectiveAction } from "@/lib/types";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { CustomerClaimsPanel, useClaimsCatalog } from "@/components/modules/customer-claims-panel";
+import { claimMetrics, type CustomerClaim } from "@/lib/customer-claims";
 
 type CustomerView = "customers" | "cases" | "audits" | "certifications";
 
-export function CustomersModule({ actions, demoMode, session }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession }) {
+export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void }) {
   const [view, setView] = useState<CustomerView>("customers");
   const [demoCustomers, setDemoCustomers] = useState(customerQualityCatalog);
   const [query, setQuery] = useState("");
@@ -37,12 +39,13 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
   const [notice, setNotice] = useState("");
   const [operationError, setOperationError] = useState("");
   const companyDirectory = useExternalCompanies();
+  const claimsDirectory = useClaimsCatalog(!demoMode);
   const administrator = isAdministrator(session);
   const customers = demoMode
     ? demoCustomers
     : companyDirectory.companies
       .filter((company) => company.kind === "customer" && company.active)
-      .map((company) => ({ id: company.id, code: company.code, name: company.name, legalName: company.legalName, taxId: company.taxId, address: company.address, contactName: company.contactName, contactEmail: company.contactEmail, claims: 0, findings: 0, openActions: 0, nextExternalAudit: "Sin programar", certificates: 0 }));
+      .map((company) => ({ id: company.id, code: company.code, name: company.name, legalName: company.legalName, taxId: company.taxId, address: company.address, contactName: company.contactName, contactEmail: company.contactEmail, claims: claimMetrics(claimsDirectory.data?.claims??[],claimsDirectory.data?.actions??[],{customerId:company.id}).received, findings: 0, openActions: (claimsDirectory.data?.actions??[]).filter(a=>a.external_organization_id===company.id&&a.status!=="closed").length, nextExternalAudit: "Sin programar", certificates: 0 }));
   const displayedAudits = demoMode ? externalAuditCalendar : [];
   const displayedCertifications = demoMode ? activeCertifications : [];
 
@@ -59,7 +62,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
 
   const selected =
     filteredCustomers.find((customer) => customer.id === selectedId) ?? filteredCustomers[0];
-  const customerActions = actions.filter((action) => action.source === "customer");
+  const selectedMetrics = claimMetrics(claimsDirectory.data?.claims??[],claimsDirectory.data?.actions??[],{customerId:selected?.id});
 
   const addCustomer = async (customer: Pick<CustomerQualityRecord, "code" | "name">) => {
     setOperationError("");
@@ -143,7 +146,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
 
       <section className="metric-grid" aria-label="Resumen de clientes">
         <QualityMetric icon={<Users size={18} />} label="Clientes registrados" value={customers.length} tone="neutral" />
-        <QualityMetric icon={<ClipboardCheck size={18} />} label="Reclamos y hallazgos" value={customers.reduce((total, item) => total + item.claims + item.findings, 0)} tone="danger" />
+        <QualityMetric icon={<ClipboardCheck size={18} />} label="Reclamos recibidos" value={demoMode?customers.reduce((total,item)=>total+item.claims,0):claimsDirectory.data?claimMetrics(claimsDirectory.data.claims,claimsDirectory.data.actions).received:"—"} tone="danger" />
         <QualityMetric icon={<CheckCircle2 size={18} />} label="Acciones abiertas" value={customers.reduce((total, item) => total + item.openActions, 0)} tone="warning" />
         <QualityMetric icon={<CalendarDays size={18} />} label="Auditorías programadas" value={displayedAudits.length} tone="success" />
       </section>
@@ -182,11 +185,12 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
               {administrator && !demoMode ? <div className="customer-detail-actions"><button className="button button-secondary" type="button" onClick={() => setEditOpen(true)}><Pencil size={15} /> Editar cliente</button><button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button></div> : null}
             </header>
             <div className="party-detail-facts">
-              <div><small>Reclamos</small><strong>{selected.claims}</strong></div>
-              <div><small>Hallazgos</small><strong>{selected.findings}</strong></div>
-              <div><small>Acciones abiertas</small><strong>{selected.openActions}</strong></div>
-              <div><small>Certificados</small><strong>{selected.certificates}</strong></div>
+              <div><small>Reclamos totales</small><strong>{claimsDirectory.data?selectedMetrics.received:"—"}</strong></div>
+              <div><small>Abiertos</small><strong>{claimsDirectory.data?selectedMetrics.open:"—"}</strong></div>
+              <div><small>Cerrados</small><strong>{claimsDirectory.data?selectedMetrics.closed:"—"}</strong></div>
+              <div><small>Sin A3</small><strong>{claimsDirectory.data?selectedMetrics.withoutA3:"—"}</strong></div>
             </div>
+            {!demoMode?<CustomerClaimsPanel key={selected.id} directory={claimsDirectory} session={session} onCustomerCatalog={()=>setView("customers")} customerId={selected.id} onCreateA3={onCreateA3} onOpenA3={onOpenA3}/>:null}
             <section className="party-detail-section">
               <div className="section-title-row"><h4>Acceso del cliente</h4><span className="quality-state success">Cuenta aislada</span></div>
               <div className="account-scope-list">
@@ -200,16 +204,7 @@ export function CustomersModule({ actions, demoMode, session }: { actions: Corre
       ) : null}
 
       {view === "cases" ? (
-        <QualityTablePanel title="Reclamos, hallazgos y acciones" subtitle="Datos compartidos desde Root2Cause">
-          <table className="quality-table">
-            <thead><tr><th>Folio</th><th>Asunto</th><th>Estado</th><th>Avance</th><th>Vencimiento</th></tr></thead>
-            <tbody>
-              {customerActions.map((action) => (
-                <tr key={action.id}><td><code>{action.folio}</code></td><td><strong>{action.title}</strong></td><td>{action.status}</td><td>{action.progress}%</td><td>{formatDate(action.dueDate)}</td></tr>
-              ))}
-            </tbody>
-          </table>
-        </QualityTablePanel>
+        demoMode?<p>El registro de reclamos reales requiere una sesión de producción autorizada.</p>:<CustomerClaimsPanel directory={claimsDirectory} session={session} onCustomerCatalog={()=>setView("customers")} onCreateA3={onCreateA3} onOpenA3={onOpenA3}/>
       ) : null}
 
       {view === "audits" ? (
@@ -249,7 +244,7 @@ function EditCustomerModal({ customer, onClose, onSave }: { customer: Pick<Custo
   return <div className="modal-backdrop" role="presentation"><div className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="edit-customer-title"><div className="modal-header"><div><p className="module-kicker">Directorio</p><h3 id="edit-customer-title">Editar cliente</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={18} /></button></div><form onSubmit={(event) => void submit(event)}><div className="form-grid single-column"><label><span>Abreviatura</span><input name="code" required defaultValue={customer.code} /></label><label><span>Nombre comercial</span><input name="name" required defaultValue={customer.name} /></label><label><span>Razón social (opcional)</span><input name="legalName" defaultValue={customer.legalName ?? ""} /></label><label><span>RFC (opcional)</span><input name="taxId" defaultValue={customer.taxId ?? ""} /></label><label><span>Domicilio (opcional)</span><textarea name="address" rows={2} defaultValue={customer.address ?? ""} /></label><label><span>Contacto (opcional)</span><input name="contactName" defaultValue={customer.contactName ?? ""} /></label><label><span>Correo (opcional)</span><input name="contactEmail" type="email" defaultValue={customer.contactEmail ?? ""} /></label></div><div className="modal-footer"><button className="button button-secondary" type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" type="submit" disabled={saving}>{saving ? "Guardando…" : "Guardar cambios"}</button></div></form></div></div>;
 }
 
-function QualityMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: "neutral" | "success" | "warning" | "danger" }) {
+function QualityMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number|string; tone: "neutral" | "success" | "warning" | "danger" }) {
   return <div className={`metric metric-${tone}`}><span className="metric-icon">{icon}</span><div><strong>{value}</strong><span>{label}</span></div></div>;
 }
 

@@ -83,6 +83,11 @@ export async function POST(request: Request) {
   }
   const action = body.action;
   const admin = createAdminClient();
+  const current = await admin.from("corrective_actions")
+    .select("id,source,external_organization_id,organization_id,created_by,deleted_at,quality_case_id")
+    .eq("id", action.id).maybeSingle();
+  if (current.error) return NextResponse.json({ error: "No fue posible comprobar el análisis existente." }, { status: 500 });
+  if (current.data?.quality_case_id && current.data.quality_case_id !== action.qualityCaseId) return NextResponse.json({error:"El A3 ya tiene una reclamación vinculada. No se modificó el vínculo histórico."},{status:409});
   let companyId: string | null = null;
   if (action.source === "customer") {
     const company = await admin.from("organizations").select("id,owning_organization_id")
@@ -94,19 +99,17 @@ export async function POST(request: Request) {
     }
     companyId = company.data.id;
     if (action.qualityCaseId) {
-      const claim = await admin.from("quality_cases").select("id,external_organization_id")
+      let claimQuery = admin.from("quality_cases").select("id,external_organization_id")
         .eq("id", action.qualityCaseId).eq("external_organization_id", companyId)
-        .maybeSingle();
+        .eq("kind","claim");
+      if(current.data?.quality_case_id!==action.qualityCaseId)claimQuery=claimQuery.is("cancelled_at",null);
+      const claim=await claimQuery.maybeSingle();
       if (claim.error) return NextResponse.json({ error: "No fue posible verificar la titularidad de la reclamación." }, { status: 409 });
       if (!claim.data || claim.data.external_organization_id !== companyId) {
         return NextResponse.json({ error: "La reclamación no pertenece a la organización y cliente seleccionados." }, { status: 403 });
       }
     }
   }
-  const current = await admin.from("corrective_actions")
-    .select("id,source,external_organization_id,organization_id,created_by,deleted_at")
-    .eq("id", action.id).maybeSingle();
-  if (current.error) return NextResponse.json({ error: "No fue posible comprobar el análisis existente." }, { status: 500 });
   if (current.data && (current.data.deleted_at || current.data.source !== action.source || current.data.external_organization_id !== companyId || current.data.organization_id !== organizationId)) {
     return NextResponse.json({ error: "El análisis existente no corresponde al origen, cliente u organización." }, { status: 409 });
   }

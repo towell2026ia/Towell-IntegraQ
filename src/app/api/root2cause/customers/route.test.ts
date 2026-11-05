@@ -13,7 +13,7 @@ function client() {
     state.calls.push({ table, method: "from", args: [] });
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};
-    for (const method of ["select", "eq", "in", "order"]) {
+    for (const method of ["select", "eq", "in", "is", "order"]) {
       chain[method] = (...args: unknown[]) => {
         if (table === "quality_cases" && String(args[0]).split(",").includes("organization_id")) throw new Error("42703: quality_cases.organization_id does not exist");
         state.calls.push({ table, method, args }); return chain;

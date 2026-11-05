@@ -31,6 +31,7 @@ import {
 } from "@/components/modules/a3-analysis-workbench";
 import { A3ActionReport } from "@/components/modules/a3-action-report";
 import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
+import type { CustomerClaim } from "@/lib/customer-claims";
 
 import { buildRootCauseAiRequest } from "@/lib/ai-context";
 import {
@@ -52,6 +53,9 @@ import type {
 } from "@/lib/types";
 
 interface CorrectiveActionsModuleProps {
+  claimSeed?: CustomerClaim;
+  onClaimSeedClear?: () => void;
+  onNavigateCustomers?: () => void;
   actions: CorrectiveAction[];
   focusId?: string;
   onActionsChange: (actions: CorrectiveAction[]) => void;
@@ -76,13 +80,16 @@ export function CorrectiveActionsModule({
   focusId,
   onActionsChange,
   session,
+  claimSeed,
+  onClaimSeedClear,
+  onNavigateCustomers,
 }: CorrectiveActionsModuleProps) {
   const today = toIsoDate(new Date());
   const focusedAction = actions.find((action) => action.id === focusId && action.source !== "supplier");
   const [selectedId, setSelectedId] = useState(focusedAction?.id ?? actions[0]?.id ?? "");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [workspaceView, setWorkspaceView] = useState<CorrectiveWorkspaceView>("lists");
+  const [workspaceView, setWorkspaceView] = useState<CorrectiveWorkspaceView>(claimSeed ? "a3" : "lists");
   const [listScope, setListScope] = useState<CorrectiveListScope>(
     focusedAction?.source === "customer"
       ? "customer"
@@ -522,8 +529,10 @@ export function CorrectiveActionsModule({
         </>
       ) : canCreate ? (
         <A3AnalysisWorkbench
-          onCancel={() => setWorkspaceView("lists")}
-          onComplete={completeA3Analysis}
+          initialClaim={claimSeed}
+          onCustomerCatalog={onNavigateCustomers}
+          onCancel={() => {setWorkspaceView("lists");onClaimSeedClear?.();}}
+          onComplete={async values=>{await completeA3Analysis(values);onClaimSeedClear?.();}}
           session={session}
         />
       ) : null}
