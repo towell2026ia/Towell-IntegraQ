@@ -1,0 +1,36 @@
+.documentUpload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+  background: #f8faf8;
+}
+
+.documentUpload label {
+  display: grid;
+  min-width: 180px;
+  flex: 1;
+  gap: 5px;
+  color: var(--muted);
+  font-size: calc(9px * var(--app-text-scale, 1));
+}
+
+.documentUpload select,
+.documentUpload input {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.documentLinks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}

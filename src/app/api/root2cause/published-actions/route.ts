@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { canAccessModule } from "@/lib/access-policy";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import { resolveCustomerPortalActor } from "@/lib/customer-portal-server";
 import type { ActiveSession } from "@/lib/session-data";
 import type { CorrectiveAction } from "@/lib/types";
 
@@ -49,15 +48,16 @@ function validAction(value: unknown): value is CorrectiveAction {
 
 export async function GET() {
   const session = await getAuthenticatedSession();
-  if (!session || session.userType !== "Cliente" || session.externalParty?.kind !== "customer" ||
-      !uuid.test(session.externalParty.companyId) || !canAccessModule(session, "customer-portal")) {
+  const portalActor = await resolveCustomerPortalActor(session);
+  if (!session || portalActor?.kind !== "customer" || !portalActor.companyId || !uuid.test(portalActor.companyId)) {
     return NextResponse.json({ error: "Acceso de cliente no autorizado." }, { status: 403 });
   }
-  const supabase = await createClient();
-  const result = await supabase.from("corrective_actions")
+  const admin = createAdminClient();
+  const result = await admin.from("corrective_actions")
     .select("id,folio,title,source,status,progress,due_date,external_organization_id,portal_visible,deleted_at")
     .eq("source", "customer")
-    .eq("external_organization_id", session.externalParty.companyId)
+    .eq("organization_id", portalActor.workspaceId)
+    .eq("external_organization_id", portalActor.companyId)
     .eq("portal_visible", true)
     .is("deleted_at", null)
     .order("created_at", { ascending: false });

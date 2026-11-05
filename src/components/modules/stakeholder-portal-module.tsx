@@ -18,7 +18,6 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import {
-  getCustomerPortalData,
   resolvePortalCompany,
   type PortalCompany,
 } from "@/lib/portal-access";
@@ -27,6 +26,7 @@ import { getRncpEvidenceUrl, saveRncpResponseAction, uploadRncpEvidence, type Rn
 import { getSupplierAssessmentFileUrl, supplierAssessmentTypeLabel } from "@/lib/supplier-assessment-data";
 import type { CorrectiveAction } from "@/lib/types";
 import { loadPublishedCorrectiveActions, type PublishedCorrectiveAction } from "@/lib/root-cause-publication";
+import portalStyles from "@/components/modules/stakeholder-portal.module.css";
 
 type PortalKind = "customer" | "supplier";
 
@@ -38,8 +38,11 @@ export function StakeholderPortalModule({
   actions: CorrectiveAction[];
   session: ActiveSession;
 }) {
+  if (kind === "customer" && session.userType === "Administrador" && session.workspaceMode === "production") {
+    return <CustomerPortal isAdministrator />;
+  }
   const company = resolvePortalCompany(session, kind);
-  if (!company) return <PortalAccessDenied />;
+  if (!company || (kind === "customer" && (session.userType !== "Cliente" || session.externalParty?.kind !== "customer"))) return <PortalAccessDenied />;
   return kind === "customer" ? (
     <CustomerPortal company={company} />
   ) : (
@@ -47,36 +50,108 @@ export function StakeholderPortalModule({
   );
 }
 
-function CustomerPortal({ company }: { company: PortalCompany }) {
-  const [view, setView] = useState<"actions" | "audits" | "certifications">("actions");
+type CustomerPortalDocument = {
+  id: string; folderId: string; name: string; originalName: string; mimeType: string; sizeBytes: number;
+  referenceType: "internal" | "external"; validityStatus: "current" | "not_current";
+  validFrom?: string | null; validUntil?: string | null; description?: string | null; version: number;
+};
+
+function CustomerPortal({ company, isAdministrator = false }: { company?: PortalCompany; isAdministrator?: boolean }) {
+  const [view, setView] = useState<"documents" | "actions">("documents");
   const [selectedActionId, setSelectedActionId] = useState("");
   const [actions, setActions] = useState<PublishedCorrectiveAction[]>([]);
+  const [documents, setDocuments] = useState<CustomerPortalDocument[]>([]);
+  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [replaceDocumentId, setReplaceDocumentId] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let active = true;
-    void loadPublishedCorrectiveActions()
-      .then(result => { if (active) { setActions(result); setError(""); } })
-      .catch(cause => { if (active) { setActions([]); setError(cause instanceof Error ? cause.message : "No se pudieron consultar las acciones."); } })
-      .finally(() => { if (active) setLoading(false); });
+    const loadDocuments = fetch("/api/customer-portal/documents", { cache: "no-store" }).then(async response => {
+      const body = await response.json() as { documents?: CustomerPortalDocument[]; folders?: Array<{ id: string; name: string }>; error?: string };
+      if (!response.ok) throw new Error(body.error || "No fue posible consultar los documentos.");
+      return body;
+    });
+    const loadActions = isAdministrator ? Promise.resolve([] as PublishedCorrectiveAction[]) : loadPublishedCorrectiveActions();
+    void Promise.all([loadDocuments, loadActions]).then(([documentResult, actionResult]) => {
+      if (active) { setDocuments(documentResult.documents ?? []); setFolders(documentResult.folders ?? []); setActions(actionResult); setError(""); }
+    }).catch(cause => {
+      if (active) { setDocuments([]); setActions([]); setError(cause instanceof Error ? cause.message : "No fue posible consultar la información autorizada."); }
+    }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [company.companyId, retry]);
-  const portalData = getCustomerPortalData(company.companyId, []);
+  }, [isAdministrator, retry]);
+
+  const handleDocumentUpload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!isAdministrator) return;
+    const formElement = event.currentTarget;
+    const file = (formElement.elements.namedItem("documentFile") as HTMLInputElement | null)?.files?.[0];
+    const folderId = selectedFolderId;
+    const name = displayName.trim();
+    if (!(file instanceof File) || !folderId) { setUploadError("Selecciona una carpeta y un archivo."); return; }
+    setUploading(true); setUploadError("");
+    const body = new FormData();
+    body.append("files", file);
+    body.append("manifest", JSON.stringify([{ folderId, name: name || file.name, referenceType: "external", validityStatus: "current" }]));
+    if (replaceDocumentId) body.append("replaceDocumentId", replaceDocumentId);
+    try {
+      const response = await fetch("/api/information-general", { method: "POST", body });
+      const result = await response.json() as { successCount?: number; results?: Array<{ ok?: boolean; error?: string }>; error?: string };
+      if (!response.ok || !result.successCount) throw new Error(result.error || result.results?.[0]?.error || "No fue posible publicar el documento.");
+      formElement.reset(); setReplaceDocumentId(""); setSelectedFolderId(""); setDisplayName(""); setLoading(true); setRetry(value => value + 1);
+    } catch (cause) { setUploadError(cause instanceof Error ? cause.message : "No fue posible publicar el documento."); }
+    finally { setUploading(false); }
+  };
+
+  const changePublication = async (document: CustomerPortalDocument, publish: boolean) => {
+    if (!publish && !window.confirm(`Retirar «${document.name}» de la biblioteca de clientes? El archivo y su historial se conservarán.`)) return;
+    const response = await fetch("/api/information-general", { method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ entity: "document", action: "update", id: document.id,
+        referenceType: "external", validityStatus: publish ? "current" : "not_current" }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) { setUploadError(result.error || "No fue posible actualizar la publicación."); return; }
+    setLoading(true); setRetry(value => value + 1);
+  };
+
   const selectedAction = actions.find((action) => action.id === selectedActionId);
   return (
     <>
-      <PortalHeading title="Portal del cliente" account={company.companyName} description="Reclamos, acciones, auditorías externas y certificaciones autorizadas." />
-      <div className="quality-view-tabs portal-tabs" aria-label="Vistas del portal del cliente">
-        <button className={view === "actions" ? "active" : ""} type="button" onClick={() => setView("actions")}>Mis reclamos y acciones</button>
-        <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Auditorías externas</button>
-        <button className={view === "certifications" ? "active" : ""} type="button" onClick={() => setView("certifications")}>Certificaciones</button>
+      <PortalHeading title="Portal del cliente" account={isAdministrator ? "Biblioteca para todos los clientes" : company?.companyName ?? "Cliente"} description="Documentos vigentes y análisis A3 autorizados para esta empresa." />
+      <div className="quality-view-tabs portal-tabs" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }} aria-label="Secciones del Portal de Clientes">
+        <button className={view === "documents" ? "active" : ""} type="button" onClick={() => setView("documents")}>Documentos</button>
+        <button className={view === "actions" ? "active" : ""} type="button" onClick={() => setView("actions")}>Mis análisis A3</button>
       </div>
-      {view === "actions" ? (
+      {view === "documents" ? <section className="portal-record-list">
+        <header><div><h3>Documentos vigentes</h3><p>{isAdministrator ? "Administra la publicación para todas las cuentas de clientes." : "Consulta y descarga documentos publicados y vigentes."}</p></div><FileText size={19} /></header>
+        {isAdministrator ? <form className={portalStyles.documentUpload} onSubmit={(event) => void handleDocumentUpload(event)}>
+          <label><span>Carpeta</span><select name="folderId" required value={selectedFolderId} onChange={event => setSelectedFolderId(event.target.value)}><option value="" disabled>Seleccionar carpeta existente</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
+          <label><span>Nombre del documento</span><input name="displayName" value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Nombre visible para clientes" /></label>
+          <label><span>Archivo {replaceDocumentId ? "de reemplazo" : "para publicar"}</span><input key={replaceDocumentId || "new-document"} name="documentFile" type="file" required accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.gif,.txt" /></label>
+          {replaceDocumentId ? <button className="button button-secondary" type="button" onClick={() => { setReplaceDocumentId(""); setSelectedFolderId(""); setDisplayName(""); }}>Cancelar reemplazo</button> : null}
+          <button className="button button-primary" disabled={uploading || !folders.length} type="submit">{uploading ? "Guardando…" : replaceDocumentId ? "Sustituir y publicar versión" : "Cargar y publicar"}</button>
+          {!folders.length ? <small>Se requiere una carpeta documental existente en Información General.</small> : null}
+          {uploadError ? <div className="form-error" role="alert">{uploadError}</div> : null}
+        </form> : null}
+        {loading ? <PortalEmpty message="Consultando documentos autorizados…" /> : null}
+        {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
+        {!loading && !error ? documents.map(document => <article key={document.id}>
+          <div><code>Versión {document.version}</code><h4>{document.name}</h4>{document.description ? <p>{document.description}</p> : null}<small>{document.originalName} · {formatFileSize(document.sizeBytes)}</small></div>
+          <div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`/api/customer-portal/documents/${document.id}/file?disposition=download`}>Descargar</a>
+            {isAdministrator ? document.referenceType === "external" && document.validityStatus === "current" ? <><button className="button button-ghost" type="button" onClick={() => { setReplaceDocumentId(document.id); setSelectedFolderId(document.folderId); setDisplayName(document.name); }}>Sustituir</button><button className="button button-ghost" type="button" onClick={() => void changePublication(document, false)}>Retirar publicación</button></> : <button className="button button-ghost" type="button" onClick={() => void changePublication(document, true)}>Publicar para clientes</button> : null}
+          </div>
+        </article>) : null}
+        {!loading && !error && documents.length === 0 ? <PortalEmpty message={isAdministrator ? "No hay documentos vigentes en el catálogo." : "No hay documentos publicados y vigentes para clientes."} /> : null}
+      </section> : null}
+      {view === "actions" ? (isAdministrator ? <PortalEmpty message="Los clientes sólo ven aquí los análisis A3 publicados expresamente para su propia cuenta." /> :
         selectedAction ? (
           <section className="portal-record-list"><button className="button button-secondary" type="button" onClick={() => setSelectedActionId("")}>Volver</button><article><div><code>{selectedAction.folio}</code><h4>{selectedAction.title}</h4></div><dl><div><dt>Avance</dt><dd>{selectedAction.progress}%</dd></div><div><dt>Vencimiento</dt><dd>{formatDate(selectedAction.dueDate)}</dd></div></dl><span className="quality-state warning">{selectedAction.status}</span></article></section>
         ) : <section className="portal-record-list">
-          <header><div><h3>Mis reclamos, hallazgos y planes</h3><p>Vista de consulta compartida desde Root2Cause; no permite editar el análisis A3.</p></div><ClipboardCheck size={19} /></header>
+          <header><div><h3>Mis análisis A3</h3><p>Únicamente análisis autorizados para esta cuenta; este portal permite consulta.</p></div><ClipboardCheck size={19} /></header>
           {loading ? <PortalEmpty message="Consultando acciones autorizadas…" /> : null}
           {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
           {actions.map((action) => (
@@ -86,11 +161,9 @@ function CustomerPortal({ company }: { company: PortalCompany }) {
               <span className="quality-state warning">{action.status}</span>
             </article>
           ))}
-          {!loading && !error && actions.length === 0 ? <PortalEmpty message="No hay reclamos ni acciones compartidas con esta empresa." /> : null}
+          {!loading && !error && actions.length === 0 ? <PortalEmpty message="No hay análisis A3 publicados para esta empresa." /> : null}
         </section>
       ) : null}
-      {view === "audits" ? <PortalTable title="Calendario de auditorías externas"><table className="quality-table"><thead><tr><th>Evento</th><th>Fecha</th><th>Alcance</th><th>Estado</th></tr></thead><tbody>{portalData.audits.map((audit) => <tr key={audit.id}><td><strong>{audit.id}</strong></td><td>{formatDate(audit.date)}</td><td>{audit.scope}</td><td><span className="quality-state success">{audit.status}</span></td></tr>)}</tbody></table>{portalData.audits.length === 0 ? <PortalEmpty message="No hay auditorías compartidas con esta empresa." /> : null}</PortalTable> : null}
-      {view === "certifications" ? <PortalTable title="Certificaciones y certificados vigentes"><table className="quality-table"><thead><tr><th>Certificación</th><th>Documento</th><th>Vigente hasta</th><th>Estado</th></tr></thead><tbody>{portalData.certifications.map((item) => <tr key={item.name}><td><strong>{item.name}</strong></td><td>{item.certificate}</td><td>{formatDate(item.validUntil)}</td><td><span className="quality-state success">Vigente</span></td></tr>)}</tbody></table>{portalData.certifications.length === 0 ? <PortalEmpty message="No hay certificados compartidos con esta empresa." /> : null}</PortalTable> : null}
     </>
   );
 }
@@ -174,10 +247,6 @@ function SupplierRncpResponse({ error, files, notice, onAddFiles, onOpenEvidence
 
 function PortalHeading({ title, account, description }: { title: string; account: string; description: string }) {
   return <section className="module-heading portal-heading"><div><p className="module-kicker">Acceso externo</p><h2>{title}</h2><p>{description}</p></div><div className="portal-account"><UserRoundCheck size={18} /><span><small>Cuenta activa</small><strong>{account}</strong></span></div></section>;
-}
-
-function PortalTable({ title, children }: { title: string; children: React.ReactNode }) {
-  return <section className="quality-table-panel"><header><div><h3>{title}</h3><p>Contenido autorizado para esta cuenta.</p></div><FileCheck2 size={19} /></header><div className="quality-table-wrap">{children}</div></section>;
 }
 
 function PortalEmpty({ message }: { message: string }) {

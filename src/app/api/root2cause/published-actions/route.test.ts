@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   responses: {} as Record<string, Array<{ data: unknown; error: unknown; count?: number }>>,
 }));
 
+vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 vi.mock("@/lib/access-policy", () => ({ canAccessModule: () => true }));
 function client() {
@@ -56,6 +57,8 @@ describe("Root2Cause portal authorization", () => {
 
   it("returns only the authenticated customer's explicitly published safe fields", async () => {
     state.session = { ...state.session!, userType: "Cliente", externalParty: { kind: "customer", companyId: customerA, companyName: "Cliente A" } };
+    state.responses.profiles = [{ data: { user_type: "customer", status: "active", workspace_mode: "production", external_party_kind: "customer", external_party_id: customerA }, error: null }];
+    state.responses.organizations = [{ data: { id: customerA, kind: "customer", active: true, owning_organization_id: organizationId }, error: null }];
     const base = { id: actionId, folio: "AC-2026-015", title: "Caso", status: "open", progress: 20,
       due_date: "2026-11-02", source: "customer", portal_visible: true, deleted_at: null };
     state.responses.corrective_actions = [{ data: [
@@ -71,11 +74,14 @@ describe("Root2Cause portal authorization", () => {
       id: actionId, folio: "AC-2026-015", title: "Caso", status: "open", progress: 20, dueDate: "2026-11-02",
     }]);
     expect(calls("corrective_actions", "eq")).toContainEqual({ table: "corrective_actions", method: "eq", args: ["external_organization_id", customerA] });
+    expect(calls("corrective_actions", "eq")).toContainEqual({ table: "corrective_actions", method: "eq", args: ["organization_id", organizationId] });
     expect(calls("corrective_actions", "eq")).toContainEqual({ table: "corrective_actions", method: "eq", args: ["portal_visible", true] });
   });
 
   it("scopes customer B to B and rejects a supplier even when portal access is otherwise granted", async () => {
     state.session = { ...state.session!, userType: "Cliente", externalParty: { kind: "customer", companyId: customerB, companyName: "Cliente B" } };
+    state.responses.profiles = [{ data: { user_type: "customer", status: "active", workspace_mode: "production", external_party_kind: "customer", external_party_id: customerB }, error: null }];
+    state.responses.organizations = [{ data: { id: customerB, kind: "customer", active: true, owning_organization_id: organizationId }, error: null }];
     const base = { id: actionId, folio: "AC-2026-015", title: "Caso B", status: "open", progress: 10,
       due_date: "2026-11-02", source: "customer", portal_visible: true, deleted_at: null };
     state.responses.corrective_actions = [{ data: [
