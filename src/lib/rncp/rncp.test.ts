@@ -9,6 +9,7 @@ import { missingResponseRequirements, type ResponseContent } from "./response";
 import { parsePdfRncpIdentity, readRncpPdf } from "./pdf";
 import { validRncpFileSignature } from "./file-signature";
 import { selectedAlertPeriod } from "./alert-period";
+import { uploadRncpEvidence } from "../rncp-data";
 
 const now = "2026-11-05T18:00:00Z";
 function report(patch: Partial<MatrixReport> = {}): MatrixReport {
@@ -55,6 +56,7 @@ describe("official import, explicit reconciliation, PDF identity", () => {
 });
 
 describe("real response requirements", () => {
+  it("rejects evidence larger than the Netlify-safe binary limit before making a request", async () => { const fetch = vi.spyOn(globalThis,"fetch").mockRejectedValue(new Error("Unexpected network")); try { await expect(uploadRncpEvidence("action",new File([new Uint8Array(4*1024*1024+1)],"oversized.pdf"))).rejects.toThrow("4 MB"); expect(fetch).not.toHaveBeenCalled(); } finally { fetch.mockRestore(); } });
   const content: ResponseContent = { reportId: "r", actionId: "a", rootCause: "Causa verificada", actionPlan: "Acción verificable", containment: "", commitments: "Compromiso", documentTypes: { Plan: "f" }, evidence: [{ fileId: "f", actionId: "a", reportId: "r", sha256: "a".repeat(64), sizeBytes: 100, deleted: false }] };
   it("allows complete valid requirements and enforces optional containment", () => { expect(missingResponseRequirements(content, { containment: false, documents: ["Plan"] })).toEqual([]); expect(missingResponseRequirements(content, { containment: true, documents: [] })).toContain("Contención"); });
   it.each([{ sizeBytes: 0 }, { deleted: true }, { actionId: "foreign" }, { reportId: "foreign" }, { sha256: "invalid" }])("rejects empty, retired, foreign or unverifiable evidence %j", patch => expect(missingResponseRequirements({ ...content, evidence: [{ ...content.evidence[0], ...patch }] }, { containment: false, documents: ["Plan"] })).toContain("Evidencias documentales"));

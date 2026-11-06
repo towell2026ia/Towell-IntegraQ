@@ -700,7 +700,7 @@ language plpgsql security definer set search_path='' as $$
 declare org uuid:=public.iq_rncp_actor_org(true); r public.supplier_rncp_reports%rowtype;
 duplicate uuid; file_version integer; file_id uuid:=(p_file->>'id')::uuid; kind text:='supplier_rncp_import_pending';
 begin
-  if p_file->>'sha256' !~ '^[a-f0-9]{64}$' or (p_file->>'sizeBytes')::bigint not between 8 and 5242880
+  if p_file->>'sha256' !~ '^[a-f0-9]{64}$' or (p_file->>'sizeBytes')::bigint not between 8 and 4194304
     or p_file->>'mimeType'<>'application/pdf' or split_part(p_file->>'path','/',1)<>'rncp-originals'
     or split_part(p_file->>'path','/',2)<>org::text or split_part(p_file->>'path','/',3)<>auth.uid()::text
     or not exists(select 1 from storage.objects where bucket_id='integraq-private' and name=p_file->>'path') then

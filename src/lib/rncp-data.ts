@@ -145,6 +145,7 @@ export async function reviewRncpResponseAction(actionId: string, decision: "acce
 }
 
 export async function uploadRncpEvidence(actionId: string, file: File) {
+  if (!file.size || file.size > 4 * 1024 * 1024) throw new Error("Selecciona una evidencia válida de hasta 4 MB, sujeta a la política del sistema.");
   const form = new FormData(); form.set("actionId", actionId); form.set("file", file);
   const response = await fetch("/api/suppliers/rncp/evidence", { method: "POST", body: form });
   return parseResponse<{ evidence: RncpEvidence }>(response);

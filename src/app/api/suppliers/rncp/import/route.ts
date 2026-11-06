@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     const context = await rncpContext("admin");
     const form = await request.formData();
     const file = form.get("file"), mode = form.get("mode");
-    if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".xlsx") || file.size < 1 || file.size > 5 * 1024 * 1024) throw new RncpError("Selecciona el Excel F-CA-24 original, máximo 5 MB.");
+    if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".xlsx") || file.size < 1 || file.size > 4 * 1024 * 1024) throw new RncpError("Selecciona el Excel F-CA-24 original, máximo 4 MB.");
     if (mode !== "preview" && mode !== "commit") throw new RncpError("Confirma primero la vista previa de la importación.");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const hash = createHash("sha256").update(bytes).digest("hex");

@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   try {
     const context = await rncpContext("admin");
     const form = await request.formData(); const file = form.get("file");
-    if (!(file instanceof File) || !/\.pdf$/i.test(file.name) || file.size < 8 || file.size > 5 * 1024 * 1024) throw new RncpError("Cada original debe ser un PDF de hasta 5 MB.");
+    if (!(file instanceof File) || !/\.pdf$/i.test(file.name) || file.size < 8 || file.size > 4 * 1024 * 1024) throw new RncpError("Cada original debe ser un PDF de hasta 4 MB.");
     const bytes = new Uint8Array(await file.arrayBuffer());
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     const duplicate = await context.admin.from("file_objects").select("id,resource_id").eq("workspace_id", context.organizationId).eq("sha256", sha256).in("resource_type", ["supplier_rncp_original", "supplier_rncp_import_pending"]).is("deleted_at", null).maybeSingle();

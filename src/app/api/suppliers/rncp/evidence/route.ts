@@ -34,7 +34,8 @@ export async function POST(request: Request) {
   const extension = file.name.split(".").pop()?.toLocaleLowerCase("en-US") ?? "";
   const mimeType = extensionMime[extension] ?? file.type;
   if (!policyResult.data.allowed_mime_types.includes(mimeType)) return NextResponse.json({ error: "Formato no permitido. Usa JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX." }, { status: 400 });
-  if (file.size > policyResult.data.max_size_bytes) return NextResponse.json({ error: `El archivo supera el máximo de ${formatMegabytes(policyResult.data.max_size_bytes)} MB.` }, { status: 400 });
+  const maxSizeBytes = Math.min(policyResult.data.max_size_bytes, 4 * 1024 * 1024);
+  if (file.size > maxSizeBytes) return NextResponse.json({ error: `El archivo supera el máximo de ${formatMegabytes(maxSizeBytes)} MB.` }, { status: 400 });
 
   const reportResult = await supabase.from("supplier_rncp_reports").select("*").eq("id", actionResult.data.report_id).maybeSingle();
   if (reportResult.error || !reportResult.data || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
