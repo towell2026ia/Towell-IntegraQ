@@ -119,4 +119,7 @@ select public.test_assert((select count(*)=0 from public.notifications) and (sel
 set role authenticated;
 set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
 select public.test_assert(jsonb_typeof(public.iq_rncp_requirements_summary(array['30000000-0000-4000-8000-000000000001'::uuid]))='object','authorized dashboard batch requirements query executes successfully');
+select public.test_assert((select count(*)=226 from jsonb_object_keys(public.iq_rncp_requirements_summary((select array_agg(id) from public.supplier_rncp_reports where source_kind='historical')))),'dashboard batch covers all 226 historical RNCP without truncation');
+select public.test_denied($q$select public.iq_rncp_requirements_summary(array['30000000-0000-4000-8000-000000000002'::uuid])$q$,'FORBIDDEN','dashboard batch rejects another organization even for administrators');
+select public.test_denied($q$select public.iq_rncp_requirements_summary(array_fill('30000000-0000-4000-8000-000000000001'::uuid,array[501]))$q$,'BATCH_TOO_LARGE','dashboard batch preserves its 500 record maximum');
 reset role;

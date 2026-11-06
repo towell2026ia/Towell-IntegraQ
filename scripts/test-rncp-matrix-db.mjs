@@ -18,5 +18,8 @@ sql("-f", "supabase/tests/rncp-legacy-trigger-fixture.sql");
 const migrations = readdirSync("supabase/migrations").filter(name => name.endsWith("_rncp_matrix_followup.sql"));
 assert.equal(migrations.length, 1);
 sql("-f", join("supabase/migrations", migrations[0]));
+const batchRepairs = readdirSync("supabase/migrations").filter(name => name.endsWith("_rncp_requirements_batch_scope.sql"));
+assert.equal(batchRepairs.length, 1);
+sql("-f", join("supabase/migrations", batchRepairs[0]));
 sql("-f", "supabase/tests/rncp-matrix-test.sql");
 console.log("PASS: RNCP proposal executed only against ephemeral synthetic CI database.");
