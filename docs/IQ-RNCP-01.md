@@ -49,7 +49,7 @@ La cola idempotente distingue falta de destinatario confirmado y envío desactiv
 
 La función programada de Netlify permanece inactiva sin `RNCP_FOLLOWUP_ENABLED=true`, contexto publicado y configuración administrativa. Incluso habilitada sólo prepara la cola: no contiene transporte de correo real. La activación de comunicaciones, destinatarios y recepción efectiva de proveedores pertenece a una autorización y aceptación posteriores.
 
-## Migración específica propuesta
+## Migración específica aplicada
 
 `supabase/migrations/20261106163011_rncp_matrix_followup.sql` reutiliza reportes, acciones, archivos, auditoría y workspace existentes. Añade procedencia histórica, hitos de seguimiento y requisitos; no reinterpreta ni actualiza filas anteriores. Añade una única cola RNCP porque las notificaciones existentes requieren usuario registrado y no modelan destinatario desconocido, reintentos ni arrendamientos.
 
@@ -61,11 +61,19 @@ Aplicación productiva autorizada y realizada exclusivamente por Supabase MCP. L
 
 La comparación antes/después de aplicar la migración confirmó 0 RNCP, 0 acciones, 61 proveedores, 45 perfiles, 544 documentos, 544 versiones y 634 archivos/objetos de Storage. Las huellas de filas de proveedores, perfiles, documentos, versiones y archivos permanecieron idénticas. La cola nueva tiene RLS y cero avisos; la cola general conserva cero eventos. La carga real de 226 registros sigue PENDING: el navegador no pudo iniciar el asistente de Windows (1223), por lo que falta completar la importación con una sesión administrativa real.
 
+## Reparación de lectura autorizada y aplicada
+
+La prueba adicional de la consulta por lotes reprodujo `column reference "id" is ambiguous` en `iq_rncp_requirements_summary(uuid[])`. El defecto está en un identificador PL/pgSQL que coincide con una columna; no afecta los registros conservados. El defecto se corrigió mediante una segunda migración específica, sin volver a ejecutar la primera. La importación requiere una sesión administrativa real.
+
+La propuesta `20261106190022_rncp_requirements_batch_scope.sql`, commit `b1eace6`, fue autorizada por separado y registrada como `supabase/migrations/20261106191602_rncp_requirements_batch_scope.sql`. Únicamente desambigua las variables de esa función de lectura. Conserva firma, límite de 500 IDs, comprobación de alcance por expediente y permisos existentes. No añade tablas, columnas ni políticas y no modifica datos. La reparación aparece exactamente una vez en el historial (45 → 46 entradas). Conservó los permisos de la función. Los conteos y huellas completas de las 95 empresas, 45 perfiles, 544 documentos, 544 versiones y 634 archivos/objetos de Storage coincidieron antes/después. Los reportes y acciones RNCP permanecen en cero hasta la importación autenticada. La primera migración aplicada permanece íntegra.
+
+GitHub CI de `b1eace6`, ejecución `42276967126`: PASS en validación, regresión documental y PostgreSQL RNCP efímero. La regresión adicional comprueba lectura propia, lote de 226 expedientes, rechazo de otra organización y límite de lote. Las entregas completas conservan su cumplimiento real y no se presentan como avances incompletos ni acumulan días de retraso después de su entrega.
+
 ## Verificación y límites de aceptación
 
 - Pruebas unitarias de estados, plazos, filtros compartidos, Pareto, importación, conciliación, PDF real sintético, firmas de archivo, requisitos, notificaciones, alertas y fallos de IA.
 - Pruebas API de perfil activo, organización, roles, exclusión de clientes, acceso individual a archivos, permisos administrativos y paginación completa.
-- PostgreSQL 17 efímero en GitHub CI: aplica sólo esta propuesta sobre metadatos y actores sintéticos. Comprueba políticas permisivas combinadas con las restrictivas, aislamiento A/B, validación exclusiva, importación 226, idempotencia, originales y cola. El runner rechaza cualquier host o base diferentes de su fixture local efímero.
+- PostgreSQL 17 efímero en GitHub CI: aplica sólo la migración RNCP y su reparación de lectura sobre metadatos y actores sintéticos. Comprueba políticas permisivas combinadas con las restrictivas, aislamiento A/B, validación exclusiva, importación 226, idempotencia, originales y cola. El runner rechaza cualquier host o base diferentes de su fixture local efímero.
 - Capturas aisladas de escritorio y móvil con la fuente oficial: cinco gráficas, posiciones, proporciones, 226 folios únicos, filtros y controles sin recortes. No son capturas de una sesión productiva ni demuestran importación en Supabase.
 - Se verifica además la lectura PDF desde el build empaquetado; la prueba detectó y corrigió la dependencia explícita del worker de PDF.js.
 

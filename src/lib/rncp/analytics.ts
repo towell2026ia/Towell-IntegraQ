@@ -27,7 +27,7 @@ export function deriveLifecycle(report: MatrixReport, now: string): LifecycleRes
     : nowMs > notifiedMs + dayMs ? "unattended" : "open";
   return { state, chartStatus: stateLabels[state], timeliness, deadline, historical: false,
     remainingDays: Math.ceil((deadlineMs - nowMs) / dayMs),
-    lateReason: late ? report.firstValidProgressAt ? "incomplete" : "no_response" : null };
+    lateReason: late && !complete ? report.firstValidProgressAt ? "incomplete" : "no_response" : null };
 }
 export function matchesFilters(report: MatrixReport, filters: MatrixFilters, now: string) {
   const date = report.reportDate;
