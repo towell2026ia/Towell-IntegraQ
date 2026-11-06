@@ -18,6 +18,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rncp-database:
+    name: Isolated RNCP history / RLS / lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: isolated_ci_only
+          POSTGRES_DB: rncp_matrix_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: isolated_ci_only
+      PGDATABASE: rncp_matrix_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test proposed migration only in ephemeral CI database
+        run: node scripts/test-rncp-matrix-db.mjs
+
   document-replacement-database:
     name: Isolated document replacement / RLS / concurrency
     runs-on: ubuntu-latest
