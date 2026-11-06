@@ -25,9 +25,9 @@ Manufacturers: C10, C18, C25, C33, C41, C50, C57, C66 y C74. Distribuidores y Se
 - Contactos en la metadata existente, con confirmación manual de receptor/correo y auditoría. Se conservan UUID, código, titularidad y otras claves de metadata. No se crean accesos.
 - Los eventos de auditoría dejan una intención de notificación desactivada en su trazabilidad. No hay transporte de correo ni activación de portales en esta fase.
 
-## Migración propuesta — NO aplicada
+## Migración específica aplicada
 
-`20261106205722_supplier_audit_calendar.sql` añade una tabla de agenda porque no existe una entidad persistente de programación y los resultados requieren proveedor y fecha de evaluación reales. Usar una evaluación como evento obligaría a inventar fechas o perder los proveedores históricos pendientes.
+`20261106221636_supplier_audit_calendar.sql` añade una tabla de agenda porque no existe una entidad persistente de programación y los resultados requieren proveedor y fecha de evaluación reales. Usar una evaluación como evento obligaría a inventar fechas o perder los proveedores históricos pendientes.
 
 Añade a `supplier_assessments` únicamente vínculo único al evento, cuestionario, rubros, hallazgos y referencias de informe/plan. Las columnas y filas legacy se conservan. Los PDF nuevos usan recursos específicos; no se amplían los tipos permitidos de archivos de otros módulos.
 
@@ -59,6 +59,16 @@ La comprobación visual aislada utiliza un perfil vacío de Chrome, sin sesión 
 
 El job PostgreSQL efímero aplica el esquema RNCP y las evaluaciones legacy junto a la propuesta específica; comprueba aislamiento, asignación, concurrencia, P/R, informe obligatorio, historial e idempotencia. Rechaza cualquier host/base distintos del servicio efímero de CI. No dispone de credenciales de producción.
 
-Resultados disponibles: 694 pruebas de la suite general PASS (el cotejo con archivos privados se omite en CI y se ejecutó localmente con las fuentes originales); 53 comprobaciones SQL de auditorías PASS, más una prueba de dos transacciones concurrentes; 17 comprobaciones visuales aisladas PASS. Typecheck, lint y build aprobados. Las regresiones SQL existentes de RNCP y reemplazo documental también pasaron.
+Resultados disponibles: 694 pruebas de la suite general PASS (el cotejo con archivos privados se omite en CI y se ejecutó localmente con las fuentes originales); 57 comprobaciones SQL de auditorías PASS, más una prueba de dos transacciones concurrentes; 17 comprobaciones visuales aisladas PASS. Typecheck, lint y build aprobados. Las regresiones SQL existentes de RNCP y reemplazo documental también pasaron.
 
-PENDING: autorización/aplicación SQL, configuración de inspector y proveedores, importación histórica productiva, carga de informes reales, aceptación con sesión real y publicación final. Correos y portal externo permanecen desactivados.
+PENDING: configuración administrativa de inspector y proveedores, importación histórica por el inspector autorizado, carga de informes reales y aceptación con sesión real. Correos y portal externo permanecen desactivados.
+
+## Evidencia de aplicación autorizada
+
+El usuario autorizó expresamente la versión definitiva del commit `e1d51a6`, sustituyendo la solicitud anterior. Supabase MCP aplicó únicamente ese SQL en `yptrqowmviixlkrxjrqr` y lo registró como `20261106221636`, `supplier_audit_calendar`, exactamente una vez (46 → 47 entradas). El archivo de la propuesta `20261106205722` se renombró para coincidir con el historial, sin alterar sus bytes: SHA-256 `1afdc59448c6038b094dad00b0d9f76e16cb986924c2a60a83adfb7fca8a2120`. No se ejecutó `db push` ni otra migración pendiente.
+
+La comparación inmediata antes/después confirmó igualdad de conteos y huellas en empresas, perfiles, RNCP, acciones RNCP, evaluaciones preexistentes, documentos, versiones, archivos, objetos de Storage, workspace, las cuatro tablas de permisos, notificaciones y cola general. Se conservaron 95 empresas (61 proveedores), 45 perfiles, 226 RNCP, 544 documentos, 544 versiones, 634 referencias de archivo y los 642 objetos de Storage presentes en ese momento. Las 44 notificaciones existentes y los cero eventos de integración no cambiaron. La agenda nueva tiene cero filas; no se cargaron auditorías ni informes de prueba.
+
+Supabase concede privilegios de tabla por defecto: eso no equivale a autorización RLS. La agenda tiene RLS habilitado y únicamente una política SELECT; los roles `authenticated` y `anon` no son propietarios ni pueden omitir RLS. Las pruebas efímeras reproducen esos privilegios y comprueban rechazo de INSERT, UPDATE y DELETE directos. La RPC anónima está denegada. Las dos guardas restrictivas del historial están instaladas. El análisis de seguridad mantuvo los mismos cuatro avisos previos, sin avisos nuevos.
+
+Las condiciones de aplicación SQL están cumplidas. La asignación del inspector y los proveedores sigue requiriendo una sesión administrativa real. La cuenta histórica revisada tiene permisos de consulta/edición, pero su puesto figura como auditor de calidad: no se la asignó automáticamente por su nombre, correo o acceso previo a RNCP.
