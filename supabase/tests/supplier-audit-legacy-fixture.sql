@@ -1,4 +1,6 @@
 -- Only for the ephemeral CI database. Helpers mirror the existing legacy access model.
+create table public.file_upload_policies(resource_type text primary key,max_size_bytes bigint not null,allowed_mime_types text[] not null,updated_at timestamptz not null default now());
+create function public.has_process_access(text) returns boolean language sql stable as $$ select false $$;
 create or replace function public.is_internal_user() returns boolean language sql stable security definer set search_path='' as $$ select exists(select 1 from public.profiles where id=auth.uid() and status='active' and user_type in ('administrator','internal')) $$;
 create or replace function public.current_user_type() returns public.app_user_type language sql stable security definer set search_path='' as $$ select user_type from public.profiles where id=auth.uid() $$;
 create function public.current_organization_ids() returns setof uuid language sql stable security definer set search_path='' as $$ select organization_id from public.profiles where id=auth.uid() union select external_party_id from public.profiles where id=auth.uid() $$;
