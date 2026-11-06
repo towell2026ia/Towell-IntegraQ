@@ -281,8 +281,8 @@ begin
   if doc.id is null then
     -- Uploaded-but-not-registered candidates must not leak through broad file policies.
     return exists(select 1 from public.file_objects f join public.processes p on p.id=f.process_id
-      join public.profiles actor on actor.organization_id=p.organization_id
-      where f.id=p_file_id and actor.id=auth.uid() and actor.user_type='administrator' and actor.status='active');
+      join public.profiles upload_actor on upload_actor.organization_id=p.organization_id
+      where f.id=p_file_id and upload_actor.id=auth.uid() and upload_actor.user_type='administrator' and upload_actor.status='active');
   end if;
   guarded:=doc.deleted_at is not null or exists(select 1 from public.controlled_document_versions where document_id=doc.id and replacement_kind is not null);
   if not guarded then return true; end if;
