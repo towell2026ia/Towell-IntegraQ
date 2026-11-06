@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import { emptySupplierDashboardFilters, supplierDashboardQuery } from "@/lib/supplier-dashboard-data";
 
 const api = readFileSync(join(process.cwd(), "src/app/api/suppliers/dashboard/route.ts"), "utf8");
-const moduleSource = readFileSync(join(process.cwd(), "src/components/modules/suppliers-module.tsx"), "utf8");
+const moduleSource = readFileSync(join(process.cwd(), "src/components/modules/rncp-matrix-dashboard.tsx"), "utf8");
+const matrixApi = readFileSync(join(process.cwd(), "src/app/api/suppliers/rncp/matrix/route.ts"), "utf8");
 const migration = readFileSync(join(process.cwd(), "supabase/migrations/202610080005_supplier_dashboard_indexes.sql"), "utf8").toLocaleLowerCase();
 
 describe("supplier live dashboard contract", () => {
@@ -27,8 +28,10 @@ describe("supplier live dashboard contract", () => {
   it("exports CSV and XLSX only for administrators and preserves filters", () => {
     expect(api).toContain('format === "csv" || format === "xlsx"');
     expect(api).toContain("isAdministrator(session)");
-    expect(moduleSource).toContain('exportSupplierDashboard(dashboard.filters, "csv")');
-    expect(moduleSource).toContain('exportSupplierDashboard(dashboard.filters, "xlsx")');
+    expect(moduleSource).toContain('exportRows("csv")');
+    expect(moduleSource).toContain('exportRows("xlsx")');
+    expect(matrixApi).toContain('context.profile.user_type !== "administrator"');
+    expect(moduleSource).toContain("matrixQuery(matrix.filters)");
   });
 
   it("uses Mexico City for the derived late status and orders history newest first", () => {

@@ -14,6 +14,7 @@ function sql(...args) {
   return result.stdout.trim();
 }
 sql("-f", "supabase/tests/rncp-matrix-fixture.sql");
+sql("-f", "supabase/tests/rncp-legacy-trigger-fixture.sql");
 const migrations = readdirSync("supabase/migrations").filter(name => name.endsWith("_rncp_matrix_followup.sql"));
 assert.equal(migrations.length, 1);
 sql("-f", join("supabase/migrations", migrations[0]));

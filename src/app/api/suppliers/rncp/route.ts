@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { paginatedRows, RncpError } from "@/lib/rncp/server";
 
 import type { RncpHistoryEvent, RncpReport, RncpResponseAction, RncpResponseStatus, RncpStatus } from "@/lib/rncp-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -6,6 +7,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type ReportRow = {
+  source_kind?: "native" | "historical" | "legacy" | null;
+  historical_status?: string | null;
+  notified_at?: string | null;
+  response_deadline?: string | null;
+  complete_submitted_at?: string | null;
+  response_requirements?: { containment?: boolean; documents?: string[] } | null;
   id: string;
   folio: string;
   supplier_id: string | null;
@@ -41,6 +48,12 @@ type AuditRow = {
 };
 
 type ActionRow = {
+  created_by?: string;
+  root_cause?: string | null;
+  action_plan?: string | null;
+  containment?: string | null;
+  commitments?: string | null;
+  document_types?: Record<string, string> | null;
   id: string;
   report_id: string;
   description: string;
@@ -55,48 +68,33 @@ type ActionRow = {
 };
 
 type EvidenceFileRow = { id: string; original_name: string; mime_type: string | null; size_bytes: number | null; uploaded_by: string; created_at: string };
-type EvidenceLinkRow = { action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
+type EvidenceLinkRow = { id: string; action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
 
 export async function GET() {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const supabase = await createClient();
-  const result = await supabase
-    .from("supplier_rncp_reports")
-    .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)")
-    .order("report_date", { ascending: false, nullsFirst: false })
-    .order("created_at", { ascending: false });
-  if (result.error) {
-    console.error("No fue posible consultar RNCP.", result.error);
-    return NextResponse.json({ error: "No fue posible consultar los RNCP." }, { status: 500 });
-  }
-  const rows = (result.data ?? []) as unknown as ReportRow[];
-  const ids = rows.map((row) => row.id);
-  const actionsResult = ids.length
-    ? await supabase.from("supplier_rncp_actions").select("id,report_id,description,responsible_name,due_date,executed_at,supplier_comment,status,validation_comment,validated_at,created_at").in("report_id", ids).order("created_at", { ascending: false })
-    : { data: [], error: null };
-  if (actionsResult.error) return NextResponse.json({ error: "No fue posible consultar las acciones RNCP." }, { status: 500 });
-  const actions = (actionsResult.data ?? []) as ActionRow[];
-  const actionIds = actions.map((action) => action.id);
-  const evidenceResult = actionIds.length
-    ? await supabase.from("supplier_rncp_action_evidence").select("action_id,file:file_objects!supplier_rncp_action_evidence_file_id_fkey(id,original_name,mime_type,size_bytes,uploaded_by,created_at)").in("action_id", actionIds).order("created_at", { ascending: false })
-    : { data: [], error: null };
-  if (evidenceResult.error) return NextResponse.json({ error: "No fue posible consultar las evidencias RNCP." }, { status: 500 });
-  const evidenceLinks = (evidenceResult.data ?? []) as unknown as EvidenceLinkRow[];
-  const admin = createAdminClient();
-  const historyResult = ids.length
-    ? await admin.from("audit_log").select("id,resource_id,action,user_name_snapshot,created_at,reason").eq("resource_type", "supplier_rncp_report").in("resource_id", ids).order("created_at", { ascending: false })
-    : { data: [], error: null };
-  if (historyResult.error) {
-    console.error("No fue posible consultar el historial RNCP.", historyResult.error);
-    return NextResponse.json({ error: "No fue posible consultar el historial de los RNCP." }, { status: 500 });
-  }
-  const audits = (historyResult.data ?? []) as AuditRow[];
-  return NextResponse.json({ reports: rows.map((row) => mapReport(
-    row,
-    audits.filter((audit) => audit.resource_id === row.id),
-    actions.filter((action) => action.report_id === row.id).map((action) => mapAction(action, evidenceLinks.filter((link) => link.action_id === action.id))),
-  )) });
+  try {
+    const rows = await paginatedRows<ReportRow>((from,to) => supabase.from("supplier_rncp_reports")
+      .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)", { count: "exact" })
+      .order("report_date", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).order("id").range(from,to));
+    const actions: ActionRow[] = [], audits: AuditRow[] = [], evidenceLinks: EvidenceLinkRow[] = [];
+    const admin = createAdminClient();
+    for(let offset=0;offset<rows.length;offset+=100){
+      const ids=rows.slice(offset,offset+100).map(row=>row.id);
+      actions.push(...await paginatedRows<ActionRow>((from,to) => supabase.from("supplier_rncp_actions").select("*", { count: "exact" }).in("report_id",ids).order("id").range(from,to)));
+      // Privileged audit reads are restricted to IDs already authorized by report RLS.
+      audits.push(...await paginatedRows<AuditRow>((from,to) => admin.from("audit_log").select("id,resource_id,action,user_name_snapshot,created_at,reason", { count: "exact" }).eq("resource_type","supplier_rncp_report").in("resource_id",ids).order("id").range(from,to)));
+    }
+    for(let offset=0;offset<actions.length;offset+=100){
+      const ids=actions.slice(offset,offset+100).map(action=>action.id);
+      evidenceLinks.push(...await paginatedRows<EvidenceLinkRow>((from,to) => supabase.from("supplier_rncp_action_evidence").select("id,action_id,file:file_objects!supplier_rncp_action_evidence_file_id_fkey(id,original_name,mime_type,size_bytes,uploaded_by,created_at)",{count:"exact"}).in("action_id",ids).order("id").range(from,to)));
+    }
+    return NextResponse.json({ reports: rows.map(row => mapReport(row,
+      audits.filter(audit=>audit.resource_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)),
+      actions.filter(action=>action.report_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(action=>mapAction(action,evidenceLinks.filter(link=>link.action_id===action.id))))) }, {headers:{"Cache-Control":"private, no-store"}});
+  } catch(error) { return NextResponse.json({ error: error instanceof RncpError ? error.message : "No fue posible consultar los RNCP completos. Reintenta." }, {status:error instanceof RncpError?error.status:503}); }
+
 }
 
 export async function POST(request: Request) {
@@ -135,7 +133,7 @@ export async function PATCH(request: Request) {
 function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseAction[]): RncpReport {
   const supplier = first(row.supplier);
   const site = first(row.site);
-  const late = Boolean(row.response_due_date && row.status !== "closed" && row.status !== "draft" && row.response_due_date < mexicoDate());
+  const late = row.source_kind === "historical" ? row.historical_status === "Tarde" : Boolean(row.notified_at && row.response_deadline && row.status !== "closed" && Date.parse(row.response_deadline) <= Date.now() && (!row.complete_submitted_at || Date.parse(row.complete_submitted_at) > Date.parse(row.response_deadline)));
   const history: RncpHistoryEvent[] = audits.map((audit) => ({
     id: audit.id,
     action: audit.action,
@@ -143,11 +141,9 @@ function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseActi
     createdAt: audit.created_at,
     reason: audit.reason ?? undefined,
   }));
-  if (late && row.response_due_date) {
-    history.push({ id: `${row.id}-overdue`, action: "rncp.overdue", actorName: "Sistema", createdAt: `${nextDate(row.response_due_date)}T12:00:00.000Z`, system: true });
-    history.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  }
   return {
+    origin: row.source_kind ?? "legacy", notifiedAt: row.notified_at ?? undefined,
+    responseDeadline: row.response_deadline ?? undefined, responseRequirements: row.response_requirements ?? undefined,
     id: row.id, folio: row.folio, supplierId: row.supplier_id ?? undefined,
     supplierCode: supplier?.code, supplierName: supplier?.name,
     siteId: row.site_id ?? undefined, siteCode: site?.code, siteName: site?.name,
@@ -164,6 +160,9 @@ function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseActi
 
 function mapAction(row: ActionRow, evidenceLinks: EvidenceLinkRow[]): RncpResponseAction {
   return {
+    createdBy: row.created_by,
+    rootCause: row.root_cause ?? undefined, actionPlan: row.action_plan ?? undefined, containment: row.containment ?? undefined,
+    commitments: row.commitments ?? undefined, documentTypes: row.document_types ?? undefined,
     id: row.id, reportId: row.report_id, description: row.description,
     responsibleName: row.responsible_name ?? "Sin responsable", dueDate: row.due_date,
     executedAt: row.executed_at ?? undefined, comment: row.supplier_comment ?? undefined,
@@ -181,8 +180,6 @@ function mutationIdentity(value: unknown) {
   const record = (Array.isArray(value) ? value[0] : value) as Record<string, unknown> | null;
   return { id: String(record?.id ?? ""), folio: String(record?.folio ?? ""), status: String(record?.status ?? "draft") };
 }
-function mexicoDate() { return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-function nextDate(value: string) { const date = new Date(`${value}T12:00:00Z`); date.setUTCDate(date.getUTCDate() + 1); return date.toISOString().slice(0, 10); }
 
 function rncpError(message: string) {
   const errors: Record<string, string> = {

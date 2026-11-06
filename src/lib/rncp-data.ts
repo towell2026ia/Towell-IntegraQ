@@ -22,6 +22,12 @@ export interface RncpEvidence {
 }
 
 export interface RncpResponseAction {
+  createdBy?: string;
+  rootCause?: string;
+  actionPlan?: string;
+  containment?: string;
+  commitments?: string;
+  documentTypes?: Record<string, string>;
   id: string;
   reportId: string;
   description: string;
@@ -37,6 +43,10 @@ export interface RncpResponseAction {
 }
 
 export interface RncpReport {
+  origin?: "native" | "historical" | "legacy";
+  notifiedAt?: string;
+  responseDeadline?: string;
+  responseRequirements?: { containment?: boolean; documents?: string[] };
   id: string;
   folio: string;
   supplierId?: string;

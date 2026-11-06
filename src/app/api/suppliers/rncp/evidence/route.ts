@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
+import { validRncpFileSignature } from "@/lib/rncp/file-signature";
 
 const resourceType = "supplier_rncp_action_evidence";
 const privateBucket = "integraq-private";
@@ -28,13 +29,14 @@ export async function POST(request: Request) {
     supabase.from("file_upload_policies").select("max_size_bytes,allowed_mime_types").eq("resource_type", resourceType).maybeSingle(),
   ]);
   if (actionResult.error || !actionResult.data || actionResult.data.created_by !== session.authUserId) return NextResponse.json({ error: "No tienes acceso para adjuntar archivos a esta acción." }, { status: 403 });
+  if (!["pending", "in_progress", "rejected"].includes(actionResult.data.status)) return NextResponse.json({ error: "La entrega está en validación o ya fue validada. Sus evidencias se conservan sin modificaciones." }, { status: 409 });
   if (policyResult.error || !policyResult.data) return NextResponse.json({ error: "La política de carga no está disponible." }, { status: 503 });
   const extension = file.name.split(".").pop()?.toLocaleLowerCase("en-US") ?? "";
   const mimeType = extensionMime[extension] ?? file.type;
   if (!policyResult.data.allowed_mime_types.includes(mimeType)) return NextResponse.json({ error: "Formato no permitido. Usa JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX." }, { status: 400 });
   if (file.size > policyResult.data.max_size_bytes) return NextResponse.json({ error: `El archivo supera el máximo de ${formatMegabytes(policyResult.data.max_size_bytes)} MB.` }, { status: 400 });
 
-  const reportResult = await supabase.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,status,deleted_at").eq("id", actionResult.data.report_id).maybeSingle();
+  const reportResult = await supabase.from("supplier_rncp_reports").select("*").eq("id", actionResult.data.report_id).maybeSingle();
   if (reportResult.error || !reportResult.data || reportResult.data.deleted_at || !["submitted", "in_progress"].includes(reportResult.data.status)) {
     return NextResponse.json({ error: "La RNCP no admite nuevas evidencias." }, { status: 400 });
   }
@@ -43,27 +45,45 @@ export async function POST(request: Request) {
   const fileId = crypto.randomUUID();
   const objectPath = `${userId}/rncp/${actionId}/${fileId}/${safeName(file.name)}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!validRncpFileSignature(bytes, mimeType)) return NextResponse.json({ error: "El contenido del archivo no corresponde a un formato admitido." }, { status: 400 });
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
   const admin = createAdminClient();
+  const duplicate = await supabase.from("file_objects").select("id,original_name,mime_type,size_bytes,uploaded_by,created_at").eq("resource_type", resourceType).eq("resource_id", actionId).eq("sha256", sha256).is("deleted_at", null).maybeSingle();
+  if (duplicate.error) return NextResponse.json({ error: "No se pudo comprobar si la evidencia ya existe." }, { status: 503 });
+  if (duplicate.data) {
+    const link = await supabase.from("supplier_rncp_action_evidence").select("id").eq("action_id", actionId).eq("file_id", duplicate.data.id).maybeSingle();
+    if (link.error) return NextResponse.json({ error: "No se pudo verificar la relación de la evidencia." }, { status: 503 });
+    if (!link.data) {
+      const restored = await admin.from("supplier_rncp_action_evidence").insert({ action_id: actionId, file_id: duplicate.data.id, created_by: userId });
+      if (restored.error) return NextResponse.json({ error: "La evidencia se conservó privada, pero su relación no pudo confirmarse." }, { status: 409 });
+    }
+    if (reportResult.data.source_kind === "native") {
+      const progress = await supabase.rpc("iq_rncp_refresh_response_progress", { p_action_id: actionId });
+      if (progress.error) return NextResponse.json({ error: "La evidencia se conservó, pero su avance no pudo confirmarse. Actualiza el expediente antes de reintentar." }, { status: 409 });
+    }
+    return NextResponse.json({ duplicate: true, evidence: { id: duplicate.data.id, fileName: duplicate.data.original_name, mimeType: duplicate.data.mime_type, sizeBytes: duplicate.data.size_bytes, uploadedBy: duplicate.data.uploaded_by, uploadedAt: duplicate.data.created_at } });
+  }
   const uploaded = await admin.storage.from(privateBucket).upload(objectPath, bytes, { contentType: mimeType, cacheControl: "3600", upsert: false });
   if (uploaded.error) return NextResponse.json({ error: "No fue posible cargar la evidencia." }, { status: 500 });
 
   const inserted = await admin.from("file_objects").insert({
     id: fileId, bucket_id: privateBucket, object_path: objectPath, original_name: file.name,
-    mime_type: mimeType, size_bytes: file.size, sha256: createHash("sha256").update(bytes).digest("hex"),
+    mime_type: mimeType, size_bytes: file.size, sha256,
     module_id: "suppliers", external_organization_id: reportResult.data.supplier_id,
     external_site_id: reportResult.data.site_id, audience: "supplier", resource_type: resourceType,
     resource_id: actionId, resource_key: reportResult.data.folio, category: `rncp-evidence:${fileId}`,
     uploaded_by: userId, preview_status: mimeType.startsWith("image/") || mimeType === "application/pdf" ? "not_required" : "pending",
   }).select("id,original_name,mime_type,size_bytes,uploaded_by,created_at").single();
   if (inserted.error || !inserted.data) {
-    await admin.storage.from(privateBucket).remove([objectPath]);
-    return NextResponse.json({ error: "No fue posible registrar la evidencia." }, { status: 500 });
+    return NextResponse.json({ error: `El archivo se conservó privado, pero su registro no se confirmó. Referencia: ${fileId}.` }, { status: 500 });
   }
   const linked = await admin.from("supplier_rncp_action_evidence").insert({ action_id: actionId, file_id: fileId, created_by: userId });
   if (linked.error) {
-    await admin.from("file_objects").delete().eq("id", fileId);
-    await admin.storage.from(privateBucket).remove([objectPath]);
-    return NextResponse.json({ error: "No fue posible vincular la evidencia a la acción." }, { status: 500 });
+    return NextResponse.json({ error: `La evidencia se conservó privada. No se confirmó el vínculo con la acción. Referencia: ${fileId}.` }, { status: 500 });
+  }
+  if (reportResult.data.source_kind === "native") {
+    const progress = await supabase.rpc("iq_rncp_refresh_response_progress", { p_action_id: actionId });
+    if (progress.error) return NextResponse.json({ error: "La evidencia se conservó privada y vinculada; el avance requiere actualizar el expediente antes de reintentar." }, { status: 409 });
   }
   return NextResponse.json({ evidence: { id: inserted.data.id, fileName: inserted.data.original_name, mimeType: inserted.data.mime_type, sizeBytes: inserted.data.size_bytes, uploadedBy: inserted.data.uploaded_by, uploadedAt: inserted.data.created_at } }, { status: 201 });
 }

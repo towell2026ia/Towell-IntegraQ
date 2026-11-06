@@ -78,6 +78,7 @@ create function public.iq_rncp_is_inspector(p_organization_id uuid) returns bool
 language sql stable security definer set search_path='' as $$
   select exists(select 1 from public.profiles p join auth.users u on u.id=p.id
     where p.id=auth.uid() and p.organization_id=p_organization_id and p.status='active'
+    and coalesce(p.workspace_mode,'production')='production'
     and p.user_type in ('internal','administrator') and u.email_confirmed_at is not null
     and lower(split_part(u.email,'@',1))='inspectormp');
 $$;
@@ -90,6 +91,7 @@ language sql stable security definer set search_path='' as $$
         and (r.deleted_at is null or p.user_type='administrator')
         and coalesce(p.workspace_mode,'production')='production' and public.has_module_permission('suppliers','view') and public.can_access_supplier_report(r.id))
       or (p.user_type='supplier' and p.external_party_id=r.supplier_id and r.portal_visible
+        and (r.source_kind is distinct from 'native' or r.notified_at is not null)
         and exists(select 1 from public.organizations s where s.id=r.supplier_id and s.kind='supplier' and s.active)
         and r.deleted_at is null and public.can_access_supplier_report(r.id))));
 $$;
@@ -221,10 +223,11 @@ begin
   elsif p_command='submit_delivery' then
     if actor.user_type<>'supplier' or actor.external_party_id is distinct from r.supplier_id or r.notified_at is null then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
     select * into a from public.supplier_rncp_actions where id=(p_payload->>'actionId')::uuid and report_id=r.id and created_by=auth.uid() for update;
+    if a.status='submitted' and r.validation_outcome='pending' then return jsonb_build_object('state','validation','alreadySubmitted',true); end if;
     missing:=public.iq_rncp_missing_requirements(r.id,a.id);
     if a.id is null or cardinality(missing)>0 then raise exception using errcode='23514',message='RNCP_REQUIREMENTS_INCOMPLETE',detail=array_to_string(missing,', '); end if;
     update public.supplier_rncp_actions set status='submitted',submitted_at=now() where id=a.id;
-    update public.supplier_rncp_reports set complete_submitted_at=now(),validation_outcome='pending',status='in_progress' where id=r.id;
+    update public.supplier_rncp_reports set complete_submitted_at=now(),validation_outcome='pending',status='in_progress',updated_by=auth.uid() where id=r.id;
   elsif p_command in ('approve','reject') then
     if not public.iq_rncp_is_inspector(r.organization_id) or r.complete_submitted_at is null or r.validation_outcome is distinct from 'pending' then
       raise exception using errcode='42501',message='RNCP_INSPECTOR_VALIDATION_REQUIRED';
@@ -236,7 +239,7 @@ begin
       validated_at=now(),validated_by=auth.uid(),validation_comment=trim(p_payload->>'reason') where id=a.id;
     update public.supplier_rncp_reports set validation_outcome=case when p_command='approve' then 'accepted' else 'rejected' end,
       validated_at=now(),validated_by=auth.uid(),validation_note=trim(p_payload->>'reason'),
-      closed_at=case when p_command='approve' then now() else null end,status=case when p_command='approve' then 'closed' else 'in_progress' end where id=r.id;
+      closed_at=case when p_command='approve' then now() else null end,status=case when p_command='approve' then 'closed' else 'in_progress' end,updated_by=auth.uid() where id=r.id;
   elsif p_command='reconcile' then
     org:=public.iq_rncp_actor_org(true);
     if org<>r.organization_id or r.supplier_id is not null or nullif(trim(p_payload->>'reason'),'') is null then raise exception using errcode='42501',message='RNCP_RECONCILIATION_REQUIRED'; end if;
@@ -310,7 +313,7 @@ begin
     new.organization_id:=actor.organization_id; new.source_kind:='native'; new.response_due_date:=null;
   end if;
   if new.source_kind is null then return new; end if;
-  if actor.id is null then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+  if actor.id is null or coalesce(actor.workspace_mode,'production')<>'production' then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
   if not exists(select 1 from public.organizations where id=new.organization_id and kind='internal' and active) then raise exception 'RNCP_ORGANIZATION_INVALID'; end if;
   if new.supplier_id is not null and not exists(select 1 from public.organizations s where s.id=new.supplier_id and s.kind='supplier'
     and (s.owning_organization_id is null or s.owning_organization_id=new.organization_id)) then raise exception 'RNCP_SUPPLIER_SCOPE_CONFLICT'; end if;
@@ -369,7 +372,7 @@ begin
   select * into r from public.supplier_rncp_reports where id=new.report_id for update;
   if r.source_kind is null then return new; end if;
   select * into actor from public.profiles where id=auth.uid() and status='active';
-  if actor.id is null or r.source_kind='historical' or r.deleted_at is not null or r.closed_at is not null then raise exception using errcode='42501',message='RNCP_RESPONSE_LOCKED'; end if;
+  if actor.id is null or coalesce(actor.workspace_mode,'production')<>'production' or r.source_kind='historical' or r.deleted_at is not null or r.closed_at is not null then raise exception using errcode='42501',message='RNCP_RESPONSE_LOCKED'; end if;
   if r.notified_at is null then raise exception 'RNCP_NOTIFICATION_REQUIRED'; end if;
   new.created_at:=case when tg_op='INSERT' then now() else old.created_at end;
   new.updated_at:=now();
@@ -383,7 +386,8 @@ begin
     if new.status='accepted' and cardinality(public.iq_rncp_missing_requirements(r.id,new.id))>0 then raise exception 'RNCP_REQUIREMENTS_INCOMPLETE'; end if;
   else
     if actor.user_type<>'supplier' or actor.external_party_id is distinct from r.supplier_id or new.created_by is distinct from auth.uid()
-      or not public.can_access_supplier_report(r.id) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+      or not public.iq_rncp_read_scope(r.id) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    if tg_op='UPDATE' and old.status='submitted' then raise exception 'RNCP_RESPONSE_LOCKED'; end if;
     if tg_op='UPDATE' and (new.report_id,new.created_by) is distinct from (old.report_id,old.created_by) then raise exception 'RNCP_RESPONSE_IDENTITY_IMMUTABLE'; end if;
     if length(trim(new.description))<10 then raise exception 'RNCP_VALID_PROGRESS_REQUIRED'; end if;
     if new.valid_progress_at is null and (length(trim(coalesce(new.root_cause,'')))>=10
@@ -417,7 +421,7 @@ begin
       and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=(select supplier_id from public.supplier_rncp_reports where id=new.report_id))),
       status=case when status='closed' then status else 'in_progress' end,
       complete_submitted_at=case when new.status='submitted' then new.submitted_at else complete_submitted_at end,
-      validation_outcome=case when new.status='submitted' then 'pending' else validation_outcome end
+      validation_outcome=case when new.status='submitted' then 'pending' else validation_outcome end,updated_by=auth.uid()
       where id=new.report_id and closed_at is null;
   end if;
   return new;
@@ -594,7 +598,7 @@ revoke all on function public.save_supplier_rncp(uuid,text,jsonb,text) from publ
 grant execute on function public.save_supplier_rncp(uuid,text,jsonb,text) to authenticated;
 create function public.iq_rncp_save_response(p_action_id uuid,p_report_id uuid,p_payload jsonb) returns uuid
 language plpgsql security definer set search_path='' as $$
-declare r public.supplier_rncp_reports%rowtype; actor public.profiles%rowtype; action_id uuid:=coalesce(p_action_id,gen_random_uuid());
+declare r public.supplier_rncp_reports%rowtype; actor public.profiles%rowtype; action_id uuid:=coalesce(p_action_id,gen_random_uuid()); previous_response jsonb;
 begin
   select * into actor from public.profiles where id=auth.uid() and status='active' and user_type='supplier';
   select * into r from public.supplier_rncp_reports where id=p_report_id and source_kind='native' and deleted_at is null for update;
@@ -609,14 +613,15 @@ begin
       values(action_id,r.id,trim(p_payload->>'description'),trim(p_payload->>'responsibleName'),(p_payload->>'dueDate')::date,
         'in_progress',auth.uid(),p_payload->>'rootCause',p_payload->>'actionPlan',p_payload->>'containment',p_payload->>'commitments',coalesce(p_payload->'documentTypes','{}'));
   else
-    if not exists(select 1 from public.supplier_rncp_actions where id=action_id and report_id=r.id and created_by=auth.uid() and status not in ('accepted','closed')) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    if not exists(select 1 from public.supplier_rncp_actions where id=action_id and report_id=r.id and created_by=auth.uid() and status not in ('accepted','closed','submitted')) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    select to_jsonb(a) into previous_response from public.supplier_rncp_actions a where a.id=action_id;
     update public.supplier_rncp_actions set description=trim(p_payload->>'description'),responsible_name=trim(p_payload->>'responsibleName'),
       due_date=(p_payload->>'dueDate')::date,root_cause=p_payload->>'rootCause',action_plan=p_payload->>'actionPlan',
       containment=p_payload->>'containment',commitments=p_payload->>'commitments',document_types=coalesce(p_payload->'documentTypes','{}'),status='in_progress'
       where id=action_id;
   end if;
   insert into public.audit_log(actor_id,module,action,resource_type,resource_id,entity_code_snapshot,metadata)
-    values(auth.uid(),'suppliers','rncp.response_saved','supplier_rncp_report',r.id::text,r.folio,jsonb_build_object('action_id',action_id));
+    values(auth.uid(),'suppliers','rncp.response_saved','supplier_rncp_report',r.id::text,r.folio,jsonb_build_object('action_id',action_id,'previous',previous_response,'current',p_payload));
   return action_id;
 end $$;
 
@@ -815,4 +820,48 @@ begin
 end $$;
 revoke all on function public.iq_rncp_refresh_response_progress(uuid) from public,anon;
 grant execute on function public.iq_rncp_refresh_response_progress(uuid) to authenticated;
+CREATE OR REPLACE FUNCTION public.notify_supplier_response()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare
+  report_folio text;
+begin
+  -- Managed RNCP use the scoped, disabled-by-default queue; never the legacy global dispatcher.
+  if exists(select 1 from public.supplier_rncp_reports r where r.id=new.report_id and r.source_kind is not null) then return new; end if;
+  if new.status <> 'submitted' then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.status is not distinct from new.status then
+    return new;
+  end if;
+
+  select folio into report_folio
+  from public.supplier_rncp_reports where id = new.report_id;
+
+  insert into public.notifications (
+    recipient_id, title, message, module_id, resource_type, resource_id, action_url
+  )
+  select distinct p.id,
+    'Respuesta de proveedor recibida',
+    'El proveedor actualizó acciones o evidencias del RNCP ' || report_folio || '.',
+    'suppliers', 'supplier_rncp_report', new.report_id,
+    '/#suppliers'
+  from public.profiles p
+  join public.user_module_permissions m on m.user_id = p.id
+  where p.status = 'active' and m.module_id = 'suppliers' and m.can_view;
+
+  insert into public.integration_outbox (
+    event_type, resource_type, resource_id, payload
+  ) values (
+    'supplier_response_submitted', 'supplier_rncp_report', new.report_id,
+    jsonb_build_object('folio', report_folio, 'action_id', new.id)
+  );
+  return new;
+end;
+$function$;
+revoke all on function public.notify_supplier_response() from public,anon,authenticated;
+
 notify pgrst,'reload schema';

@@ -1,4 +1,6 @@
 "use client";
+import { rncpIdFromSearch } from "@/lib/rncp/link";
+import { followupCommand, rncpRequest } from "@/lib/rncp/client";
 
 import {
   CalendarDays,
@@ -46,7 +48,7 @@ export function StakeholderPortalModule({
   return kind === "customer" ? (
     <CustomerPortal company={company} />
   ) : (
-    <SupplierPortal company={company} />
+    <SupplierPortal company={company} actorId={session.authUserId ?? ""} />
   );
 }
 
@@ -169,9 +171,10 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
   );
 }
 
-function SupplierPortal({ company }: { company: PortalCompany }) {
-  const [view, setView] = useState<"rncp" | "audits" | "plans">("rncp");
-  const [selectedReportId, setSelectedReportId] = useState("");
+function SupplierPortal({ company, actorId }: { company: PortalCompany; actorId: string }) {
+  const [view, setView] = useState<"rncp" | "audits" | "plans">(() => typeof window !== "undefined" && rncpIdFromSearch(window.location.search) ? "plans" : "rncp");
+  const [selectedReportId, setSelectedReportId] = useState(() => typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search));
+  const [savedResponseIds, setSavedResponseIds] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<File[]>([]);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -179,14 +182,30 @@ function SupplierPortal({ company }: { company: PortalCompany }) {
   const rncpDirectory = useRncpReports();
   const assessmentDirectory = useSupplierAssessments();
   const reports = rncpDirectory.reports.filter((report) => !report.deletedAt);
-  const selectedReport = reports.find((report) => report.id === selectedReportId) ?? reports[0];
+  const selectedReport = selectedReportId ? reports.find((report) => report.id === selectedReportId) : reports[0];
   const nextCommitment = reports.filter((report) => report.responseDueDate && report.status !== "closed").sort((left, right) => (left.responseDueDate ?? "").localeCompare(right.responseDueDate ?? ""))[0];
 
   async function submitPlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selectedReport) return;
     setSaving(true); setError(""); setNotice("");
-    const form = new FormData(event.currentTarget);
+    const element = event.currentTarget;
+    const form = new FormData(element);
     try {
+      if (selectedReport.origin === "historical") throw new Error("El registro importado conserva su seguimiento histórico.");
+      if (selectedReport.origin === "native") {
+        if (!selectedReport.notifiedAt) throw new Error("Calidad todavía no ha registrado la comunicación formal y su plazo. No se guardó ningún avance.");
+        const documentTypes = Object.fromEntries((selectedReport.responseRequirements?.documents ?? []).map(name => [name, String(form.get(`document:${name}`) ?? "")]));
+        const result = await followupCommand<{ actionId: string }>("save_response", { reportId: selectedReport.id, actionId: savedResponseIds[selectedReport.id] ?? selectedReport.actions.find(action => action.createdBy === actorId && !["accepted", "closed"].includes(action.status))?.id, payload: {
+          description: String(form.get("description") ?? ""), responsibleName: String(form.get("responsibleName") ?? ""), dueDate: String(form.get("dueDate") ?? ""),
+          rootCause: String(form.get("rootCause") ?? ""), actionPlan: String(form.get("actionPlan") ?? ""), containment: String(form.get("containment") ?? ""), commitments: String(form.get("commitments") ?? ""), documentTypes } });
+        setSavedResponseIds(current => ({ ...current, [selectedReport.id]: result.actionId }));
+        for (const file of files) await uploadRncpEvidence(result.actionId, file);
+        setFiles([]);
+        if (form.get("status") === "submitted") await followupCommand("submit_delivery", { reportId: selectedReport.id, payload: { actionId: result.actionId } });
+        await rncpDirectory.refresh();
+        setNotice(form.get("status") === "submitted" ? "Entrega completa enviada a inspectormp para validación; no implica cierre." : "Avance guardado. El plazo original continúa vigente.");
+        return;
+      }
       const result = await saveRncpResponseAction({
         reportId: selectedReport.id, description: String(form.get("description") ?? ""),
         responsibleName: String(form.get("responsibleName") ?? ""), dueDate: String(form.get("dueDate") ?? ""),
@@ -194,7 +213,7 @@ function SupplierPortal({ company }: { company: PortalCompany }) {
         status: String(form.get("status") ?? "submitted") as "pending" | "in_progress" | "submitted",
       });
       for (const file of files) await uploadRncpEvidence(result.action.id, file);
-      await rncpDirectory.refresh(); setFiles([]); event.currentTarget.reset();
+      await rncpDirectory.refresh(); setFiles([]); element.reset();
       setNotice("Acción y evidencias enviadas a Calidad para revisión.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible enviar la respuesta."); }
     finally { setSaving(false); }
@@ -236,14 +255,18 @@ function SupplierPortal({ company }: { company: PortalCompany }) {
         <section className="supplier-portal-audit"><header><div><h3>Auditorías y evaluaciones autorizadas</h3><p>Resultados publicados por Calidad para esta empresa y sucursal.</p></div><FileCheck2 size={19} /></header>{assessmentDirectory.loading ? <PortalEmpty message="Consultando resultados autorizados…" /> : <div className="quality-table-wrap"><table className="quality-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Resultado</th><th>Clasificación</th><th>Archivo</th></tr></thead><tbody>{assessmentDirectory.assessments.map((assessment) => <tr key={assessment.id}><td>{formatDate(assessment.assessmentDate)}</td><td>{supplierAssessmentTypeLabel(assessment.assessmentType)}</td><td><strong>{assessment.score === undefined ? "Sin puntuación" : `${assessment.score}%`}</strong></td><td>{assessment.classification ?? "Sin clasificación"}</td><td>{assessment.sourceFile ? <button className="evidence-link" onClick={() => void openAssessmentFile(assessment.id)} type="button"><FileText size={14} /> Ver archivo</button> : "Sin archivo"}</td></tr>)}</tbody></table>{!assessmentDirectory.assessments.length ? <PortalEmpty message="No hay resultados autorizados para esta empresa y sucursal." /> : null}</div>}{error || assessmentDirectory.error ? <div className="form-error" role="alert">{error || assessmentDirectory.error}</div> : null}</section>
       ) : null}
       {view === "plans" ? (
-        <SupplierRncpResponse error={error || rncpDirectory.error} files={files} onAddFiles={addFiles} onOpenEvidence={openEvidence} onSelectReport={setSelectedReportId} notice={notice} onSubmit={submitPlan} report={selectedReport} reports={reports} saving={saving} />
+        <SupplierRncpResponse actorId={actorId} error={error || rncpDirectory.error} files={files} onAddFiles={addFiles} onOpenEvidence={openEvidence} onSelectReport={setSelectedReportId} notice={notice} onSubmit={submitPlan} report={selectedReport} reports={reports} saving={saving} />
       ) : null}
     </>
   );
 }
 
-function SupplierRncpResponse({ error, files, notice, onAddFiles, onOpenEvidence, onSelectReport, onSubmit, report, reports, saving }: { error: string; files: File[]; notice: string; onAddFiles: (files: FileList | null) => void; onOpenEvidence: (id: string) => Promise<void>; onSelectReport: (id: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>; report?: RncpReport; reports: RncpReport[]; saving: boolean }) {
-  return <section className="portal-action-form"><header><div><h3>Acciones y evidencias</h3><p>Registra lo realizado y adjunta fotografías o documentos directamente a la RNCP.</p></div><ShieldCheck size={19} /></header>{report ? <><div className="portal-rncp-selector"><label>RNCP<select value={report.id} onChange={(event) => onSelectReport(event.target.value)}>{reports.map((item) => <option key={item.id} value={item.id}>{item.folio} · {item.findingType ?? "Sin descripción"}</option>)}</select></label><span className={`quality-state ${report.late ? "danger" : "warning"}`}>{report.late ? "Tardía" : portalStatus(report)}</span></div><form onSubmit={(event) => void onSubmit(event)}><div className="rncp-form-grid"><label className="wide"><span>Descripción *</span><textarea name="description" rows={4} required placeholder="Describe la acción realizada o propuesta" /></label><label><span>Responsable *</span><input name="responsibleName" required /></label><label><span>Fecha compromiso *</span><input name="dueDate" type="date" defaultValue={report.responseDueDate} required /></label><label><span>Fecha de ejecución</span><input name="executedAt" type="date" /></label><label><span>Estatus</span><select name="status" defaultValue="submitted"><option value="pending">Pendiente</option><option value="in_progress">En proceso</option><option value="submitted">Realizada · enviar a Calidad</option></select></label><label className="wide"><span>Comentario</span><textarea name="comment" rows={3} /></label><div className="wide rncp-upload-actions"><label className="button button-secondary file-button"><Camera size={15} /> Tomar foto<input accept="image/jpeg,image/png,image/webp" capture="environment" type="file" onChange={(event) => { onAddFiles(event.target.files); event.currentTarget.value = ""; }} /></label><label className="button button-secondary file-button"><ImagePlus size={15} /> Seleccionar archivo<input accept=".jpg,.jpeg,.png,.webp,.pdf,.xls,.xlsx" multiple type="file" onChange={(event) => { onAddFiles(event.target.files); event.currentTarget.value = ""; }} /></label><small>JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX · máximo configurado por archivo.</small></div>{files.length ? <div className="wide rncp-selected-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileText size={13} /> {file.name} · {formatFileSize(file.size)}</span>)}</div> : null}</div>{notice ? <div className="form-success"><CheckCircle2 size={17} /> {notice}</div> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}<div className="configuration-actions"><button className="button button-primary" disabled={saving} type="submit"><Send size={16} /> {saving ? "Enviando…" : "Guardar acción"}</button></div></form><div className="portal-rncp-actions"><h4>Acciones registradas</h4>{report.actions.map((action) => <article key={action.id}><div><strong>{action.description}</strong><small>{action.responsibleName} · compromiso {formatDate(action.dueDate)}</small>{action.validationComment ? <p>Calidad: {action.validationComment}</p> : null}</div><span className={`quality-state ${action.status === "accepted" ? "success" : action.status === "rejected" ? "danger" : "warning"}`}>{actionStatusLabel(action.status)}</span><div className="rncp-evidence-links">{action.evidences.map((evidence) => <button key={evidence.id} onClick={() => void onOpenEvidence(evidence.id)} type="button"><FileText size={13} /> {evidence.fileName}</button>)}</div></article>)}{!report.actions.length ? <p>Esta RNCP todavía no tiene acciones.</p> : null}</div></> : <PortalEmpty message="No hay RNCP disponibles para responder." />}</section>;
+function SupplierRncpResponse({ actorId, error, files, notice, onAddFiles, onOpenEvidence, onSelectReport, onSubmit, report, reports, saving }: { actorId: string; error: string; files: File[]; notice: string; onAddFiles: (files: FileList | null) => void; onOpenEvidence: (id: string) => Promise<void>; onSelectReport: (id: string) => void; onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>; report?: RncpReport; reports: RncpReport[]; saving: boolean }) {
+  const [originals, setOriginals] = useState<{ reportId: string; files: Array<{id:string;fileName:string}> } | null>(null);
+  const [originalError, setOriginalError] = useState("");
+  const locked = report?.origin === "historical" || report?.status === "closed" || report?.origin === "native" && (!report.notifiedAt || report.actions.some(action=>action.status === "submitted"));
+  const previous = report?.actions.find(action => action.createdBy === actorId && !["accepted", "closed"].includes(action.status));
+  return <section className="portal-action-form"><header><div><h3>Acciones y evidencias</h3><p>Registra lo realizado y adjunta fotografías o documentos directamente a la RNCP.</p></div><ShieldCheck size={19} /></header>{report ? <><div className="portal-rncp-selector"><label>RNCP<select value={report.id} onChange={(event) => onSelectReport(event.target.value)}>{reports.map((item) => <option key={item.id} value={item.id}>{item.folio} · {item.findingType ?? "Sin descripción"}</option>)}</select></label><span className={`quality-state ${report.late ? "danger" : "warning"}`}>{report.late ? "Tardía" : portalStatus(report)}</span></div><div><button className="button button-secondary" type="button" onClick={()=>{void rncpRequest<{originalFiles:Array<{id:string;fileName:string}>}>(`/follow-up?reportId=${report.id}`).then(result=>{setOriginalError("");setOriginals({reportId:report.id,files:result.originalFiles});}).catch(error=>setOriginalError(error.message));}}>Consultar PDF original del RNCP</button>{originals?.reportId===report.id ? originals.files.length ? originals.files.map(file=><button key={file.id} className="button button-secondary" type="button" onClick={()=>{void rncpRequest<{url:string}>(`/originals/${file.id}`).then(result=>window.open(result.url,"_blank","noopener,noreferrer")).catch(error=>setOriginalError(error.message));}}>{file.fileName}</button>):<p>Sin PDF original asociado.</p>:null}{originalError?<p role="alert">{originalError}</p>:null}</div>{locked?<p>Expediente de sólo consulta: histórico, sin notificación formal, cerrado o con entrega en validación.</p>:null}<form onSubmit={(event) => void onSubmit(event)}><div className="rncp-form-grid"><label className="wide"><span>Descripción *</span><textarea name="description" rows={4} required placeholder="Describe la acción realizada o propuesta" /></label><label><span>Responsable *</span><input name="responsibleName" required /></label><label><span>Fecha compromiso *</span><input name="dueDate" type="date" defaultValue={previous?.dueDate ?? report.responseDueDate} readOnly={Boolean(previous)} required /></label><label><span>Fecha de ejecución</span><input name="executedAt" type="date" /></label><label><span>Estatus</span><select name="status" defaultValue="in_progress"><option value="pending">Pendiente</option><option value="in_progress">En proceso</option><option value="submitted">Realizada · enviar a Calidad</option></select></label>{report.origin === "native" ? <><label className="wide"><span>Análisis de causa</span><textarea name="rootCause" defaultValue={previous?.rootCause} rows={3} /></label><label className="wide"><span>Plan de acciones</span><textarea name="actionPlan" defaultValue={previous?.actionPlan} rows={3} /></label>{report.responseRequirements?.containment ? <label className="wide"><span>Contención requerida</span><textarea name="containment" defaultValue={previous?.containment} rows={3} /></label> : null}<label className="wide"><span>Observaciones y compromisos</span><textarea name="commitments" defaultValue={previous?.commitments} rows={3} /></label>{report.responseRequirements?.documents?.map(name => <label key={name}><span>Documento requerido: {name}</span><select name={`document:${name}`} defaultValue={previous?.documentTypes?.[name] ?? ""}><option value="">Seleccionar evidencia guardada</option>{report.actions.flatMap(action => action.evidences).map(file => <option key={file.id} value={file.id}>{file.fileName}</option>)}</select></label>)}<p className="wide">Puedes guardar avances parciales. Para enviar a validación se requieren causa, plan, compromisos, contención cuando aplique y evidencias válidas. Los documentos obligatorios se seleccionan después de adjuntarlos. Ninguna carga cierra el reporte.</p></> : null}<label className="wide"><span>Comentario</span><textarea name="comment" rows={3} /></label><div className="wide rncp-upload-actions"><label className="button button-secondary file-button"><Camera size={15} /> Tomar foto<input accept="image/jpeg,image/png,image/webp" capture="environment" type="file" onChange={(event) => { onAddFiles(event.target.files); event.currentTarget.value = ""; }} /></label><label className="button button-secondary file-button"><ImagePlus size={15} /> Seleccionar archivo<input accept=".jpg,.jpeg,.png,.webp,.pdf,.xls,.xlsx" multiple type="file" onChange={(event) => { onAddFiles(event.target.files); event.currentTarget.value = ""; }} /></label><small>JPG, JPEG, PNG, WEBP, PDF, XLS o XLSX · máximo configurado por archivo.</small></div>{files.length ? <div className="wide rncp-selected-files">{files.map((file, index) => <span key={`${file.name}-${index}`}><FileText size={13} /> {file.name} · {formatFileSize(file.size)}</span>)}</div> : null}</div>{notice ? <div className="form-success"><CheckCircle2 size={17} /> {notice}</div> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}<div className="configuration-actions"><button className="button button-primary" disabled={saving || locked} type="submit"><Send size={16} /> {saving ? "Enviando…" : "Guardar acción"}</button></div></form><div className="portal-rncp-actions"><h4>Acciones registradas</h4>{report.actions.map((action) => <article key={action.id}><div><strong>{action.description}</strong><small>{action.responsibleName} · compromiso {formatDate(action.dueDate)}</small>{action.validationComment ? <p>Calidad: {action.validationComment}</p> : null}</div><span className={`quality-state ${action.status === "accepted" ? "success" : action.status === "rejected" ? "danger" : "warning"}`}>{actionStatusLabel(action.status)}</span><div className="rncp-evidence-links">{action.evidences.map((evidence) => <button key={evidence.id} onClick={() => void onOpenEvidence(evidence.id)} type="button"><FileText size={13} /> {evidence.fileName}</button>)}</div></article>)}{!report.actions.length ? <p>Esta RNCP todavía no tiene acciones.</p> : null}</div></> : <PortalEmpty message="No hay RNCP disponibles para responder." />}</section>;
 }
 
 function PortalHeading({ title, account, description }: { title: string; account: string; description: string }) {

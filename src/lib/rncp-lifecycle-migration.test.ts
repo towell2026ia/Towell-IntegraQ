@@ -29,9 +29,11 @@ describe("RNCP lifecycle contract", () => {
 
   it("shows independent draft and submit actions plus history", () => {
     expect(moduleSource).toContain("Guardar borrador");
-    expect(moduleSource).toContain("Enviar RNCP");
-    expect(moduleSource).toContain("Historial");
-    expect(moduleSource).toContain("Tardías");
-    expect(moduleSource).not.toContain("Supabase");
+    expect(moduleSource).toContain("Registrar para seguimiento");
+    const matrix = readFileSync(join(process.cwd(), "src/components/modules/rncp-matrix-dashboard.tsx"), "utf8");
+    expect(matrix).toContain("Historial de retiros");
+    expect(matrix).toContain("Restaurar");
+    expect(matrix).toContain("Consultar movimientos y seguimiento");
+    expect(moduleSource).not.toContain("window.location.reload");
   });
 });
