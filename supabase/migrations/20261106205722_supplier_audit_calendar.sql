@@ -271,6 +271,30 @@ begin
 end $$;
 create trigger supplier_audit_contact_guard before update on public.organizations for each row execute function public.iq_supplier_audit_contact_guard();
 
+-- The legacy assessment trigger also emits an audit_log row without organization_id.
+-- Resolve managed assessment logs through their actual event, not caller-supplied metadata.
+create function public.iq_supplier_audit_log_allowed(p_type text,p_id text,p_org uuid,p_write boolean) returns boolean
+language plpgsql stable security definer set search_path='' as $$
+declare scoped_org uuid; managed boolean:=false;
+begin
+ if p_type='supplier_audit_event' then scoped_org:=p_org; managed:=true;
+ elsif p_type='supplier_assessment' then
+  select e.organization_id into scoped_org from public.supplier_assessments a join public.supplier_audit_events e on e.id=a.audit_event_id where a.id::text=p_id;
+  managed:=found;
+ end if;
+ if not managed then return true; end if;
+ if p_write then return false; end if;
+ return exists(select 1 from public.profiles p join public.organizations o on o.id=p.organization_id
+  where p.id=auth.uid() and p.status='active' and p.user_type in ('administrator','internal') and p.workspace_mode='production'
+  and p.organization_id=scoped_org and o.kind='internal' and o.active and public.has_module_permission('suppliers','view'));
+end $$;
+create policy supplier_audit_log_scope on public.audit_log as restrictive for select to authenticated
+ using(public.iq_supplier_audit_log_allowed(resource_type,resource_id,organization_id,false));
+create policy supplier_audit_log_insert on public.audit_log as restrictive for insert to authenticated
+ with check(public.iq_supplier_audit_log_allowed(resource_type,resource_id,organization_id,true));
+revoke all on function public.iq_supplier_audit_log_allowed(text,text,uuid,boolean) from public,anon,authenticated;
+grant execute on function public.iq_supplier_audit_log_allowed(text,text,uuid,boolean) to authenticated;
+
 -- Helpers are not public endpoints. Only authenticated, scoped RPC entry points are callable.
 revoke all on function public.iq_supplier_audit_org(),public.iq_supplier_audit_inspector(uuid),public.iq_supplier_audit_supplier_allowed(uuid,uuid),public.iq_supplier_audit_can_read(uuid),public.iq_supplier_audit_context(),public.iq_supplier_audit_log(text,uuid,jsonb,jsonb,text),public.iq_supplier_audit_configure(uuid[],uuid[],integer,text),public.iq_supplier_audit_save(uuid,integer,jsonb,text),public.iq_supplier_audit_import(text,jsonb),public.iq_supplier_audit_file(uuid,integer,jsonb),public.iq_supplier_audit_result(uuid,integer,jsonb,boolean,text),public.iq_supplier_audit_contacts(uuid,jsonb,timestamptz,text) from public,anon,authenticated;
 grant execute on function public.iq_supplier_audit_org(),public.iq_supplier_audit_can_read(uuid),public.iq_supplier_audit_context(),public.iq_supplier_audit_configure(uuid[],uuid[],integer,text),public.iq_supplier_audit_save(uuid,integer,jsonb,text),public.iq_supplier_audit_import(text,jsonb),public.iq_supplier_audit_file(uuid,integer,jsonb),public.iq_supplier_audit_result(uuid,integer,jsonb,boolean,text),public.iq_supplier_audit_contacts(uuid,jsonb,timestamptz,text) to authenticated;

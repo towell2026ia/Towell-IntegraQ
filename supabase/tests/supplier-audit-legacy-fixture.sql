@@ -25,3 +25,6 @@ alter table public.supplier_assessments
 create table public.user_module_action_permissions(user_id uuid,module_id text,action text);
 insert into public.user_module_action_permissions values('10000000-0000-4000-8000-000000000007','suppliers','update');
 insert into public.organizations(id,code,name,kind) values('20000000-0000-4000-8000-000000000003','LEGACY-SYNTHETIC','Synthetic unowned supplier','supplier');
+alter table public.audit_log enable row level security;
+create policy fixture_legacy_log_select on public.audit_log for select to authenticated using(true);
+create policy fixture_legacy_log_insert on public.audit_log for insert to authenticated with check(actor_id=auth.uid());
