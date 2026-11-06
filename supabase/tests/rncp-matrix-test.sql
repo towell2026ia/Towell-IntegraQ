@@ -81,6 +81,9 @@ set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
 insert into public.supplier_rncp_reports(id,folio,supplier_id,report_date,description,organization_id,source_kind,portal_visible)
 values('30000000-0000-4000-8000-000000000003','TEST-RNCP-LATE','20000000-0000-4000-8000-000000000001',current_date-10,'Synthetic overdue only','00000000-0000-4000-8000-000000000001','native',true);
 select public.iq_rncp_followup_command('30000000-0000-4000-8000-000000000003','record_notification',jsonb_build_object('notifiedAt',now()-interval '8 days','reference','Synthetic verified communication'));
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000004';
+select public.iq_rncp_save_response(null,'30000000-0000-4000-8000-000000000003',jsonb_build_object('description','Generic comment without an analysis','responsibleName','Synthetic actor','dueDate',current_date));
+select public.test_assert((select first_valid_progress_at is null from public.supplier_rncp_reports where folio='TEST-RNCP-LATE'),'a generic comment does not count as valid progress');
 reset role;
 set request.jwt.claim.sub='';
 set role service_role;
@@ -97,3 +100,18 @@ select public.test_assert(public.iq_rncp_finish_notification(:'notification_id',
 select public.test_assert((public.iq_rncp_claim_notification(:'notification_id')).id is null,'backoff prevents immediate duplicate retry');
 reset role;
 select public.test_assert((select count(*)=8 from public.profiles) and (select count(*)=4 from public.organizations),'synthetic identities preserved; no automatic accounts or supplier reassignment');
+-- Original PDF registration is tested against storage metadata, never a real bucket.
+insert into storage.objects(bucket_id,name) select 'integraq-private','rncp-originals/00000000-0000-4000-8000-000000000001/10000000-0000-4000-8000-000000000001/synthetic-'||n||'.pdf' from generate_series(1,3) n;
+set role authenticated;
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+select count(*) as reports_before_pdf from public.supplier_rncp_reports \gset
+select public.iq_rncp_register_original(jsonb_build_object('id','60000000-0000-4000-8000-000000000001','name','Synthetic-RNCP0999.pdf','path','rncp-originals/00000000-0000-4000-8000-000000000001/10000000-0000-4000-8000-000000000001/synthetic-1.pdf','sizeBytes',100,'sha256',repeat('c',64),'mimeType','application/pdf','identity',jsonb_build_object('folio','RNCP0999','supplierCode','PR00001','ambiguous',false)),null);
+select public.test_assert((select count(*)=:'reports_before_pdf'::integer from public.supplier_rncp_reports),'unmatched PDF is private pending evidence, never another RNCP');
+select public.test_assert((public.iq_rncp_register_original(jsonb_build_object('id','60000000-0000-4000-8000-000000000002','name','Synthetic-copy.pdf','path','rncp-originals/00000000-0000-4000-8000-000000000001/10000000-0000-4000-8000-000000000001/synthetic-2.pdf','sizeBytes',100,'sha256',repeat('c',64),'mimeType','application/pdf','identity',jsonb_build_object('folio','RNCP0999','supplierCode','PR00001')),null)->>'state')='duplicate','same PDF hash never creates another file reference or RNCP');
+insert into public.supplier_rncp_reports(id,folio,supplier_id,report_date,description,organization_id,source_kind,portal_visible)
+values('30000000-0000-4000-8000-000000000004','RNCP0999','20000000-0000-4000-8000-000000000001',current_date,'Synthetic PDF test only','00000000-0000-4000-8000-000000000001','native',false);
+select public.iq_rncp_reconcile_original('60000000-0000-4000-8000-000000000001','30000000-0000-4000-8000-000000000004');
+select public.iq_rncp_register_original(jsonb_build_object('id','60000000-0000-4000-8000-000000000003','name','Synthetic-next-original.pdf','path','rncp-originals/00000000-0000-4000-8000-000000000001/10000000-0000-4000-8000-000000000001/synthetic-3.pdf','sizeBytes',100,'sha256',repeat('d',64),'mimeType','application/pdf','identity',jsonb_build_object('folio','RNCP0999','supplierCode','PR00001')),'30000000-0000-4000-8000-000000000004');
+reset role;
+select public.test_assert((select count(*)=2 and count(*) filter(where is_current)=1 and max(version)=2 from public.file_objects where resource_type='supplier_rncp_original' and resource_id='30000000-0000-4000-8000-000000000004'),'PDF replacement preserves previous original and exactly one current reference');
+select public.test_assert((select count(*)=1 from public.supplier_rncp_reports where folio='RNCP0999'),'PDF association and new original version preserve RNCP identity');

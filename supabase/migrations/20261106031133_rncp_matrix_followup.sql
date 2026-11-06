@@ -24,6 +24,7 @@ create unique index supplier_rncp_source_row_unique on public.supplier_rncp_repo
 create index supplier_rncp_org_date_idx on public.supplier_rncp_reports(organization_id,report_date) where deleted_at is null;
 create index supplier_rncp_notification_due_idx on public.supplier_rncp_reports(response_deadline) where source_kind='native' and deleted_at is null and closed_at is null;
 alter table public.supplier_rncp_actions
+  add column valid_progress_at timestamptz,
   add column root_cause text,
   add column action_plan text,
   add column containment text,
@@ -291,6 +292,8 @@ create policy rncp_original_storage_guard on storage.objects as restrictive for 
  with check(bucket_id<>'integraq-private' or name not like 'rncp-originals/%');
 create unique index rncp_original_sha_unique on public.file_objects(workspace_id,sha256)
  where resource_type in ('supplier_rncp_original','supplier_rncp_import_pending') and deleted_at is null;
+create unique index rncp_response_action_sha_unique on public.file_objects(resource_id,sha256)
+ where resource_type='supplier_rncp_action_evidence' and deleted_at is null and sha256 is not null;
 
 revoke all on function public.iq_rncp_actor_org(boolean),public.iq_rncp_is_inspector(uuid),public.iq_rncp_read_scope(uuid),
  public.iq_rncp_import_history(jsonb,text),public.iq_rncp_missing_requirements(uuid,uuid),public.iq_rncp_followup_command(uuid,text,jsonb),public.iq_rncp_save_workspace(text,jsonb,integer) from public,anon;
@@ -347,8 +350,8 @@ begin
     join public.profiles p on p.id=a.created_by where a.report_id=new.id and length(trim(a.description))>=10
     and p.user_type='supplier' and p.external_party_id=new.supplier_id) then raise exception 'RNCP_VALID_PROGRESS_REQUIRED'; end if;
   if new.first_valid_progress_at is not null and (tg_op='INSERT' or new.first_valid_progress_at is distinct from old.first_valid_progress_at)
-    and new.first_valid_progress_at is distinct from (select min(a.created_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
-      where a.report_id=new.id and a.created_at>=new.notified_at and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=new.supplier_id) then raise exception 'RNCP_PROGRESS_TIMESTAMP_INVALID'; end if;
+    and new.first_valid_progress_at is distinct from (select min(a.valid_progress_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
+      where a.report_id=new.id and a.valid_progress_at>=new.notified_at and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=new.supplier_id) then raise exception 'RNCP_PROGRESS_TIMESTAMP_INVALID'; end if;
   if new.complete_submitted_at is not null and (tg_op='INSERT' or new.complete_submitted_at is distinct from old.complete_submitted_at)
     and not exists(select 1 from public.supplier_rncp_actions a where a.report_id=new.id and a.status in ('submitted','accepted')
       and a.submitted_at=new.complete_submitted_at and cardinality(public.iq_rncp_missing_requirements(new.id,a.id))=0) then raise exception 'RNCP_REQUIREMENTS_INCOMPLETE'; end if;
@@ -370,6 +373,7 @@ begin
   if r.notified_at is null then raise exception 'RNCP_NOTIFICATION_REQUIRED'; end if;
   new.created_at:=case when tg_op='INSERT' then now() else old.created_at end;
   new.updated_at:=now();
+  new.valid_progress_at:=case when tg_op='UPDATE' then old.valid_progress_at else null end;
   if tg_op='UPDATE' and (new.report_id,new.created_by) is distinct from (old.report_id,old.created_by) then raise exception 'RNCP_RESPONSE_IDENTITY_IMMUTABLE'; end if;
   if new.status in ('accepted','rejected') then
     if not public.iq_rncp_is_inspector(r.organization_id) then raise exception using errcode='42501',message='RNCP_INSPECTOR_VALIDATION_REQUIRED'; end if;
@@ -382,6 +386,14 @@ begin
       or not public.can_access_supplier_report(r.id) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
     if tg_op='UPDATE' and (new.report_id,new.created_by) is distinct from (old.report_id,old.created_by) then raise exception 'RNCP_RESPONSE_IDENTITY_IMMUTABLE'; end if;
     if length(trim(new.description))<10 then raise exception 'RNCP_VALID_PROGRESS_REQUIRED'; end if;
+    if new.valid_progress_at is null and (length(trim(coalesce(new.root_cause,'')))>=10
+      or length(trim(coalesce(new.action_plan,'')))>=10 or length(trim(coalesce(new.containment,'')))>=10
+      or exists(select 1 from public.supplier_rncp_action_evidence e join public.file_objects f on f.id=e.file_id
+        join storage.objects o on o.bucket_id=f.bucket_id and o.name=f.object_path
+        where e.action_id=new.id and f.resource_id=new.id and f.external_organization_id=r.supplier_id
+          and f.resource_type='supplier_rncp_action_evidence' and f.deleted_at is null and f.size_bytes>0 and f.sha256 ~ '^[a-f0-9]{64}$')) then
+      new.valid_progress_at:=now();
+    end if;
     if new.status='submitted' and (tg_op='INSERT' or old.status is distinct from 'submitted') then
       -- A saved partial advance is not a complete delivery. The explicit command
       -- checks structured fields and linked, private originals after persistence.
@@ -399,9 +411,9 @@ language plpgsql security definer set search_path='' as $$
 begin
   if exists(select 1 from public.supplier_rncp_reports where id=new.report_id and source_kind='native' and notified_at is not null)
     and exists(select 1 from public.profiles p where p.id=new.created_by and p.user_type='supplier')
-    and length(trim(new.description))>=10 then
-    update public.supplier_rncp_reports set first_valid_progress_at=coalesce(first_valid_progress_at,(select min(a.created_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
-      where a.report_id=new.report_id and a.created_at>=(select notified_at from public.supplier_rncp_reports where id=new.report_id)
+    and new.valid_progress_at is not null then
+    update public.supplier_rncp_reports set first_valid_progress_at=coalesce(first_valid_progress_at,(select min(a.valid_progress_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
+      where a.report_id=new.report_id and a.valid_progress_at>=(select notified_at from public.supplier_rncp_reports where id=new.report_id)
       and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=(select supplier_id from public.supplier_rncp_reports where id=new.report_id))),
       status=case when status='closed' then status else 'in_progress' end,
       complete_submitted_at=case when new.status='submitted' then new.submitted_at else complete_submitted_at end,
@@ -790,4 +802,17 @@ create policy rncp_response_link_insert_guard on public.supplier_rncp_action_evi
  with check(public.iq_rncp_response_link_writable(action_id,file_id,created_by));
 create policy rncp_response_link_update_guard on public.supplier_rncp_action_evidence as restrictive for update to authenticated
  using(false) with check(false);
+create function public.iq_rncp_refresh_response_progress(p_action_id uuid) returns boolean
+language plpgsql security definer set search_path='' as $$
+declare r public.supplier_rncp_reports%rowtype; a public.supplier_rncp_actions%rowtype;
+begin
+  select r0.* into r from public.supplier_rncp_reports r0 join public.supplier_rncp_actions a0 on a0.report_id=r0.id where a0.id=p_action_id for update of r0;
+  select * into a from public.supplier_rncp_actions where id=p_action_id for update;
+  if a.id is null or a.created_by is distinct from auth.uid() or not public.iq_rncp_read_scope(r.id)
+    or r.source_kind is distinct from 'native' then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+  update public.supplier_rncp_actions set updated_at=now() where id=a.id;
+  return true;
+end $$;
+revoke all on function public.iq_rncp_refresh_response_progress(uuid) from public,anon;
+grant execute on function public.iq_rncp_refresh_response_progress(uuid) to authenticated;
 notify pgrst,'reload schema';
