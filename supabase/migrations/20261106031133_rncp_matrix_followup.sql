@@ -726,7 +726,7 @@ begin
     values(auth.uid(),'suppliers',case when r.id is null then 'rncp.pdf_pending' else 'rncp.pdf_linked' end,
       case when r.id is null then 'file_object' else 'supplier_rncp_report' end,coalesce(r.id,file_id)::text,r.folio,
       jsonb_build_object('file_id',file_id,'sha256',p_file->>'sha256','version',file_version,'report_created',false));
-  return jsonb_build_object('state',case when r.id is null then 'pending' else 'linked' end,'fileId',file_id,'reportId',r.id,'version',version);
+  return jsonb_build_object('state',case when r.id is null then 'pending' else 'linked' end,'fileId',file_id,'reportId',r.id,'version',file_version);
 end $$;
 create function public.iq_rncp_reconcile_original(p_file_id uuid,p_report_id uuid) returns boolean
 language plpgsql security definer set search_path='' as $$
