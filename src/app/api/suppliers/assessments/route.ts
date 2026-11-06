@@ -6,6 +6,7 @@ import { canPerformModuleAction } from "@/lib/module-permissions";
 import type { SupplierAssessment, SupplierAssessmentType } from "@/lib/supplier-assessment-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 
 const resourceType = "supplier_assessment_source";
 const privateBucket = "integraq-private";
@@ -24,7 +25,9 @@ export async function GET() {
   const supplierAccess = session.userType === "Proveedor" && session.externalParty?.kind === "supplier";
   if (!internalAccess && !supplierAccess) return NextResponse.json({ error: "No tienes permiso para consultar evaluaciones de proveedores." }, { status: 403 });
   const admin = createAdminClient();
-  let builder = admin.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").order("assessment_date", { ascending: false }).order("created_at", { ascending: false });
+  // The caller's RLS must scope managed audit results, including administrators.
+  const scoped = await createClient();
+  let builder = scoped.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,evaluator_name,score,classification,observations,source_file_id,portal_visible,created_at").is("audit_event_id", null).order("assessment_date", { ascending: false }).order("created_at", { ascending: false });
   if (supplierAccess) {
     builder = builder.eq("supplier_id", session.externalParty!.companyId).eq("portal_visible", true);
     if (session.externalParty?.siteId) builder = builder.or(`site_id.is.null,site_id.eq.${session.externalParty.siteId}`);
@@ -57,6 +60,7 @@ export async function POST(request: Request) {
   const supplierId = String(form.get("supplierId") ?? "");
   const siteId = String(form.get("siteId") ?? "") || null;
   const assessmentType = String(form.get("assessmentType") ?? "") as SupplierAssessmentType;
+  if (assessmentType === "supplier_audit") return NextResponse.json({ error: "Programa y registra la auditoría desde Calendario de auditorías; sólo el inspector asignado puede gestionarla." }, { status: 409 });
   const assessmentDate = String(form.get("assessmentDate") ?? "");
   const scoreText = String(form.get("score") ?? "").trim();
   const score = scoreText ? Number(scoreText) : null;

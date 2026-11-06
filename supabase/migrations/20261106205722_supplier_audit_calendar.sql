@@ -83,7 +83,7 @@ begin
  if length(trim(coalesce(p_reason,'')))<5 or cardinality(p_inspectors)>30 or cardinality(p_legacy_suppliers)>2000 or p_inspectors is null or p_legacy_suppliers is null then raise exception 'AUDIT_CONFIGURATION_INVALID'; end if;
  perform pg_advisory_xact_lock(hashtext('supplierAuditSettings'));
  select * into previous from public.workspace_data where workspace_id=selected_org and workspace_mode='production' and area='supplierAuditSettings' for update;
- if coalesce(previous.revision,0)<>p_expected_revision then raise exception 'AUDIT_CONFLICT'; end if;
+ if coalesce(previous.revision,0) is distinct from p_expected_revision then raise exception 'AUDIT_CONFLICT'; end if;
  foreach candidate in array p_inspectors loop
   if not exists(select 1 from public.profiles p where p.id=candidate and p.organization_id=selected_org and p.status='active' and p.user_type in ('internal','administrator') and p.workspace_mode='production'
    and (p.user_type='administrator' or exists(select 1 from public.user_module_action_permissions u where u.user_id=p.id and u.module_id='suppliers' and u.action='update')))
@@ -107,7 +107,7 @@ begin
  if p_id is not null then
   select * into previous from public.supplier_audit_events where id=p_id and organization_id=selected_org for update;
   if previous.id is null then raise exception using errcode='42501',message='AUDIT_ACCESS_DENIED'; end if;
-  if previous.revision<>p_expected_revision then raise exception 'AUDIT_CONFLICT'; end if;
+  if previous.revision is distinct from p_expected_revision then raise exception 'AUDIT_CONFLICT'; end if;
   if length(trim(coalesce(p_reason,'')))<5 then raise exception 'AUDIT_REASON_REQUIRED'; end if;
   if previous.state='completed' then raise exception 'AUDIT_FINALIZED_USE_RESULT_CORRECTION'; end if;
  end if;
@@ -171,7 +171,7 @@ begin
  if not public.iq_supplier_audit_inspector(selected_org) then raise exception using errcode='42501',message='AUDIT_INSPECTOR_REQUIRED'; end if;
  select * into event_row from public.supplier_audit_events where id=p_event and organization_id=selected_org for update;
  if event_row.id is null or event_row.supplier_id is null or not public.iq_supplier_audit_supplier_allowed(event_row.supplier_id,selected_org) then raise exception using errcode='42501',message='AUDIT_ACCESS_DENIED'; end if;
- if event_row.revision<>p_revision then raise exception 'AUDIT_CONFLICT'; end if;
+ if event_row.revision is distinct from p_revision then raise exception 'AUDIT_CONFLICT'; end if;
  if event_row.state='cancelled' then raise exception 'AUDIT_CANCELLED'; end if;
  if length(trim(coalesce(p_file->>'reason','')))<5 then raise exception 'AUDIT_REASON_REQUIRED'; end if;
  if coalesce(selected_type,'') not in ('supplier_audit_report','supplier_audit_action_plan') or p_file->>'mime' is distinct from 'application/pdf' or coalesce(p_file->>'sha256','') !~ '^[a-f0-9]{64}$'
@@ -198,7 +198,7 @@ begin
  if not public.iq_supplier_audit_inspector(selected_org) then raise exception using errcode='42501',message='AUDIT_INSPECTOR_REQUIRED'; end if;
  select * into e from public.supplier_audit_events where id=p_event and organization_id=selected_org for update;
  if e.id is null or e.supplier_id is null or not public.iq_supplier_audit_supplier_allowed(e.supplier_id,selected_org) then raise exception using errcode='42501',message='AUDIT_ACCESS_DENIED'; end if;
- if e.revision<>p_revision then raise exception 'AUDIT_CONFLICT'; end if;
+ if e.revision is distinct from p_revision then raise exception 'AUDIT_CONFLICT'; end if;
  if e.state='cancelled' then raise exception 'AUDIT_CANCELLED'; end if;
  if coalesce(p_result->>'questionnaire','') not in ('manufacturers','distributors') then raise exception 'AUDIT_QUESTIONNAIRE_REQUIRED'; end if;
  expected_count:=case when p_result->>'questionnaire'='manufacturers' then 9 else 8 end;

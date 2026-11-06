@@ -23,6 +23,8 @@ import { FormEvent, useMemo, useState } from "react";
 import { useExternalCompanies } from "@/hooks/use-external-companies";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
+import { useSupplierAudits } from "@/hooks/use-supplier-audits";
+import { SupplierAuditCalendar, SupplierAuditDialog, SupplierAuditProfile, SupplierAuditResults, type AuditFocus } from "./supplier-audit-calendar";
 import { rncpIdFromSearch } from "@/lib/rncp/link";
 import { RncpMatrixDashboard } from "./rncp-matrix-dashboard";
 import { saveExternalCompany, type ExternalCompany } from "@/lib/external-company-data";
@@ -50,7 +52,9 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const [editingRncpId, setEditingRncpId] = useState<string | undefined>();
   const [supplierNotice, setSupplierNotice] = useState("");
   const [supplierError, setSupplierError] = useState("");
+  const [auditFocus, setAuditFocus] = useState<AuditFocus | null>(null);
   const demo = isDemoSession(session);
+  const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
   const companyDirectory = useExternalCompanies();
   const rncpDirectory = useRncpReports(!demo);
@@ -106,7 +110,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
         <div>
           <p className="module-kicker">Gestión interna</p>
           <h2>Gestión de calidad de proveedores</h2>
-          <p>RNCP, auditorías semestrales, efectividad y seguimiento de planes por proveedor.</p>
+          <p>RNCP, calendario de auditorías, evaluaciones y seguimiento por proveedor.</p>
         </div>
         {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}>
           <Plus size={17} /> Nuevo RNCP
@@ -124,7 +128,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
 
       <div className="quality-view-tabs supplier-tabs" aria-label="Vistas de calidad de proveedores">
         <button className={view === "directory" ? "active" : ""} type="button" onClick={() => setView("directory")}>Proveedores</button>
-        <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Auditorías semestrales</button>
+        <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Calendario de auditorías</button>
         <button className={view === "dashboard" ? "active" : ""} type="button" onClick={() => { setMatrixSupplierId(""); setView("dashboard"); }}>Dashboard RNCP</button>
         <button className={view === "rncp" ? "active" : ""} type="button" onClick={() => setView("rncp")}>Formulario RNCP</button>
         <button className={view === "results" ? "active" : ""} type="button" onClick={() => setView("results")}>Resultados y planes</button>
@@ -155,7 +159,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
               <div><small>Tardíos</small><strong>{selected.rncpLate}</strong></div>
               <div><small>Efectividad</small><strong>{selected.effectiveness === null ? "Pendiente" : `${selected.effectiveness}%`}</strong></div>
             </div>
-            <section className="party-detail-section">
+            {!demo ? <SupplierAuditProfile supplierId={selected.id} directory={auditDirectory} reports={activeRncp} onOpen={setAuditFocus} onRncp={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }} /> : <section className="party-detail-section">
               <div className="section-title-row"><h4>Clasificación de auditoría</h4><span className={selected.auditRequired ? "quality-state warning" : "quality-state success"}>{selected.auditRequired ? "Auditable" : "Alto desempeño"}</span></div>
               <div className="supplier-audit-decision">
                 <CalendarDays size={20} />
@@ -165,12 +169,12 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
                 <div><Link2 size={17} /><span><strong>Portal vinculado</strong><small>Solo este proveedor recibe sus RNCP, auditorías, plazos y solicitudes de evidencia.</small></span></div>
                 <div><FileSpreadsheet size={17} /><span><strong>Compras capturadas manualmente</strong><small>La efectividad se actualizará contra RNCP y compras del periodo.</small></span></div>
               </div>
-            </section>
+            </section>}
           </div> : <div className="party-detail-panel"><div className="access-empty"><ShieldCheck size={24} /><h3>Sin proveedores activos</h3><p>Un administrador puede registrar el primero en Usuarios y acceso → Empresas externas.</p></div></div>}
         </section>
       ) : null}
 
-      {view === "audits" ? <SemesterAuditCalendar demo={demo} /> : null}
+      {view === "audits" ? demo ? <SemesterAuditCalendar demo={demo} /> : <SupplierAuditCalendar directory={auditDirectory} onOpen={setAuditFocus} /> : null}
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
@@ -178,7 +182,8 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       {view === "rncp" ? <RncpForm administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} report={rncpDirectory.reports.find((item) => item.id === editingRncpId)} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
-        : <SupplierAssessmentResults canUpdate={canUpdateRncp} companies={companyDirectory.companies} /> : null}
+        : <><SupplierAuditResults directory={auditDirectory} onOpen={setAuditFocus} /><SupplierAssessmentResults canUpdate={canUpdateRncp} companies={companyDirectory.companies} /></> : null}
+      {auditFocus && !demo ? <SupplierAuditDialog key={auditFocus.id ?? "new-audit"} focus={auditFocus} directory={auditDirectory} onClose={() => setAuditFocus(null)} /> : null}
     </>
   );
 }
@@ -627,7 +632,7 @@ function SupplierAssessmentResults({ canUpdate, companies }: { canUpdate: boolea
       <div className="rncp-form-grid">
         <label><span>Proveedor *</span><select required value={supplierId} onChange={(event) => setSupplierId(event.target.value)}><option value="">Seleccionar proveedor</option>{suppliers.map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label>
         <label><span>Sucursal</span><select disabled={!supplier?.sites.length} name="siteId"><option value="">Toda la empresa</option>{supplier?.sites.filter((site) => site.active).map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label>
-        <label><span>Tipo *</span><select name="assessmentType" required defaultValue="supplier_audit"><option value="supplier_audit">Auditoría proveedor</option><option value="semiannual_evaluation">Evaluación semestral</option><option value="annual_evaluation">Evaluación anual</option><option value="quality_evaluation">Evaluación de calidad</option><option value="other">Otro</option></select></label>
+        <label><span>Tipo *</span><select name="assessmentType" required defaultValue="semiannual_evaluation"><option value="semiannual_evaluation">Evaluación semestral</option><option value="annual_evaluation">Evaluación anual</option><option value="quality_evaluation">Evaluación de calidad</option><option value="other">Otro</option></select></label>
         <label><span>Fecha *</span><input name="assessmentDate" required type="date" /></label>
         <label><span>Evaluador</span><input name="evaluatorName" /></label>
         <label><span>Resultado / puntuación</span><input max="100" min="0" name="score" step="0.01" type="number" /></label>
@@ -646,23 +651,19 @@ function SupplierAssessmentResults({ canUpdate, companies }: { canUpdate: boolea
 }
 
 function toSupplierQualityRecord(company: ExternalCompany, reports: RncpReport[]): SupplierQualityRecord {
-  const historicalCodes = new Set([company.code, ...company.sites.map((site) => site.code)]);
-  const historical = supplierQualityCatalog.filter((supplier) => historicalCodes.has(supplier.code));
-  const effective = historical.map((supplier) => supplier.effectiveness).filter((value): value is number => value !== null);
-  const nextAudits = historical.map((supplier) => supplier.nextAudit).filter((value): value is string => Boolean(value)).sort();
   const companyReports = reports.filter((report) => report.supplierId === company.id);
   return {
     id: company.id,
     code: company.code,
     name: company.name,
-    category: company.category ?? historical[0]?.category ?? "Sin categoría",
+    category: company.category ?? "Sin categoría",
     rncpTotal: companyReports.length,
     rncpClosed: companyReports.filter((report) => report.status === "closed").length,
     rncpLate: companyReports.filter((report) => report.late).length,
     rncpOpen: companyReports.filter((report) => report.status === "submitted" || report.status === "in_progress").length,
-    effectiveness: effective.length ? effective.reduce((total, value) => total + value, 0) / effective.length : null,
-    auditRequired: historical.length ? historical.some((supplier) => supplier.auditRequired) : true,
-    nextAudit: nextAudits[0] ?? null,
+    effectiveness: null,
+    auditRequired: true,
+    nextAudit: null,
   };
 }
 
