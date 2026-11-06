@@ -11,6 +11,7 @@ assert.ok(!process.env.PGSERVICE && !process.env.PGSERVICEFILE);
 function sql(...args) {
   const r = spawnSync("psql", ["-X", "-v", "ON_ERROR_STOP=1", ...args], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(r.stderr || r.stdout);
+  if (r.stderr.includes("PASS:")) console.log(r.stderr.trim());
   return r.stdout.trim();
 }
 sql("-f", "supabase/tests/document-replacement-fixture.sql");

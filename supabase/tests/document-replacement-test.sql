@@ -43,6 +43,7 @@ set request.jwt.claim.sub='10000000-0000-4000-8000-000000000002';
 select public.test_denied($q$select public.inspect_controlled_document_code('TEST-DOC','P-TEST','visual-aid')$q$,'FORBIDDEN','internal cannot replace');
 select public.test_assert((select count(*)=0 from public.file_objects where id='30000000-0000-4000-8000-000000000001'),'old original is historical only');
 select public.test_assert((select count(*)=1 from public.file_objects where id='30000000-0000-4000-8000-000000000005'),'internal can read current original');
+select public.test_assert((select count(*)=0 from public.file_objects where id='30000000-0000-4000-8000-000000000006'),'unregistered upload remains private');
 select public.test_assert((select count(*)=0 from storage.objects where name like '%file-1.pdf'),'storage history request denied');
 select public.test_assert((select count(*)=1 from storage.objects where name like '%file-5.pdf'),'current private storage request allowed');
 set request.jwt.claim.sub='10000000-0000-4000-8000-000000000003';

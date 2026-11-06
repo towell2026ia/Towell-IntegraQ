@@ -9,6 +9,9 @@ alter table public.controlled_document_versions
   add column replacement_kind text check (replacement_kind in ('initial','version','revision','restoration')),
   add column replaces_version_id uuid references public.controlled_document_versions(id) on delete restrict;
 
+-- Fails atomically if pre-existing normalized identities conflict; never merges them.
+create unique index controlled_documents_normalized_code_idx on public.controlled_documents(upper(trim(code)));
+
 create or replace function public.iq_document_admin_scope(p_process_id text, p_document_id uuid default null)
 returns uuid language plpgsql stable security definer set search_path = '' as $$
 declare actor_org uuid; process_org uuid;
@@ -217,6 +220,33 @@ begin
     values(doc.id,candidate,'VERSION_SUBMITTED',auth.uid(),jsonb_build_object('restoration_requested',true,'previous_version_id',source.id));
 end $$;
 
+create or replace function public.submit_document_version(requested_version_id uuid)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare doc public.controlled_documents%rowtype; candidate public.controlled_document_versions%rowtype; actor public.profiles%rowtype;
+begin
+  select d.* into doc from public.controlled_documents d join public.controlled_document_versions v on v.document_id=d.id
+    where v.id=requested_version_id for update of d;
+  select * into candidate from public.controlled_document_versions where id=requested_version_id and status in ('draft','rejected') for update;
+  if candidate.id is null then raise exception 'La version no esta disponible para envio.'; end if;
+  select * into actor from public.profiles where id=auth.uid() and status='active' and user_type in ('administrator','internal');
+  if actor.id is null or actor.organization_id is distinct from coalesce(doc.organization_id,(select organization_id from public.processes where id=doc.process_id))
+    or not public.has_process_document_role(doc.process_id,'modifier') then
+    raise exception using errcode='42501',message='FORBIDDEN';
+  end if;
+  if exists(select 1 from public.controlled_document_versions where document_id=doc.id and status='pending' and id<>candidate.id) then
+    raise exception using errcode='55000',message='DOCUMENT_PENDING_REVIEW';
+  end if;
+  if doc.deleted_at is not null and candidate.replacement_kind is null then
+    raise exception using errcode='55000',message='REPLACEMENT_REQUIRED';
+  end if;
+  update public.controlled_document_versions set status='pending',submitted_by=auth.uid(),submitted_at=now(),
+    rejection_reason=null,rejected_by=null,rejected_at=null where id=candidate.id;
+  insert into public.document_workflow_events(document_id,version_id,action,actor_id) values(doc.id,candidate.id,'submitted',auth.uid());
+  insert into public.document_audit_log(document_id,document_version_id,event_type,new_state,performed_by,metadata)
+    values(doc.id,candidate.id,'VERSION_SUBMITTED',jsonb_build_object('status','pending'),auth.uid(),jsonb_build_object('process_id',doc.process_id));
+  return candidate.id;
+end $$;
+
 -- Direct REST writes cannot forge explicit numbers or bypass approval. Invoker
 -- context distinguishes callers from the audited SECURITY DEFINER entry points.
 create function public.iq_guard_document_replacement() returns trigger language plpgsql set search_path='' as $$
@@ -248,7 +278,12 @@ declare doc public.controlled_documents%rowtype; actor public.profiles%rowtype; 
 begin
   select d.* into doc from public.controlled_documents d join public.controlled_document_versions v on v.document_id=d.id
     where v.file_id=p_file_id limit 1;
-  if doc.id is null then return true; end if;
+  if doc.id is null then
+    -- Uploaded-but-not-registered candidates must not leak through broad file policies.
+    return exists(select 1 from public.file_objects f join public.processes p on p.id=f.process_id
+      join public.profiles actor on actor.organization_id=p.organization_id
+      where f.id=p_file_id and actor.id=auth.uid() and actor.user_type='administrator' and actor.status='active');
+  end if;
   guarded:=doc.deleted_at is not null or exists(select 1 from public.controlled_document_versions where document_id=doc.id and replacement_kind is not null);
   if not guarded then return true; end if;
   select * into actor from public.profiles where id=auth.uid() and status='active' and user_type in ('administrator','internal');
@@ -277,6 +312,6 @@ revoke all on function public.iq_document_admin_scope(text,uuid), public.inspect
 grant execute on function public.iq_document_admin_scope(text,uuid), public.inspect_controlled_document_code(text,text,text),
   public.register_controlled_document_upload(text,text,text,text,uuid,text,text,uuid,uuid),
   public.iq_can_read_document_file(uuid), public.iq_can_read_document_object(text,text) to authenticated;
-revoke all on function public.restore_document(uuid), public.review_document_version(uuid,text,text) from public,anon;
-grant execute on function public.restore_document(uuid), public.review_document_version(uuid,text,text) to authenticated;
+revoke all on function public.restore_document(uuid), public.review_document_version(uuid,text,text),public.submit_document_version(uuid) from public,anon;
+grant execute on function public.restore_document(uuid), public.review_document_version(uuid,text,text),public.submit_document_version(uuid) to authenticated;
 notify pgrst,'reload schema';
