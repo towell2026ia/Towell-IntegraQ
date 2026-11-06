@@ -6,7 +6,9 @@ export async function POST(request: Request) {
     const context = await auditContext("manage"), form = await request.formData(), file = form.get("file"), mode = form.get("mode");
     if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".xlsx") || file.size < 1 || file.size > 4194304 || !["preview", "commit"].includes(String(mode))) throw new SupplierAuditError("Selecciona el F-CA-58 original, máximo 4 MB.");
     const bytes = new Uint8Array(await file.arrayBuffer()), sha = createHash("sha256").update(bytes).digest("hex");
-    const source = parseAuditProgram(bytes, sha), settings = await auditSettings(context), suppliers = await auditSuppliers(context, settings.settings);
+    let source;
+    try { source = parseAuditProgram(bytes, sha); } catch (error) { throw new SupplierAuditError(error instanceof Error ? error.message : "Programa no válido."); }
+    const settings = await auditSettings(context), suppliers = await auditSuppliers(context, settings.settings);
     const rows = source.map(row => ({ ...row, supplierId: matchAuditSupplier(row.supplierName, suppliers) }));
     if (mode === "preview") return Response.json({ sha256: sha, total: rows.length, matched: rows.filter(r => r.supplierId).length, pending: rows.filter(r => !r.supplierId).length,
       rows: rows.map(({ sourcePayload: _source, ...row }) => { void _source; return row; }) });

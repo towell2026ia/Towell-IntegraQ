@@ -27,4 +27,19 @@ describe("supplier audit API authorization", () => {
  it("server errors do not report false success", async () => { mocks.context.mockResolvedValue({ canManage: true, supabase: { rpc: mocks.rpc } }); mocks.rpc.mockResolvedValue({ data: null, error: { code: "P0001", message: "AUDIT_CONFLICT" } }); expect((await POST(request({ command: "save", id: "event-1", revision: 1, reason: "Synthetic reason", payload: { year: 2026, month: 11, precision: "month" } }))).status).toBe(409); });
  it("rejects missing reason or invalid date before any write", async () => { mocks.context.mockResolvedValue({ canManage: true, supabase: { rpc: mocks.rpc } }); expect((await POST(request({ command: "save", id: "event-1", payload: {} }))).status).toBe(400); expect((await POST(request({ command: "save", payload: { year: 2026, month: 2, precision: "date", plannedDate: "2026-02-30" } }))).status).toBe(400); expect(mocks.rpc).not.toHaveBeenCalled(); });
  it("view-only users cannot modify supplier contacts", async () => { expect((await POST(request({ command: "contacts", id: "supplier-1", reason: "Unauthorized contact edit" }))).status).toBe(403); expect(mocks.rpc).not.toHaveBeenCalled(); });
+ it("a known file belonging to a different supplier is rejected before signing", async () => {
+  const sign = vi.fn(), filters: Array<[string, unknown]> = [];
+  const query = { select: vi.fn().mockReturnThis(), eq: vi.fn((key, value) => { filters.push([key, value]); return query; }), in: vi.fn().mockReturnThis(), is: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ error: null, data: { bucket_id: "integraq-private", object_path: "private-path", original_name: "original.pdf", external_organization_id: "supplier-B" } }) };
+  mocks.context.mockResolvedValue({ organizationId: "org-A", admin: { from: vi.fn().mockReturnValue(query), storage: { from: vi.fn().mockReturnValue({ createSignedUrl: sign }) } } });
+  mocks.event.mockResolvedValue({ id: "event-A", supplier_id: "supplier-A" });
+  const result = await fileGET(new Request("https://integraq.test/file"), { params: Promise.resolve({ eventId: "event-A", fileId: "file-B" }) });
+  expect(result.status).toBe(404); expect(sign).not.toHaveBeenCalled(); expect(filters).toContainEqual(["workspace_id", "org-A"]); expect(filters).toContainEqual(["resource_id", "event-A"]);
+ });
+ it("authorized file download uses a private short-lived URL after individual scope checks", async () => {
+  const sign = vi.fn().mockResolvedValue({ data: { signedUrl: "https://signed.example.test/temporary" }, error: null });
+  const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), is: vi.fn().mockReturnThis(), maybeSingle: vi.fn().mockResolvedValue({ error: null, data: { bucket_id: "integraq-private", object_path: "private-path", original_name: "original.pdf", external_organization_id: "supplier-A" } }) };
+  mocks.context.mockResolvedValue({ organizationId: "org-A", admin: { from: vi.fn().mockReturnValue(query), storage: { from: vi.fn().mockReturnValue({ createSignedUrl: sign }) } } }); mocks.event.mockResolvedValue({ id: "event-A", supplier_id: "supplier-A" });
+  const result = await fileGET(new Request("https://integraq.test/file?download=true"), { params: Promise.resolve({ eventId: "event-A", fileId: "file-A" }) });
+  expect(result.status).toBe(200); expect(sign).toHaveBeenCalledWith("private-path", 60, { download: "original.pdf" }); expect(result.headers.get("Cache-Control")).toBe("private, no-store");
+ });
 });

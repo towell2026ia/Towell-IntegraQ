@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { parseAuditProgram, matchAuditSupplier } from "./import";
-import { monthDays, monthSummary, auditDayMatch, validateSchedule, validateScores, questionnaires, type SupplierAudit, AUDIT_PROGRAM_SHA } from "./model";
+import { monthDays, monthSummary, auditDayMatch, validateSchedule, validateScores, questionnaires, type SupplierAudit, AUDIT_PROGRAM_SHA, EVALUATION_TEMPLATE_SHA } from "./model";
 function fixture() {
  const workbook = XLSX.utils.book_new();
  for (const [index, name] of ["2025 JUL-ENE", "2026 FEB-JUL", "2026 AGO-ENE"].entries()) {
@@ -40,7 +40,9 @@ it.skipIf(!originalDirectory)("verifies the original program and both F-CO-05 ru
  expect(createHash("sha256").update(program).digest("hex")).toBe(AUDIT_PROGRAM_SHA);
  const rows = parseAuditProgram(program, AUDIT_PROGRAM_SHA); expect(rows).toHaveLength(22);
  expect(rows.filter(r => r.state === "performed")).toHaveLength(14); expect(rows.filter(r => r.state === "cancelled")).toHaveLength(3); expect(rows.filter(r => r.state === "pending")).toHaveLength(5);
- const workbook = XLSX.readFile(join(originalDirectory!, "F-CO-05_Evaluación de proveedores_V2 (esp).xlsm"));
+ const evaluationSource = readFileSync(join(originalDirectory!, "F-CO-05_Evaluación de proveedores_V2 (esp).xlsm"));
+ expect(createHash("sha256").update(evaluationSource).digest("hex")).toBe(EVALUATION_TEMPLATE_SHA);
+ const workbook = XLSX.read(evaluationSource, { type: "buffer" });
  const manufacturers = [10, 18, 25, 33, 41, 50, 57, 66, 74].map(r => workbook.Sheets.Manufacturers[`C${r}`].v);
  const distributors = [10, 18, 26, 34, 43, 51, 60, 68].map(r => workbook.Sheets["Distribuidores y Servicio"][`C${r}`].v);
  expect(manufacturers).toEqual([...questionnaires.manufacturers]); expect(distributors).toEqual([...questionnaires.distributors]);

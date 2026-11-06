@@ -6,6 +6,7 @@ import { isAdministrator } from "@/lib/session-data";
 import type { SupplierDashboardFilters, SupplierDashboardMetrics, SupplierDashboardRow, SupplierTimelineEvent } from "@/lib/supplier-dashboard-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 
 type CompanyRow = { id: string; code: string; name: string; active: boolean };
 type ProfileRow = { organization_id: string; category: string | null; active: boolean };
@@ -26,6 +27,7 @@ export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
   const filters = readFilters(query);
   const admin = createAdminClient();
+  const assessmentScope = await createClient();
   const [companiesResult, profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult] = await Promise.all([
     admin.from("organizations").select("id,code,name,active").eq("kind", "supplier").order("name"),
     admin.from("supplier_quality_profiles").select("organization_id,category,active"),
@@ -34,7 +36,7 @@ export async function GET(request: Request) {
     admin.from("supplier_rncp_actions").select("id,report_id,description,status,created_at,validated_at").order("created_at", { ascending: false }),
     admin.from("audits").select("id,code,external_organization_id,external_site_id,scheduled_date,completed_at,status,score").eq("audit_type", "supplier").order("scheduled_date", { ascending: false }),
     admin.from("supplier_quality_evaluations").select("id,supplier_id,site_id,period_end,effectiveness,quality_level,created_at").order("period_end", { ascending: false }),
-    admin.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification").order("assessment_date", { ascending: false }),
+    assessmentScope.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification").order("assessment_date", { ascending: false }),
   ]);
   const failed = [companiesResult, profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult].find((result) => result.error);
   if (failed?.error) {

@@ -40,7 +40,7 @@ export function parseAuditProgram(bytes: Uint8Array, sha: string, requiredSha = 
         events.push({ supplierName: String(raw[1]), criteria: String(raw[4] ?? ""), method: String(raw[5] ?? ""), responsible: String(raw[7] ?? ""), observations,
           year, month, plannedDate, actualDate, state: sourceStatus?.trim().toLowerCase() === "cancelada" ? "cancelled" : actualDate ? "performed" : "pending",
           sourceSheet: name, sourceRow: row, sourceColumn: XLSX.utils.encode_col(col), sourceStatus,
-          sourcePayload: { rowValues: raw, plannedValue: p, actualValue: r, monthHeader: sheet[XLSX.utils.encode_cell({ r: 8, c: col })]?.v ?? null,
+          sourcePayload: { sourceFile: "F-CA-58_Programa de auditoría a Proveedores_V0.xlsx", rowValues: raw, plannedValue: p, actualValue: r, monthHeader: sheet[XLSX.utils.encode_cell({ r: 8, c: col })]?.v ?? null,
             objective: sheet.C5?.v ?? null, scope: sheet.C7?.v ?? null, notes: Object.keys(sheet).filter(k => /^[AJ]\d+$/.test(k) && Number(k.replace(/\D/g, "")) > row + 1 && Number(k.replace(/\D/g, "")) >= Number(observationRow?.slice(1) ?? 1000)).sort().map(k => ({ cell: k, value: sheet[k].v })) } });
       }
       if (!found) throw new Error(`Proveedor sin fecha ni mes verificable en ${name}, fila ${row}.`);

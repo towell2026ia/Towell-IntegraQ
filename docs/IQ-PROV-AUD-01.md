@@ -33,6 +33,10 @@ Añade a `supplier_assessments` únicamente vínculo único al evento, cuestiona
 
 RLS impide lectura entre organizaciones incluso a administradores. La escritura de la agenda se realiza exclusivamente por RPC con asignación efectiva; los resultados gestionados no pueden cambiarse por la API legacy ni mediante peticiones directas. Archivos y objetos privados se firman por servidor tras comprobar sesión, organización, evento y proveedor. Clientes y proveedores externos no reciben acceso a esta función.
 
+El cotejo final identificó que la política heredada de `audit_log` permite consultas de otras organizaciones. La propuesta añade guardas restrictivas únicamente para los eventos nuevos y las evaluaciones vinculadas. Los movimientos legacy de esas evaluaciones se resuelven mediante el evento real, incluso si su disparador dejó `organization_id` vacío. Se bloquea la falsificación directa de esa trazabilidad. Los historiales de otros módulos mantienen sus condiciones existentes. Las rutas generales de actividad ya usan el cliente autenticado y RLS, por lo que no necesitan cambios.
+
+La lectura de evaluaciones del resumen existente de Proveedores pasa por el cliente autenticado y su RLS, para que una consulta privilegiada heredada no exponga los nuevos resultados. Las demás consultas y fórmulas de ese resumen se conservan. La lista legacy de evaluaciones excluye los eventos nuevos para no duplicar su presentación; ambos reutilizan la misma tabla.
+
 La configuración nueva tiene guardas restrictivas contra escritura directa, compatibles con las políticas permisivas anteriores. Los RPC `SECURITY DEFINER` tienen `search_path` vacío, permisos de ejecución acotados y comprobación explícita de `auth.uid()`, perfil y organización. Los helpers no se publican como endpoints generales.
 
 ## Condiciones de activación
@@ -51,6 +55,10 @@ Las pruebas automatizadas cubren calendario, años bisiestos, semanas, meses sin
 
 La prueba adicional con las fuentes locales coteja los 22 eventos, 14/3/5 estados y los nombres y fórmulas de ambos cuestionarios. En CI no se copian los archivos privados; sólo se usan fixtures sintéticos.
 
+La comprobación visual aislada utiliza un perfil vacío de Chrome, sin sesión ni conexión a Supabase, a 1500×1100 y 390×844. Verifica las doce casillas, más de cuatro eventos, años anteriores, separación P/R, rubros, calificación manual, gestión reservada al inspector, campos sin recortes y apertura del mismo ID desde calendario/ficha. Estas capturas no sustituyen la aceptación productiva ni acreditan carga de informes reales.
+
 El job PostgreSQL efímero aplica el esquema RNCP y las evaluaciones legacy junto a la propuesta específica; comprueba aislamiento, asignación, concurrencia, P/R, informe obligatorio, historial e idempotencia. Rechaza cualquier host/base distintos del servicio efímero de CI. No dispone de credenciales de producción.
+
+Resultados disponibles: 694 pruebas de la suite general PASS (el cotejo con archivos privados se omite en CI y se ejecutó localmente con las fuentes originales); 53 comprobaciones SQL de auditorías PASS, más una prueba de dos transacciones concurrentes; 17 comprobaciones visuales aisladas PASS. Typecheck, lint y build aprobados. Las regresiones SQL existentes de RNCP y reemplazo documental también pasaron.
 
 PENDING: autorización/aplicación SQL, configuración de inspector y proveedores, importación histórica productiva, carga de informes reales, aceptación con sesión real y publicación final. Correos y portal externo permanecen desactivados.
