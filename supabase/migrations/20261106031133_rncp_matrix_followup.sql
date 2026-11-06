@@ -563,7 +563,7 @@ begin
   );
   return saved_report;
 end;
-$function$
+$function$;
 revoke all on function public.save_supplier_rncp(uuid,text,jsonb,text) from public,anon;
 grant execute on function public.save_supplier_rncp(uuid,text,jsonb,text) to authenticated;
 create function public.iq_rncp_save_response(p_action_id uuid,p_report_id uuid,p_payload jsonb) returns uuid
