@@ -2,6 +2,8 @@
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
 select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean=false,'administrator does not automatically become inspector');
+select public.test_assert(has_table_privilege('authenticated','public.supplier_audit_events','INSERT') and has_table_privilege('authenticated','public.supplier_audit_events','DELETE'),'fixture reproduces Supabase default table grants');
+select public.test_denied($q$insert into public.supplier_audit_events(organization_id,supplier_id,calendar_year,calendar_month,date_precision,created_by,updated_by) values('00000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001',2026,11,'month',auth.uid(),auth.uid())$q$,'row-level security','direct insert is denied despite default table privileges');
 select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-10"}',null)$q$,'AUDIT_INSPECTOR_REQUIRED','unassigned administrator cannot program');
 select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000007'::uuid],array['20000000-0000-4000-8000-000000000003'::uuid],0,'Explicit synthetic scope verification');
 select public.test_assert((select count(*) from public.organizations where id='20000000-0000-4000-8000-000000000003' and owning_organization_id is null)=1,'legacy scope confirmation does not reassign ownership');
@@ -15,6 +17,8 @@ select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007'
 select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'assigned identity with update permission can manage');
 insert into audit_fixture_ids select 'main',public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"week","weekStart":"2026-11-09","state":"scheduled","criteria":"Synthetic criteria","responsible":"Synthetic inspector"}',null);
 select public.test_assert((select count(*) from public.supplier_audit_events)=1,'week scheduling does not invent an exact date or result');
+with changed as (update public.supplier_audit_events set state='cancelled' returning id) select public.test_assert((select count(*)=0 from changed),'direct update denied by RLS even to assigned inspector with default ACL');
+with removed as (delete from public.supplier_audit_events returning id) select public.test_assert((select count(*)=0 from removed),'direct delete denied by RLS even to assigned inspector with default ACL');
 select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000002","year":2026,"month":11,"precision":"month","state":"scheduled"}',null)$q$,'AUDIT_SUPPLIER_SCOPE_UNVERIFIED','inspector cannot program another organizations supplier');
 select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"week","weekStart":"2026-11-09","state":"confirmed"}',null)$q$,'AUDIT_EXACT_DATE_REQUIRED','confirmed visits require definitive date');
 select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"month","state":"scheduled"}',null) from generate_series(1,5);

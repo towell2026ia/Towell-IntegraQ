@@ -28,3 +28,6 @@ insert into public.organizations(id,code,name,kind) values('20000000-0000-4000-8
 alter table public.audit_log enable row level security;
 create policy fixture_legacy_log_select on public.audit_log for select to authenticated using(true);
 create policy fixture_legacy_log_insert on public.audit_log for insert to authenticated with check(actor_id=auth.uid());
+-- Supabase grants table privileges by default. RLS, not the absence of an ACL,
+-- must prevent raw REST writes even when INSERT/UPDATE/DELETE privileges exist.
+alter default privileges in schema public grant all on tables to authenticated,anon;
