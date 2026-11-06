@@ -328,6 +328,7 @@ begin
   if actor.user_type in ('administrator','internal') then
     if actor.organization_id is distinct from new.organization_id or not public.has_module_permission('suppliers','update') then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
   elsif actor.user_type='supplier' then
+    if tg_op='UPDATE' and old.closed_at is not null then raise exception 'RNCP_RESPONSE_LOCKED'; end if;
     if actor.external_party_id is distinct from new.supplier_id or not public.can_access_supplier_report(new.id) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
     if tg_op='UPDATE' and (to_jsonb(new)-array['first_valid_progress_at','status','complete_submitted_at','validation_outcome','updated_at','updated_by'])
       is distinct from (to_jsonb(old)-array['first_valid_progress_at','status','complete_submitted_at','validation_outcome','updated_at','updated_by']) then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
@@ -345,6 +346,14 @@ begin
   if new.first_valid_progress_at is not null and (tg_op='INSERT' or new.first_valid_progress_at is distinct from old.first_valid_progress_at) and not exists(select 1 from public.supplier_rncp_actions a
     join public.profiles p on p.id=a.created_by where a.report_id=new.id and length(trim(a.description))>=10
     and p.user_type='supplier' and p.external_party_id=new.supplier_id) then raise exception 'RNCP_VALID_PROGRESS_REQUIRED'; end if;
+  if new.first_valid_progress_at is not null and (tg_op='INSERT' or new.first_valid_progress_at is distinct from old.first_valid_progress_at)
+    and new.first_valid_progress_at is distinct from (select min(a.created_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
+      where a.report_id=new.id and a.created_at>=new.notified_at and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=new.supplier_id) then raise exception 'RNCP_PROGRESS_TIMESTAMP_INVALID'; end if;
+  if new.complete_submitted_at is not null and (tg_op='INSERT' or new.complete_submitted_at is distinct from old.complete_submitted_at)
+    and not exists(select 1 from public.supplier_rncp_actions a where a.report_id=new.id and a.status in ('submitted','accepted')
+      and a.submitted_at=new.complete_submitted_at and cardinality(public.iq_rncp_missing_requirements(new.id,a.id))=0) then raise exception 'RNCP_REQUIREMENTS_INCOMPLETE'; end if;
+  if new.validation_outcome in ('accepted','rejected') and (tg_op='INSERT' or new.validation_outcome is distinct from old.validation_outcome)
+    and not public.iq_rncp_is_inspector(new.organization_id) then raise exception 'RNCP_INSPECTOR_VALIDATION_REQUIRED'; end if;
   return new;
 end $$;
 create trigger iq_rncp_report_guard before insert or update on public.supplier_rncp_reports
@@ -358,6 +367,9 @@ begin
   if r.source_kind is null then return new; end if;
   select * into actor from public.profiles where id=auth.uid() and status='active';
   if actor.id is null or r.source_kind='historical' or r.deleted_at is not null or r.closed_at is not null then raise exception using errcode='42501',message='RNCP_RESPONSE_LOCKED'; end if;
+  if r.notified_at is null then raise exception 'RNCP_NOTIFICATION_REQUIRED'; end if;
+  new.created_at:=case when tg_op='INSERT' then now() else old.created_at end;
+  new.updated_at:=now();
   if tg_op='UPDATE' and (new.report_id,new.created_by) is distinct from (old.report_id,old.created_by) then raise exception 'RNCP_RESPONSE_IDENTITY_IMMUTABLE'; end if;
   if new.status in ('accepted','rejected') then
     if not public.iq_rncp_is_inspector(r.organization_id) then raise exception using errcode='42501',message='RNCP_INSPECTOR_VALIDATION_REQUIRED'; end if;
@@ -388,7 +400,9 @@ begin
   if exists(select 1 from public.supplier_rncp_reports where id=new.report_id and source_kind='native' and notified_at is not null)
     and exists(select 1 from public.profiles p where p.id=new.created_by and p.user_type='supplier')
     and length(trim(new.description))>=10 then
-    update public.supplier_rncp_reports set first_valid_progress_at=coalesce(first_valid_progress_at,now()),
+    update public.supplier_rncp_reports set first_valid_progress_at=coalesce(first_valid_progress_at,(select min(a.created_at) from public.supplier_rncp_actions a join public.profiles p on p.id=a.created_by
+      where a.report_id=new.report_id and a.created_at>=(select notified_at from public.supplier_rncp_reports where id=new.report_id)
+      and length(trim(a.description))>=10 and p.user_type='supplier' and p.external_party_id=(select supplier_id from public.supplier_rncp_reports where id=new.report_id))),
       status=case when status='closed' then status else 'in_progress' end,
       complete_submitted_at=case when new.status='submitted' then new.submitted_at else complete_submitted_at end,
       validation_outcome=case when new.status='submitted' then 'pending' else validation_outcome end
@@ -573,7 +587,8 @@ begin
   select * into actor from public.profiles where id=auth.uid() and status='active' and user_type='supplier';
   select * into r from public.supplier_rncp_reports where id=p_report_id and source_kind='native' and deleted_at is null for update;
   if actor.id is null or r.id is null or actor.external_party_id is distinct from r.supplier_id
-    or not public.can_access_supplier_report(r.id) or r.closed_at is not null then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    or not public.iq_rncp_read_scope(r.id) or r.closed_at is not null then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+  if r.notified_at is null then raise exception 'RNCP_NOTIFICATION_REQUIRED'; end if;
   if length(trim(coalesce(p_payload->>'description','')))<10 or nullif(trim(p_payload->>'responsibleName'),'') is null
     or nullif(p_payload->>'dueDate','') is null then raise exception 'RNCP_VALID_PROGRESS_REQUIRED'; end if;
   if p_action_id is null then
@@ -737,4 +752,42 @@ begin
 end $$;
 revoke all on function public.iq_rncp_register_original(jsonb,uuid),public.iq_rncp_reconcile_original(uuid,uuid),public.iq_rncp_requirements_summary(uuid[]) from public,anon;
 grant execute on function public.iq_rncp_register_original(jsonb,uuid),public.iq_rncp_reconcile_original(uuid,uuid),public.iq_rncp_requirements_summary(uuid[]) to authenticated;
+-- Preserve managed RNCP and linked evidence: operational retirement is logical.
+create policy rncp_report_no_physical_delete on public.supplier_rncp_reports as restrictive for delete to authenticated
+ using(source_kind is null);
+create policy rncp_action_no_physical_delete on public.supplier_rncp_actions as restrictive for delete to authenticated
+ using(not exists(select 1 from public.supplier_rncp_reports r where r.id=report_id and r.source_kind is not null));
+create policy rncp_evidence_no_physical_delete on public.supplier_rncp_action_evidence as restrictive for delete to authenticated
+ using(not exists(select 1 from public.supplier_rncp_actions a join public.supplier_rncp_reports r on r.id=a.report_id where a.id=action_id and r.source_kind is not null));
+create policy rncp_response_file_no_physical_delete on public.file_objects as restrictive for delete to authenticated
+ using(resource_type<>'supplier_rncp_action_evidence');
+
+create function public.iq_rncp_response_file_writable(p_resource uuid,p_external uuid,p_uploader uuid,p_bucket text,p_path text) returns boolean
+language sql stable security definer set search_path='' as $$
+ select exists(select 1 from public.supplier_rncp_actions a join public.supplier_rncp_reports r on r.id=a.report_id
+   join public.profiles p on p.id=auth.uid() where a.id=p_resource and a.created_by=p.id and p.status='active' and p.user_type='supplier'
+   and p.external_party_id=r.supplier_id and p_external=r.supplier_id and p_uploader=p.id
+   and r.deleted_at is null and r.closed_at is null and a.status in ('pending','in_progress','rejected')
+   and p_bucket='integraq-private' and split_part(p_path,'/',1)=p.id::text and split_part(p_path,'/',2)='rncp'
+   and public.iq_rncp_read_scope(r.id));
+$$;
+revoke all on function public.iq_rncp_response_file_writable(uuid,uuid,uuid,text,text) from public,anon;
+grant execute on function public.iq_rncp_response_file_writable(uuid,uuid,uuid,text,text) to authenticated;
+create policy rncp_response_file_insert_guard on public.file_objects as restrictive for insert to authenticated
+ with check(resource_type<>'supplier_rncp_action_evidence' or public.iq_rncp_response_file_writable(resource_id,external_organization_id,uploaded_by,bucket_id,object_path));
+-- File replacement creates a new private file/link; an old reference is never repointed.
+create policy rncp_response_file_update_guard on public.file_objects as restrictive for update to authenticated
+ using(resource_type<>'supplier_rncp_action_evidence') with check(resource_type<>'supplier_rncp_action_evidence');
+create function public.iq_rncp_response_link_writable(p_action uuid,p_file uuid,p_actor uuid) returns boolean
+language sql stable security definer set search_path='' as $$
+ select p_actor=auth.uid() and exists(select 1 from public.file_objects f where f.id=p_file and f.resource_type='supplier_rncp_action_evidence'
+   and f.resource_id=p_action and f.deleted_at is null and f.size_bytes>0
+   and public.iq_rncp_response_file_writable(f.resource_id,f.external_organization_id,f.uploaded_by,f.bucket_id,f.object_path));
+$$;
+revoke all on function public.iq_rncp_response_link_writable(uuid,uuid,uuid) from public,anon;
+grant execute on function public.iq_rncp_response_link_writable(uuid,uuid,uuid) to authenticated;
+create policy rncp_response_link_insert_guard on public.supplier_rncp_action_evidence as restrictive for insert to authenticated
+ with check(public.iq_rncp_response_link_writable(action_id,file_id,created_by));
+create policy rncp_response_link_update_guard on public.supplier_rncp_action_evidence as restrictive for update to authenticated
+ using(false) with check(false);
 notify pgrst,'reload schema';
