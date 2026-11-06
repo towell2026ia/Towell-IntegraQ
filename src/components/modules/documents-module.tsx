@@ -37,7 +37,6 @@ import {
   getDocumentPermissions,
   getWorkingVersion,
   isOperationalDocument,
-  restoreControlledDocument,
   documentAdvancedActionsEnabled,
   type ControlledDocument,
 } from "@/lib/document-control-data";
@@ -56,7 +55,8 @@ import {
 } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
-import { restoreStoredDocument } from "@/lib/document-storage";
+import { documentVersionLabel } from "@/lib/document-replacement";
+import { loadStoredControlledDocument, restoreStoredDocument } from "@/lib/document-storage";
 import { listAttachments } from "@/lib/attachment-storage";
 import {
   loadProcessOrganizationSources,
@@ -155,7 +155,8 @@ export function DocumentsModule({
     documentTypeCatalog[0];
   const selectedPermissions = getDocumentPermissions(session, selected?.id ?? "");
   const selectedDocumentProcessIds = selected ? getAuthorizedDocumentProcessIds(selected.id, canReadProcess) : [];
-  const typeDocuments = operationalDocuments.filter(
+  const reviewableDocuments = controlledDocuments.filter(document => canReadProcess(document.processId) && (isOperationalDocument(document) || (getDocumentPermissions(session, document.processId).restore && document.versions.some(version => version.status === "pending"))));
+  const typeDocuments = reviewableDocuments.filter(
     (document) =>
       selectedDocumentProcessIds.includes(document.processId) &&
       document.documentTypeId === selectedType.id,
@@ -308,7 +309,7 @@ export function DocumentsModule({
               onOpenForm={openForm}
               onChangeDocument={changeDocument}
               onAddDocument={(document) =>
-                onControlledDocumentsChange([...controlledDocuments, document])
+                onControlledDocumentsChange([...controlledDocuments.filter(item => item.id !== document.id), document])
               }
             />
           ) : null}
@@ -509,10 +510,10 @@ function MasterDocumentList({
         <select aria-label="Responsable" value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="">Responsable</option>{owners.map((owner) => <option key={owner}>{owner}</option>)}</select>
       </div>
       <div className="document-control-table-wrap master-list-table-wrap"><table className="document-control-table master-list-table"><thead><tr><th>Código</th><th>Documento</th><th>Tipo</th><th>Versión</th><th>Fecha</th><th>Estado</th><th>Responsable</th><th>Historial</th></tr></thead><tbody>
-        {filteredDocuments.map((document) => { const version = getWorkingVersion(document); const type = documentTypeCatalog.find((item) => item.id === document.documentTypeId); const status = document.lifecycle?.isDeleted ? "Eliminado" : document.lifecycle?.status === "obsolete" ? "Obsoleto" : version?.status === "current" ? "Vigente" : "En revisión"; return <tr key={document.id}><td><span className="document-code-chip">{document.code}</span></td><td><strong>{document.name}</strong></td><td>{type?.name ?? document.documentTypeId}</td><td>Rev. {version?.revision ?? "—"}</td><td>{version ? formatDate(version.modifiedAt) : "—"}</td><td><span className={`document-status document-status-${document.lifecycle?.isDeleted ? "rejected" : version?.status ?? "draft"}`}>{status}</span></td><td>{document.owner}</td><td>{getDocumentPermissions(session, document.processId).history ? <button className="document-icon-action" type="button" onClick={() => setHistoryId(document.id)} title="Historial" aria-label={`Historial de ${document.name}`}><History size={15} /></button> : "—"}</td></tr>; })}
+        {filteredDocuments.map((document) => { const version = getWorkingVersion(document); const type = documentTypeCatalog.find((item) => item.id === document.documentTypeId); const status = document.lifecycle?.isDeleted ? "Eliminado" : document.lifecycle?.status === "obsolete" ? "Obsoleto" : version?.status === "current" ? "Vigente" : "En revisión"; return <tr key={document.id}><td><span className="document-code-chip">{document.code}</span></td><td><strong>{document.name}</strong></td><td>{type?.name ?? document.documentTypeId}</td><td>{documentVersionLabel(version)}</td><td>{version ? formatDate(version.modifiedAt) : "—"}</td><td><span className={`document-status document-status-${document.lifecycle?.isDeleted ? "rejected" : version?.status ?? "draft"}`}>{status}</span></td><td>{document.owner}</td><td>{getDocumentPermissions(session, document.processId).history ? <button className="document-icon-action" type="button" onClick={() => setHistoryId(document.id)} title="Historial" aria-label={`Historial de ${document.name}`}><History size={15} /></button> : "—"}</td></tr>; })}
         {!filteredDocuments.length ? <tr className="document-empty-row"><td colSpan={8}><FileText size={22} /><strong>Sin documentos para estos filtros</strong><span>Ajusta el estado, proceso o búsqueda.</span></td></tr> : null}
       </tbody></table></div>
-      {history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(restoreControlledDocument(history, session.name, new Date().toISOString())); setHistoryId(null); }} /> : null}
+      {history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(await loadStoredControlledDocument(history.id)); setHistoryId(null); }} /> : null}
     </section>
   );
 }

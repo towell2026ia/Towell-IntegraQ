@@ -21,6 +21,11 @@ export type ControlledDocumentStatus =
 export interface ControlledDocumentVersion {
   id: string;
   revision: number;
+  versionNumber?: number;
+  revisionSequence?: number;
+  legacyRevision?: number;
+  replacementKind?: "initial" | "version" | "revision" | "restoration";
+  replacesVersionId?: string;
   status: ControlledDocumentStatus;
   fileName: string;
   uploadedBy: string;

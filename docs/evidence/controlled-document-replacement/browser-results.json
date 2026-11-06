@@ -1,0 +1,29 @@
+{
+  "checks": [
+    {
+      "name": "Existing identity displayed; duplicate cannot create another record",
+      "pass": true
+    },
+    {
+      "name": "No manually entered numbers",
+      "pass": true
+    },
+    {
+      "name": "Replacement uses original identity",
+      "pass": true
+    },
+    {
+      "name": "Revision submitted against original ID and base",
+      "pass": true
+    },
+    {
+      "name": "Compact replacement controls remain inside mobile viewport",
+      "pass": true
+    },
+    {
+      "name": "Only one replacement section",
+      "pass": true
+    }
+  ],
+  "errors": []
+}

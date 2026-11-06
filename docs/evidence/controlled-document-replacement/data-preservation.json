@@ -1,0 +1,83 @@
+{
+  "project": "yptrqowmviixlkrxjrqr",
+  "migration": [
+    {
+      "version": "20261106020459",
+      "name": "controlled_document_replacement"
+    }
+  ],
+  "before": {
+    "files": {
+      "hash": "341ccde293a1a0b74423d68d7d31ba38",
+      "count": 634
+    },
+    "target": {
+      "id": "3d6b9c1c-bfd6-5259-91c3-1fb223010001",
+      "code": "AV-SGC-06",
+      "title": "Política Ambiental",
+      "deleted": true,
+      "versions": 1,
+      "process_id": "P-35",
+      "files_located": 1,
+      "organization_id": "00000000-0000-0000-0000-000000000001"
+    },
+    "profiles": {
+      "hash": "2c52af5f85ed33654e5f3202a53e05a3",
+      "count": 45
+    },
+    "versions": {
+      "hash": "c58aa6058657649cfb541bb37e32a4c2",
+      "count": 544
+    },
+    "documents": {
+      "hash": "f2e8dd93b1baffc8ea5881a49e85ec78",
+      "count": 544
+    },
+    "lifecycle": {
+      "hash": "3f99894ccb4cb8e2fc8b01babcfa65a3",
+      "count": 530
+    },
+    "organizations": {
+      "hash": "fe693218a8dd5c22b709afa91bf498f3",
+      "count": 95
+    },
+    "normalized_conflicts": 0
+  },
+  "after": {
+    "files": {
+      "hash": "341ccde293a1a0b74423d68d7d31ba38",
+      "count": 634
+    },
+    "target": {
+      "id": "3d6b9c1c-bfd6-5259-91c3-1fb223010001",
+      "code": "AV-SGC-06",
+      "title": "Política Ambiental",
+      "deleted": true,
+      "versions": 1,
+      "process_id": "P-35",
+      "files_located": 1,
+      "organization_id": "00000000-0000-0000-0000-000000000001"
+    },
+    "profiles": {
+      "hash": "2c52af5f85ed33654e5f3202a53e05a3",
+      "count": 45
+    },
+    "versions": {
+      "hash": "c58aa6058657649cfb541bb37e32a4c2",
+      "count": 544
+    },
+    "documents": {
+      "hash": "f2e8dd93b1baffc8ea5881a49e85ec78",
+      "count": 544
+    },
+    "lifecycle": {
+      "hash": "3f99894ccb4cb8e2fc8b01babcfa65a3",
+      "count": 530
+    },
+    "organizations": {
+      "hash": "fe693218a8dd5c22b709afa91bf498f3",
+      "count": 95
+    },
+    "normalized_conflicts": 0
+  }
+}
