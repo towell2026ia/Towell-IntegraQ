@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 assert.equal(process.env.CI, "true");
 assert.equal(process.env.PGHOST, "127.0.0.1");
@@ -17,7 +17,13 @@ for (const suffix of ["_rncp_matrix_followup.sql", "_rncp_requirements_batch_sco
  const files = readdirSync("supabase/migrations").filter(n => n.endsWith(suffix)); assert.equal(files.length, 1); sql("-f", join("supabase/migrations", files[0]));
 }
 sql("-f", "supabase/tests/supplier-audit-legacy-fixture.sql");
-sql("-f", "supabase/migrations/202610080006_supplier_assessment_results.sql");
+// The shared trigger fixture already declares the assessment stub and its file trigger.
+// Keep the versioned migration untouched; load all other original definitions into CI.
+const legacySource = readFileSync("supabase/migrations/202610080006_supplier_assessment_results.sql", "utf8");
+const tableDeclaration = /create table public\.supplier_assessments \([\s\S]*?\n\);/i;
+const sharedFileTrigger = /create trigger file_objects_guard_supplier_assessment_scope\s+before insert or update on public\.file_objects\s+for each row execute function public\.guard_supplier_assessment_file_scope\(\);/i;
+assert.match(legacySource, tableDeclaration); assert.match(legacySource, sharedFileTrigger);
+sql("-c", legacySource.replace(tableDeclaration, "").replace(sharedFileTrigger, ""));
 const proposals = readdirSync("supabase/migrations").filter(n => n.endsWith("_supplier_audit_calendar.sql")); assert.equal(proposals.length, 1);
 sql("-f", join("supabase/migrations", proposals[0]));
 sql("-f", "supabase/tests/supplier-audit-test.sql");

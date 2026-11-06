@@ -7,10 +7,19 @@ create function public.current_organization_ids() returns setof uuid language sq
 create function public.has_external_organization_scope(text,uuid) returns boolean language sql stable security definer set search_path='' as $$ select exists(select 1 from public.profiles where id=auth.uid() and status='active' and user_type::text=$1 and external_party_id=$2) $$;
 create function public.has_external_site_scope(uuid) returns boolean language sql stable security definer set search_path='' as $$ select exists(select 1 from public.profiles where id=auth.uid() and (external_site_id is null or external_site_id=$1)) $$;
 create function public.has_permission(text,text,text,text,text,boolean,uuid) returns boolean language sql stable as $$ select true $$;
-create or replace function public.set_updated_at() returns trigger language plpgsql as $$ begin new.updated_at=now(); return new; end $$;
-create or replace function public.validate_external_company_site() returns trigger language plpgsql set search_path='' as $$ begin
- if new.site_id is not null and not exists(select 1 from public.external_company_sites where id=new.site_id and company_id=new.supplier_id) then raise exception 'SITE_SCOPE_INVALID'; end if; return new;
-end $$;
+-- Expand the shared RNCP fixture's three-column assessment stub to the existing schema.
+alter table public.supplier_assessments
+ alter column id set default gen_random_uuid(),alter column supplier_id set not null,
+ add foreign key(supplier_id) references public.organizations(id) on delete restrict,
+ add foreign key(site_id) references public.external_company_sites(id) on delete restrict,
+ add column assessment_type text not null check(assessment_type in ('supplier_audit','semiannual_evaluation','annual_evaluation','quality_evaluation','other')),
+ add column assessment_date date not null,add column evaluator_name text,
+ add column score numeric check(score is null or score between 0 and 100),add column classification text,add column observations text,
+ add column source_file_id uuid unique references public.file_objects(id) on delete restrict,
+ add column portal_visible boolean not null default false,
+ add column created_by uuid not null references public.profiles(id) on delete restrict default auth.uid(),
+ add column updated_by uuid references public.profiles(id) on delete set null default auth.uid(),
+ add column created_at timestamptz not null default now(),add column updated_at timestamptz not null default now();
 create table public.user_module_action_permissions(user_id uuid,module_id text,action text);
 insert into public.user_module_action_permissions values('10000000-0000-4000-8000-000000000007','suppliers','update');
 insert into public.organizations(id,code,name,kind) values('20000000-0000-4000-8000-000000000003','LEGACY-SYNTHETIC','Synthetic unowned supplier','supplier');
