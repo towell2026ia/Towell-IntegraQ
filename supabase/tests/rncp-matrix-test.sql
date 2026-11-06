@@ -116,3 +116,7 @@ reset role;
 select public.test_assert((select count(*)=2 and count(*) filter(where is_current)=1 and max(version)=2 from public.file_objects where resource_type='supplier_rncp_original' and resource_id='30000000-0000-4000-8000-000000000004'),'PDF replacement preserves previous original and exactly one current reference');
 select public.test_assert((select count(*)=1 from public.supplier_rncp_reports where folio='RNCP0999'),'PDF association and new original version preserve RNCP identity');
 select public.test_assert((select count(*)=0 from public.notifications) and (select count(*)=0 from public.integration_outbox),'managed RNCP never enter the legacy global notification or integration dispatcher');
+set role authenticated;
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+select public.test_assert(jsonb_typeof(public.iq_rncp_requirements_summary(array['30000000-0000-4000-8000-000000000001'::uuid]))='object','authorized dashboard batch requirements query executes successfully');
+reset role;

@@ -51,15 +51,15 @@ La función programada de Netlify permanece inactiva sin `RNCP_FOLLOWUP_ENABLED=
 
 ## Migración específica propuesta
 
-`supabase/migrations/20261106031133_rncp_matrix_followup.sql` reutiliza reportes, acciones, archivos, auditoría y workspace existentes. Añade procedencia histórica, hitos de seguimiento y requisitos; no reinterpreta ni actualiza filas anteriores. Añade una única cola RNCP porque las notificaciones existentes requieren usuario registrado y no modelan destinatario desconocido, reintentos ni arrendamientos.
+`supabase/migrations/20261106163011_rncp_matrix_followup.sql` reutiliza reportes, acciones, archivos, auditoría y workspace existentes. Añade procedencia histórica, hitos de seguimiento y requisitos; no reinterpreta ni actualiza filas anteriores. Añade una única cola RNCP porque las notificaciones existentes requieren usuario registrado y no modelan destinatario desconocido, reintentos ni arrendamientos.
 
 Las políticas RESTRICTIVE combinan alcance organizacional/proveedor con los permisos anteriores. Protegen reportes, acciones, vínculos, originales y evidencias RNCP sin ampliar consulta de otros documentos. Las áreas de configuración RNCP sólo se modifican por la RPC administrativa con control de revisión. No se aplican las migraciones generales pendientes.
 
 El disparador heredado `notify_supplier_response` publica destinatarios sin organización y eventos en la cola general de integraciones. La propuesta conserva su cuerpo para registros legacy y excluye los RNCP gestionados nuevos de ese camino. Estos utilizan exclusivamente la cola específica desactivada. El fixture de compatibilidad reproduce los 15 disparadores existentes, sus funciones y comprobaciones documentales; se verifica que los nuevos RNCP no creen avisos generales ni eventos de envío heredados.
 
-Aplicación productiva: PENDING de autorización específica. Antes de aplicarla deben repetirse las comprobaciones de versión ausente, columnas/dependencias, duplicados de huellas y conteos de preservación. Usar exclusivamente el mecanismo cloud que registre esta migración; nunca `db push`, sincronización automática ni todas las pendientes.
+Aplicación productiva autorizada y realizada exclusivamente por Supabase MCP. La propuesta aprobada `20261106031133` del commit `5323a1f` fue registrada por Supabase como `20261106163011`, nombre `rncp_matrix_followup`, exactamente una vez (44 → 45 entradas). El archivo se renombró para coincidir con ese historial, conservando sus bytes y SQL. No se ejecutó `db push`, sincronización automática ni otra migración.
 
-Última lectura previa: 0 RNCP, 0 acciones RNCP, 0 archivos de evidencia RNCP; 61 proveedores y 45 perfiles. Esto no equivale a una importación realizada. La carga real de 226 registros y la aceptación con sesiones reales siguen pendientes hasta activar el esquema y confirmar la operación administrativa.
+La comparación antes/después de aplicar la migración confirmó 0 RNCP, 0 acciones, 61 proveedores, 45 perfiles, 544 documentos, 544 versiones y 634 archivos/objetos de Storage. Las huellas de filas de proveedores, perfiles, documentos, versiones y archivos permanecieron idénticas. La cola nueva tiene RLS y cero avisos; la cola general conserva cero eventos. La carga real de 226 registros sigue PENDING: el navegador no pudo iniciar el asistente de Windows (1223), por lo que falta completar la importación con una sesión administrativa real.
 
 ## Verificación y límites de aceptación
 
@@ -69,4 +69,4 @@ Aplicación productiva: PENDING de autorización específica. Antes de aplicarla
 - Capturas aisladas de escritorio y móvil con la fuente oficial: cinco gráficas, posiciones, proporciones, 226 folios únicos, filtros y controles sin recortes. No son capturas de una sesión productiva ni demuestran importación en Supabase.
 - Se verifica además la lectura PDF desde el build empaquetado; la prueba detectó y corrigió la dependencia explícita del worker de PDF.js.
 
-PENDING: autorización/aplicación de la migración específica, importación productiva, conciliación administrativa de los 30 registros, asociación formal del PDF RNCP0228, sesiones reales de proveedor/inspectormp, aprobación de destinatarios y recepción efectiva. No declarar completo el flujo externo ni activar envíos por la matriz histórica. La fase 2 de emisión digital y correo no se incluye en esta liberación.
+PENDING: importación productiva, conciliación administrativa de los 30 registros, asociación formal del PDF RNCP0228, sesiones reales de proveedor/inspectormp, aprobación de destinatarios y recepción efectiva. No declarar completo el flujo externo ni activar envíos por la matriz histórica. La fase 2 de emisión digital y correo no se incluye en esta liberación.
