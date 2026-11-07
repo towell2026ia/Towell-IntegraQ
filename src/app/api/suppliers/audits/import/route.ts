@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { auditContext, auditFailure, auditRpcError, auditSettings, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
+import { auditContext, auditFailure, auditRpcError, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
 import { parseAuditProgram, matchAuditSupplier } from "@/lib/supplier-audits/import";
 export async function POST(request: Request) {
   try {
@@ -8,7 +8,7 @@ export async function POST(request: Request) {
     const bytes = new Uint8Array(await file.arrayBuffer()), sha = createHash("sha256").update(bytes).digest("hex");
     let source;
     try { source = parseAuditProgram(bytes, sha); } catch (error) { throw new SupplierAuditError(error instanceof Error ? error.message : "Programa no válido."); }
-    const settings = await auditSettings(context), suppliers = await auditSuppliers(context, settings.settings);
+    const suppliers = await auditSuppliers(context);
     const rows = source.map(row => ({ ...row, supplierId: matchAuditSupplier(row.supplierName, suppliers) }));
     if (mode === "preview") return Response.json({ sha256: sha, total: rows.length, matched: rows.filter(r => r.supplierId).length, pending: rows.filter(r => !r.supplierId).length,
       rows: rows.map(({ sourcePayload: _source, ...row }) => { void _source; return row; }) });

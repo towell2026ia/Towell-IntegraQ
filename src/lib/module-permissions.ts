@@ -45,7 +45,7 @@ export const editableModulePermissionGroups: ModulePermissionGroup[] = [
     capabilities: [
       { action: "view", label: "Acceder y consultar", description: "Ve el módulo y la información de proveedores." },
       { action: "create", label: "Crear", description: "Registra proveedores y evaluaciones." },
-      { action: "update", label: "Editar", description: "Actualiza información de proveedores." },
+      { action: "update", label: "Editar", description: "Actualiza información de proveedores y gestiona su calendario de auditorías." },
       { action: "manage", label: "Administrar", description: "Gestiona integralmente el módulo de proveedores." },
     ],
   },

@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isDemoSession } from "@/lib/session-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import type { AuditSettings, AuditSupplier, AuditWorkspace, SupplierAudit, SupplierAuditFile, AuditResult } from "./model";
+import type { AuditSupplier, AuditWorkspace, SupplierAudit, SupplierAuditFile, AuditResult } from "./model";
 
 export class SupplierAuditError extends Error { constructor(message: string, public status = 400) { super(message); } }
 export function auditRpcError(error: { code?: string; message?: string } | null) {
@@ -12,8 +12,8 @@ export function auditRpcError(error: { code?: string; message?: string } | null)
   if (["PGRST202", "42P01", "42703", "PGRST204"].includes(error.code ?? "")) throw new SupplierAuditError("Calendario pendiente de activación: falta aplicar la migración específica autorizada. No se modificó ningún registro.", 503);
   const messages: Record<string, string> = {
     AUDIT_CONFLICT: "El expediente cambió. Actualiza los datos antes de guardar; tu captura permanece abierta.",
-    AUDIT_INSPECTOR_REQUIRED: "Sólo el inspector asignado y con permiso vigente puede gestionar la agenda.",
-    AUDIT_SUPPLIER_SCOPE_UNVERIFIED: "El alcance del proveedor no está verificado. Un administrador debe confirmarlo en Configuración de auditorías.",
+    AUDIT_INSPECTOR_REQUIRED: "La programación requiere el permiso Proveedores → Editar vigente en Usuarios y acceso.",
+    AUDIT_SUPPLIER_SCOPE_UNVERIFIED: "El proveedor no está disponible dentro del catálogo autorizado de tu organización.",
     AUDIT_REASON_REQUIRED: "Indica un motivo de al menos cinco caracteres.",
     AUDIT_PDF_REQUIRED: "Selecciona el informe PDF vigente del mismo expediente.",
     AUDIT_SCORES_INVALID: "Captura todos los rubros F-CO-05 de 0 a 100.",
@@ -33,7 +33,7 @@ export async function auditContext(mode: "view" | "manage" | "admin" = "view") {
   const result = await supabase.rpc("iq_supplier_audit_context");
   auditRpcError(result.error);
   const permissions = result.data as { organizationId: string; canManage: boolean; administrator: boolean } | null;
-  if (!permissions?.organizationId || mode === "manage" && !permissions.canManage || mode === "admin" && !permissions.administrator) throw new SupplierAuditError(mode === "manage" ? "Sólo el inspector asignado puede gestionar auditorías." : "Operación no autorizada.", 403);
+  if (!permissions?.organizationId || mode === "manage" && !permissions.canManage || mode === "admin" && !permissions.administrator) throw new SupplierAuditError(mode === "manage" ? "La programación requiere Proveedores → Editar en Usuarios y acceso." : "Operación no autorizada.", 403);
   return { ...permissions!, session, supabase, admin: createAdminClient() };
 }
 export type AuditContext = Awaited<ReturnType<typeof auditContext>>;
@@ -50,17 +50,16 @@ export async function auditPages<T extends { id: string }>(page: (from: number, 
   } while (records.length < expected);
   return records;
 }
-export async function auditSettings(context: AuditContext) {
-  const result = await context.admin.from("workspace_data").select("payload,revision").eq("workspace_id", context.organizationId).eq("workspace_mode", "production").eq("area", "supplierAuditSettings").is("deleted_at", null).maybeSingle();
-  auditRpcError(result.error);
-  return { settings: { inspectorIds: [], legacySupplierIds: [], ...result.data?.payload } as AuditSettings, settingsRevision: result.data?.revision ?? 0 };
-}
-export async function auditSuppliers(context: AuditContext, settings: AuditSettings, includeCandidates = false) {
-  const owner = await context.admin.from("organizations").select("id").eq("kind", "internal").eq("active", true);
+export async function auditSuppliers(context: AuditContext) {
+  // Match the database helper: an unowned legacy catalog is readable only while
+  // there is exactly one internal organization in the entire catalog, even inactive.
+  // No ownership is inferred or written, and a second organization fails closed.
+  const owner = await context.admin.from("organizations").select("id", { count: "exact" }).eq("kind", "internal").limit(2);
   auditRpcError(owner.error);
-  const legacyCandidates = includeCandidates && context.administrator && owner.data?.length === 1 && owner.data[0].id === context.organizationId;
+  if (owner.count === null) throw new SupplierAuditError("No se pudo verificar el alcance del catálogo de proveedores. Reintenta.", 503);
+  const soleInternalOrganization = owner.count === 1 && owner.data?.[0]?.id === context.organizationId;
   const suppliers = await auditPages<AuditSupplier>((from, to) => context.admin.from("organizations").select("id,code,name,active,owning_organization_id,contact_name,contact_email,metadata,updated_at", { count: "exact" }).eq("kind", "supplier").order("id").range(from, to));
-  return suppliers.filter(s => s.owning_organization_id === context.organizationId || s.owning_organization_id === null && (legacyCandidates || settings.legacySupplierIds.includes(s.id)))
+  return suppliers.filter(s => s.owning_organization_id === context.organizationId || s.owning_organization_id === null && soleInternalOrganization)
     .map(s => ({ ...s, metadata: { supplierQualityContacts: s.metadata?.supplierQualityContacts ?? null } }));
 }
 export async function auditEvent(context: AuditContext, id: string) {
@@ -69,7 +68,6 @@ export async function auditEvent(context: AuditContext, id: string) {
   return result.data as SupplierAudit;
 }
 export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWorkspace> {
-  const settings = await auditSettings(context);
   const events = await auditPages<SupplierAudit>((from, to) => context.admin.from("supplier_audit_events").select("*", { count: "exact" }).eq("organization_id", context.organizationId).order("id").range(from, to));
   const ids = events.map(e => e.id), results: AuditResult[] = [], files: SupplierAuditFile[] = [];
   for (let start = 0; start < ids.length; start += 100) {
@@ -78,9 +76,7 @@ export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWo
     files.push(...await auditPages<SupplierAuditFile>((from, to) => context.admin.from("file_objects").select("id,resource_id,resource_type,original_name,version,is_current,created_at,size_bytes", { count: "exact" }).in("resource_type", ["supplier_audit_report", "supplier_audit_action_plan"]).eq("workspace_id", context.organizationId).in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
   const history = await auditPages<AuditWorkspace["history"][number]>((from, to) => context.admin.from("audit_log").select("id,resource_id,action,created_at,reason,actor_id,user_name_snapshot", { count: "exact" }).eq("organization_id", context.organizationId).eq("resource_type", "supplier_audit_event").order("id").range(from, to));
-  const actors = context.administrator ? await context.admin.from("profiles").select("id,full_name").eq("organization_id", context.organizationId).eq("status", "active").in("user_type", ["administrator", "internal"]).eq("workspace_mode", "production").order("full_name") : { data: [], error: null };
-  auditRpcError(actors.error);
-  return { events, results, files, suppliers: await auditSuppliers(context, settings.settings, true), ...settings, canManage: context.canManage, administrator: context.administrator, actors: actors.data ?? [], history };
+  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, history };
 }
 export function auditFailure(error: unknown) {
   return Response.json({ error: error instanceof Error ? error.message : "La operación de auditoría no se completó." }, { status: error instanceof SupplierAuditError ? error.status : 500 });

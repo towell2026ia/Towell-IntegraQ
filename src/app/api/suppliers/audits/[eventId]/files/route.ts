@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { auditContext, auditEvent, auditFailure, auditRpcError, auditSettings, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
+import { auditContext, auditEvent, auditFailure, auditRpcError, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
 import { verifyAuditPdf } from "@/lib/supplier-audits/pdf";
 export const maxDuration = 30;
 export async function POST(request: Request, { params }: { params: Promise<{ eventId: string }> }) {
   try {
     const context = await auditContext("manage"), { eventId } = await params, event = await auditEvent(context, eventId);
-    const settings = await auditSettings(context), suppliers = await auditSuppliers(context, settings.settings);
+    const suppliers = await auditSuppliers(context);
     if (!event.supplier_id || !suppliers.some(s => s.id === event.supplier_id)) throw new SupplierAuditError("Confirma la asociación del proveedor antes de adjuntar archivos.", 403);
     const form = await request.formData(), file = form.get("file"), type = form.get("type"), reason = String(form.get("reason") ?? "").trim();
     if (!(file instanceof File) || !file.name.toLowerCase().endsWith(".pdf") || !file.size || file.size > 4194304 || !["supplier_audit_report", "supplier_audit_action_plan"].includes(String(type)) || reason.length < 5) throw new SupplierAuditError("Selecciona un PDF de hasta 4 MB e indica el motivo.");

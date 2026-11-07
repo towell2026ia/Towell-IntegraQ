@@ -26,6 +26,8 @@ assert.match(legacySource, tableDeclaration); assert.match(legacySource, sharedF
 sql("-c", legacySource.replace(tableDeclaration, "").replace(sharedFileTrigger, ""));
 const proposals = readdirSync("supabase/migrations").filter(n => n.endsWith("_supplier_audit_calendar.sql")); assert.equal(proposals.length, 1);
 sql("-f", join("supabase/migrations", proposals[0]));
+const access = readdirSync("supabase/migrations").filter(n => n.endsWith("_supplier_audit_access_navigation.sql")); assert.equal(access.length, 1);
+sql("-f", join("supabase/migrations", access[0]));
 sql("-f", "supabase/tests/supplier-audit-test.sql");
 const id = sql("-At", "-c", "select id from public.supplier_audit_events where criteria='Concurrency target'");
 assert.match(id, /^[a-f0-9-]{36}$/);

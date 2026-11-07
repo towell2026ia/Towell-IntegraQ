@@ -5,16 +5,46 @@ select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::bo
 select public.test_assert(has_table_privilege('authenticated','public.supplier_audit_events','INSERT') and has_table_privilege('authenticated','public.supplier_audit_events','DELETE'),'fixture reproduces Supabase default table grants');
 select public.test_denied($q$insert into public.supplier_audit_events(organization_id,supplier_id,calendar_year,calendar_month,date_precision,created_by,updated_by) values('00000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001',2026,11,'month',auth.uid(),auth.uid())$q$,'row-level security','direct insert is denied despite default table privileges');
 select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-10"}',null)$q$,'AUDIT_INSPECTOR_REQUIRED','unassigned administrator cannot program');
-select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000007'::uuid],array['20000000-0000-4000-8000-000000000003'::uuid],0,'Explicit synthetic scope verification');
-select public.test_assert((select count(*) from public.organizations where id='20000000-0000-4000-8000-000000000003' and owning_organization_id is null)=1,'legacy scope confirmation does not reassign ownership');
-select public.test_denied($q$select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000002'::uuid],array[]::uuid[],1,'Invalid read only assignment')$q$,'AUDIT_INSPECTOR_PERMISSION_REQUIRED','view-only user cannot be configured as inspector');
-select public.test_denied($q$select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000007'::uuid],array[]::uuid[],0,'Stale configuration request')$q$,'AUDIT_CONFLICT','configuration has optimistic concurrency');
+select public.test_denied($q$select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000007'::uuid],array[]::uuid[],0,'Removed configuration request')$q$,'permission denied','administrator cannot bypass Usuarios y acceso with retired configuration RPC');
 reset role;
+select public.test_assert((select count(*)=0 from public.workspace_data where area='supplierAuditSettings'),'no extra calendar assignment or legacy scope setup is needed');
+-- Only synthetic fixture permissions are changed, and every change rolls back.
+begin;
+insert into public.user_module_action_permissions values('10000000-0000-4000-8000-000000000001','suppliers','update');
+set role authenticated;
+select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'administrator can manage only with explicit supplier edit permission');
+rollback;
+begin;
+update public.user_module_action_permissions set action='view' where user_id='10000000-0000-4000-8000-000000000007';
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007',true);
+select public.test_assert(not (public.iq_supplier_audit_context()->>'canManage')::boolean,'revoking supplier edit immediately revokes management without a calendar assignment');
+select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{}',null)$q$,'AUDIT_INSPECTOR_REQUIRED','revoked permission cannot schedule by direct RPC');
+rollback;
+begin;
+update public.profiles set test_update=false where id='10000000-0000-4000-8000-000000000007';
+set role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007',true);
+select public.test_assert(not (public.iq_supplier_audit_context()->>'canManage')::boolean,'effective permission denial wins over an explicit stored grant');
+rollback;
+-- A sole internal organization may use the legacy unowned supplier catalog.
+-- A second internal organization, including an inactive one, blocks that fallback.
+begin;
+update public.organizations set active=false where id='00000000-0000-4000-8000-000000000002';
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007',true);
+select public.test_assert(not public.iq_supplier_audit_supplier_allowed('20000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000001'),'inactive second organization still blocks unowned supplier ambiguity');
+update public.organizations set kind='customer' where id='00000000-0000-4000-8000-000000000002';
+set role authenticated;
+select public.test_assert(public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000003","year":2026,"month":12,"precision":"date","plannedDate":"2026-12-03"}',null) is not null,'existing unowned supplier can be scheduled with one internal organization and no scope checklist');
+reset role;
+select public.test_assert((select owning_organization_id is null from public.organizations where id='20000000-0000-4000-8000-000000000003'),'calendar does not reassign legacy supplier ownership');
+rollback;
 create temporary table audit_fixture_ids(label text,id uuid);
 grant all on audit_fixture_ids to authenticated;
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007',false);
-select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'assigned identity with update permission can manage');
+select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'existing supplier edit permission alone authorizes management from Usuarios y acceso');
+select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000003","year":2026,"month":12,"precision":"month"}',null)$q$,'AUDIT_SUPPLIER_SCOPE_UNVERIFIED','ambiguous unowned supplier blocked with multiple internal organizations');
 insert into audit_fixture_ids select 'main',public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"week","weekStart":"2026-11-09","state":"scheduled","criteria":"Synthetic criteria","responsible":"Synthetic inspector"}',null);
 select public.test_assert((select count(*) from public.supplier_audit_events)=1,'week scheduling does not invent an exact date or result');
 with changed as (update public.supplier_audit_events set state='cancelled' returning id) select public.test_assert((select count(*)=0 from changed),'direct update denied by RLS even to assigned inspector with default ACL');
@@ -28,7 +58,7 @@ select public.iq_supplier_audit_save((select id from audit_fixture_ids where lab
 select public.test_assert((select revision=2 and planned_date='2026-11-11' and week_start is null from public.supplier_audit_events where id=(select id from audit_fixture_ids where label='main')),'reprogramming persists with one identity and revised date');
 select public.test_denied($q$select public.iq_supplier_audit_save((select id from audit_fixture_ids where label='main'),1,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-11","state":"cancelled"}','Concurrent stale revision')$q$,'AUDIT_CONFLICT','stale schedule update rejected');
 select public.test_denied($q$select public.iq_supplier_audit_save((select id from audit_fixture_ids where label='main'),2,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-11","actualDate":"2026-01-05","state":"performed"}','Attempt without PDF evidence')$q$,'AUDIT_ACTUAL_DATE_AND_REPORT_REQUIRED','actual realization requires verifiable PDF');
-select public.test_denied($q$select public.iq_supplier_audit_configure(array[]::uuid[],array[]::uuid[],1,'Inspector cannot configure')$q$,'AUDIT_ADMIN_REQUIRED','inspector cannot grant scope or assign identities');
+select public.test_denied($q$select public.iq_supplier_audit_configure(array[]::uuid[],array[]::uuid[],1,'Inspector cannot configure')$q$,'permission denied','inspector cannot use retired assignment RPC');
 reset role;
 -- An actual private-object row is required by the file-registration RPC.
 insert into storage.objects(bucket_id,name,metadata) select 'integraq-private','10000000-0000-4000-8000-000000000007/supplier-audits/'||id||'/synthetic-report.pdf','{"size":128,"mimetype":"application/pdf"}' from audit_fixture_ids where label='main';
@@ -41,10 +71,10 @@ select public.test_assert((select score=72.5 and (select count(*) from jsonb_obj
 select public.test_assert((select state='completed' and actual_date='2026-01-05' and planned_date='2026-11-11' from public.supplier_audit_events where id=(select id from audit_fixture_ids where label='main')),'programmed date actual date and finalization remain distinct');
 with changed as (update public.supplier_assessments set score=100 where id=(select id from audit_fixture_ids where label='result') returning id) select public.test_assert((select count(*)=0 from changed),'direct result update cannot bypass inspector RPC');
 select public.test_denied($q$select public.iq_supplier_audit_result((select id from audit_fixture_ids where label='main'),4,jsonb_build_object('questionnaire','distributors','scores','{"1":100}'::jsonb,'score',100),true,'Missing required rubrics')$q$,'AUDIT_SCORES_INVALID','partial questionnaires cannot finalize');
-select public.iq_supplier_audit_contacts('20000000-0000-4000-8000-000000000003','{"qualityName":"Synthetic quality contact","notificationName":"Synthetic receiver","email":"recipient@example.test","emailVerified":true,"phone":"000000"}',(select updated_at from public.organizations where id='20000000-0000-4000-8000-000000000003'),'Verified contact in isolated fixture');
-select public.test_assert((select code='LEGACY-SYNTHETIC' and owning_organization_id is null and metadata->'supplierQualityContacts'->>'emailVerified'='true' from public.organizations where id='20000000-0000-4000-8000-000000000003'),'contact verification preserves official code and ownership');
+select public.iq_supplier_audit_contacts('20000000-0000-4000-8000-000000000001','{"qualityName":"Synthetic quality contact","notificationName":"Synthetic receiver","email":"recipient@example.test","emailVerified":true,"phone":"000000"}',(select updated_at from public.organizations where id='20000000-0000-4000-8000-000000000001'),'Verified contact in isolated fixture');
+select public.test_assert((select code='PR00001' and owning_organization_id='00000000-0000-4000-8000-000000000001' and metadata->'supplierQualityContacts'->>'emailVerified'='true' from public.organizations where id='20000000-0000-4000-8000-000000000001'),'contact verification preserves official code and ownership');
 select public.test_denied($q$select public.iq_supplier_audit_contacts('20000000-0000-4000-8000-000000000002','{}',now(),'Foreign supplier write')$q$,'AUDIT_SUPPLIER_SCOPE_UNVERIFIED','contact editing rejects another organization');
-select public.test_denied($q$select public.iq_supplier_audit_contacts('20000000-0000-4000-8000-000000000003','{"emailVerified":true}',(select updated_at from public.organizations where id='20000000-0000-4000-8000-000000000003'),'No verified recipient')$q$,'AUDIT_CONFIRMED_RECIPIENT_REQUIRED','verification requires real recipient name and email');
+select public.test_denied($q$select public.iq_supplier_audit_contacts('20000000-0000-4000-8000-000000000001','{"emailVerified":true}',(select updated_at from public.organizations where id='20000000-0000-4000-8000-000000000001'),'No verified recipient')$q$,'AUDIT_CONFIRMED_RECIPIENT_REQUIRED','verification requires real recipient name and email');
 select public.test_assert((select count(*)>0 from public.audit_log where resource_type='supplier_assessment' and resource_id=(select id::text from audit_fixture_ids where label='result') and organization_id is null),'own organization can read legacy log rows through actual assessment identity');
 select public.test_denied($q$insert into public.audit_log(actor_id,resource_type,resource_id,action,organization_id) values(auth.uid(),'supplier_audit_event','forged','fake','00000000-0000-4000-8000-000000000001')$q$,'row-level security','direct requests cannot fabricate managed audit log entries');
 reset role;

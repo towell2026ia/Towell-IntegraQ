@@ -15,8 +15,8 @@ Manufacturers: C10, C18, C25, C33, C41, C50, C57, C66 y C74. Distribuidores y Se
 
 - Doce casillas anuales, navegación por año, cuatro conteos separados y agenda mensual con vista de días y lista adaptable a móvil. No existe máximo mensual de cuatro visitas.
 - Programación por fecha tentativa, semana o mes sin inventar el día. Confirmación exige fecha exacta. P, R, evaluación y carga del PDF se almacenan por separado.
-- Creación, confirmación, reprogramación, cancelación y resultados usan RPC autenticadas con perfil activo, organización y asignación explícita de inspector; las modificaciones exigen motivo y revisión del registro. Dos actualizaciones simultáneas no se sobrescriben.
-- Un administrador configura supervisión y alcance; no es inspector automáticamente. No se utiliza correo, nombre de usuario o posición fija para autorizar.
+- Creación, confirmación, reprogramación, cancelación y resultados usan RPC autenticadas con perfil activo, organización y permiso explícito Proveedores → Editar administrado desde Usuarios y acceso; las modificaciones exigen motivo y revisión del registro. Dos actualizaciones simultáneas no se sobrescriben.
+- El calendario no contiene configuración de inspectores, permisos ni proveedores históricos sin titular. Un administrador sin permiso explícito de edición conserva supervisión, sin asumir automáticamente la gestión de agenda. No se utiliza correo, nombre de usuario o posición fija para autorizar ni se conceden permisos durante esta corrección.
 - Historial importado transaccional e idempotente de 22 eventos. Vista previa obligatoria, mismo hash al confirmar y conservación de los pendientes sin asociación. No se crea evaluación por importar.
 - PDF privado, hasta 4 MB o el límite menor de la política. Firma, lectura real del PDF, huella, referencia física y relación con el expediente se verifican antes de registrar. Versiones previas conservadas. No hay borrado físico compensatorio.
 - Se reutilizan `supplier_assessments`, `file_objects`, Storage privado, `audit_log`, `workspace_data` y el visor documental. La ficha y el calendario abren el mismo ID de evento.
@@ -44,8 +44,8 @@ La configuración nueva tiene guardas restrictivas contra escritura directa, com
 1. CI completo y pruebas PostgreSQL efímeras con RNCP y definiciones legacy aplicadas.
 2. Autorización específica del SQL propuesto. No ejecutar otras migraciones pendientes.
 3. Aplicación mediante el mecanismo oficial que registre su versión real, con comparación de datos antes/después.
-4. Un administrador asigna al inspector por UUID y permiso Proveedores → Editar.
-5. Los 61 proveedores históricos consultados no tienen `owning_organization_id`. La aplicación no se lo asigna: el administrador confirma explícitamente los UUID autorizados en la configuración de auditorías. Si otra organización ya tiene un alcance confirmado, se bloquea el conflicto.
+4. La propuesta complementaria elimina la asignación adicional del calendario. Usuarios y acceso es la única administración del permiso Proveedores → Editar; no se asigna ninguna cuenta automáticamente.
+5. Los 61 proveedores históricos consultados no tienen `owning_organization_id`. Se reutiliza su catálogo únicamente cuando existe una sola organización interna en toda la base. Una segunda organización, incluso inactiva, impide usar proveedores sin titular; los proveedores con titular sólo se admiten en su organización. No se reasigna ninguna empresa.
 6. Inspector autorizado revisa/importa el F-CA-58 original y concilia los pendientes individualmente. No se importan ni cargan datos productivos durante pruebas.
 7. Sesión real para verificar calendario, carga/descarga PDF y captura manual. Sin documentos ficticios en producción.
 
@@ -61,7 +61,7 @@ El job PostgreSQL efímero aplica el esquema RNCP y las evaluaciones legacy junt
 
 Resultados disponibles: 694 pruebas de la suite general PASS (el cotejo con archivos privados se omite en CI y se ejecutó localmente con las fuentes originales); 57 comprobaciones SQL de auditorías PASS, más una prueba de dos transacciones concurrentes; 17 comprobaciones visuales aisladas PASS. Typecheck, lint y build aprobados. Las regresiones SQL existentes de RNCP y reemplazo documental también pasaron.
 
-PENDING: configuración administrativa de inspector y proveedores, importación histórica por el inspector autorizado, carga de informes reales y aceptación con sesión real. Correos y portal externo permanecen desactivados.
+PENDING: autorización de la propuesta complementaria de acceso, importación histórica por el usuario autorizado, carga de informes reales y aceptación con sesión real. Correos y portal externo permanecen desactivados.
 
 ## Evidencia de aplicación autorizada
 
@@ -71,4 +71,12 @@ La comparación inmediata antes/después confirmó igualdad de conteos y huellas
 
 Supabase concede privilegios de tabla por defecto: eso no equivale a autorización RLS. La agenda tiene RLS habilitado y únicamente una política SELECT; los roles `authenticated` y `anon` no son propietarios ni pueden omitir RLS. Las pruebas efímeras reproducen esos privilegios y comprueban rechazo de INSERT, UPDATE y DELETE directos. La RPC anónima está denegada. Las dos guardas restrictivas del historial están instaladas. El análisis de seguridad mantuvo los mismos cuatro avisos previos, sin avisos nuevos.
 
-Las condiciones de aplicación SQL están cumplidas. La asignación del inspector y los proveedores sigue requiriendo una sesión administrativa real. La cuenta histórica revisada tiene permisos de consulta/edición, pero su puesto figura como auditor de calidad: no se la asignó automáticamente por su nombre, correo o acceso previo a RNCP.
+Las condiciones de aplicación de la primera migración están cumplidas. Esa versión requería configurar inspector y proveedores dentro del calendario. El usuario solicitó retirar ambos controles y gestionar permisos únicamente desde Usuarios y acceso; la corrección siguiente sustituye esa doble configuración, sin modificar la migración aplicada ni asignar cuentas.
+
+## Corrección solicitada tras la aceptación del calendario
+
+- Los números de día antes eran texto. Ahora cada día abre Programar auditoría con año, mes y fecha precargados, también en móvil. Elegir otro mes o año conserva la navegación y evita enviar una fecha del periodo anterior; elegir fecha o semana sincroniza su periodo. La lista mensual sigue abriendo el expediente existente, sin duplicarlo.
+- Se retiran el icono Configuración, la lista de inspectores, el bloque de proveedores históricos sin titular y su comando API. El servidor deja de leer o enviar identidades y asignaciones adicionales al navegador.
+- La propuesta `20261106230012_supplier_audit_access_navigation.sql` reemplaza exclusivamente dos helpers de autorización/catálogo y revoca la ejecución pública del antiguo configurador. Exige perfil activo interno, organización vigente, permiso explícito `suppliers:update` y permiso efectivo. El rol administrador por sí solo no da permiso de programación. No modifica filas de permisos, proveedores, perfiles, documentos, archivos ni agenda.
+- El catálogo autorizado aplica el mismo criterio en servidor y RPC: titular exacto, o proveedor sin titular únicamente si existe una sola organización interna. No se infiere ni persiste titularidad. En producción se verificó por consulta de sólo lectura una organización interna, 61 proveedores sin titular y cero configuraciones adicionales. Si aparece una configuración antes de aplicar, la propuesta se detiene para revisión.
+- Se conservan RLS, CAS, separación P/R, resultados manuales y los controles privados de archivo. La propuesta todavía no está autorizada ni aplicada. La publicación funcional depende de esa autorización; no se ejecutan las otras migraciones pendientes.
