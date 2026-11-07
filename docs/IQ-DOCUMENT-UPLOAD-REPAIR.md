@@ -2,9 +2,11 @@
 
 ## Estado y alcance
 
-Trabajo conservado y completado sobre `main`, sin ramas ni PR. La única migración propuesta es `20261107021617_controlled_document_upload_registration.sql`. **NO aplicada en producción. Despliegue documental detenido. Aceptación funcional en IntegraQ: PENDING.**
+Trabajo conservado y completado sobre `main`, sin ramas ni PR. El usuario autorizó exclusivamente el SQL de `20261107021617_controlled_document_upload_registration.sql` del commit `3fc1cca`. **Aplicado una sola vez en producción; aceptación funcional final en IntegraQ: PENDING.**
 
-Se conserva íntegra la migración aplicada `20261106020459_controlled_document_replacement.sql`. No se ejecuta `20261102170852_admin_delete_guard.sql` ni ninguna otra migración pendiente. Los commits de preparación incluyen `[skip netlify]`.
+El conector oficial asignó la versión `20261107034515` al aplicar la migración. El archivo se sincronizó como `20261107034515_controlled_document_upload_registration.sql`, sin cambiar su contenido (blob Git `c1d1064bd1284eff49629190a3f79aac7fd400c6`). No se ejecutó SQL de nuevo ni se repararon artificialmente entradas del historial.
+
+Se conserva íntegra la migración aplicada `20261106020459_controlled_document_replacement.sql`. No se ejecuta `20261102170852_admin_delete_guard.sql` ni ninguna otra migración pendiente. Los commits de preparación incluyeron `[skip netlify]`; la publicación del código se realiza después de verificar esta única activación SQL autorizada.
 
 ## Causa raíz comprobada
 
@@ -36,10 +38,10 @@ El código y el nombre oficial se capturan por separado. No se extraen del nombr
 | `scripts/test-document-replacement-db.mjs` | Reproducción previa y ejecución SQL exclusivamente en CI efímero; concurrencia. |
 | `supabase/tests/document-replacement-fixture.sql` | Identidades, permisos y políticas sintéticas para ejercer RLS con rol authenticated. |
 | `supabase/tests/document-upload-registration-test.sql` | Operaciones, aislamiento, historial, fallos intermedios e integridad. |
-| `supabase/migrations/20261107021617_controlled_document_upload_registration.sql` | Reparación específica descrita abajo, no aplicada. |
+| `supabase/migrations/20261107034515_controlled_document_upload_registration.sql` | SQL exacto autorizado con el nombre inicial 20261107021617; registrado y sincronizado con su versión real de ejecución. |
 | `docs/IQ-DOCUMENT-UPLOAD-REPAIR.md` | Evidencia, límites y procedimiento de aceptación. |
 
-## Contenido exacto de la propuesta SQL
+## Contenido exacto del SQL autorizado y aplicado
 
 - Una transacción; sin tablas ni columnas nuevas, sin backfill ni reescritura de datos históricos.
 - Un índice parcial único `file_objects_controlled_upload_intent` sobre `(uploaded_by, resource_key)`, limitado a `reference_type = 'controlled_document_upload'`. No existen referencias productivas de ese tipo en la comprobación previa.
@@ -51,7 +53,7 @@ El código y el nombre oficial se capturan por separado. No se extraen del nombr
 - Funciones con `search_path` vacío y revocación anónima. Los helpers privados de reserva no se conceden a authenticated. No se alteran asignaciones de usuarios ni permisos de módulos.
 - Recarga de la caché de esquema PostgREST después del cambio. No se alteran buckets ni archivos físicos.
 
-Las escrituras dentro de las funciones sólo ocurrirán cuando posteriormente una persona autorizada ejecute una operación documental; aplicar el DDL no invoca esas funciones ni modifica documentos existentes.
+Las escrituras dentro de las funciones sólo ocurrirán cuando posteriormente una persona autorizada ejecute una operación documental; aplicar el DDL no invocó esas funciones ni modificó documentos existentes.
 
 ## Matriz de permisos
 
@@ -108,12 +110,12 @@ Proyecto verificado: `yptrqowmviixlkrxjrqr`. Corte UTC: 2026-11-07, jornada loca
 | SHA-256 registrado con formato válido | 544 |
 | Discrepancias documento–proceso–organización | 0 |
 | Discrepancias de proceso o identidad entre archivo y versión | 0 |
-| Migración 20261107021617 aplicada | 0 |
-| Entradas del historial de migraciones | 49 |
+| Reparación aplicada, antes / después | 0 / 1 |
+| Entradas del historial de migraciones, antes / después | 49 / 50 |
 
 Los 544 archivos históricos tienen `workspace_id` NULL: su organización se comprueba mediante el expediente y su proceso existente. De los documentos vinculados, 530 indican TOWELL expresamente y 14 tienen `organization_id` NULL, con proceso TOWELL verificado. La propuesta conserva esos valores; no realiza reasignaciones ni rellenos.
 
-La consulta comprueba referencias, relaciones, presencia de objetos y huellas registradas. **No descarga ni recalcula la huella de los 544 binarios.** No se afirma una inspección byte a byte de todos los archivos.
+La consulta comprueba referencias, relaciones, presencia de objetos y huellas registradas. Las mismas consultas posteriores a la aplicación devolvieron los mismos 544 archivos, 544 versiones, cero objetos ausentes y las tres instantáneas idénticas. **No descarga ni recalcula la huella de los 544 binarios.** No se afirma una inspección byte a byte de todos los archivos.
 
 Instantáneas de metadatos de sólo lectura, MD5 de la concatenación ordenada por ID de cada fila JSONB, separada por `|`: archivos documentales `4a73edc8f9e26ec23906fa8d28fb44c4`; documentos `d54bc1dcb06437594c2a2d298846c9f2`; versiones `3d3e86e4857991ddfc197ef6d828e981`. Sirven para comparar las mismas consultas antes/después de una aplicación autorizada, sin modificar registros.
 
@@ -122,14 +124,15 @@ Instantáneas de metadatos de sólo lectura, MD5 de la concatenación ordenada p
 - Una captura interrumpida o abandonada puede conservar una reserva privada `upload_pending`, incluso con su binario ya cargado. Está identificada y admite reintento; no es un objeto sin referencia. No se incorpora una limpieza física automática.
 - El límite de archivo es 50 MiB, compatible con el bucket existente. Se validan extensión, MIME admitido, tamaño, propietario y ruta; no se añade análisis antivirus ni inspección semántica del contenido.
 - Las pruebas ejercen RLS y transacciones reales, pero no equivalen a sesiones Supabase Auth y llamadas HTTP a Storage en una plataforma aislada. No existe una sesión de prueba aislada confirmada para completar ese recorrido visual.
-- Antes de declarar resuelto: aplicar sólo la propuesta tras autorización, verificar esquema e integridad, publicar el código preparado y realizar una carga documental real autorizada en IntegraQ, comprobando apertura, descarga, autorización y el flujo documental sin crear datos ficticios productivos.
-- El bloqueo de escrituras directas es intencional: la aplicación actual debe actualizarse al flujo de reserva después de la activación. Las pestañas antiguas deben recargarse. No se publicará el código dependiente de la migración antes de autorizarla y verificarla.
+- Antes de declarar resuelto: publicar el código preparado y realizar una carga documental real autorizada en IntegraQ, comprobando apertura, descarga, autorización y el flujo documental sin crear datos ficticios productivos. El SQL ya fue autorizado, aplicado y verificado.
+- El bloqueo de escrituras directas es intencional: la aplicación debe actualizarse al flujo de reserva después de la activación. Las pestañas antiguas deben recargarse. El código dependiente de la migración se publica después de autorizarla y verificarla.
 
-## Secuencia controlada propuesta, todavía no ejecutada
+## Aplicación controlada y pendientes
 
-1. Autorizar exclusivamente `20261107021617_controlled_document_upload_registration.sql` del commit exacto revisado.
-2. Repetir comprobaciones previas de destino, historial, dependencias y ausencia de conflictos. Detenerse ante diferencias no explicadas.
-3. Aplicar sólo esa migración con registro de su ejecución en el historial. No usar `db push` ni aplicar otras pendientes.
-4. Verificar una sola entrada del historial, funciones/políticas previstas y preservación de los 544 vínculos y objetos mediante las mismas consultas de lectura.
-5. Publicar únicamente el código documental preparado y comprobar CI/Netlify.
-6. Completar la aceptación funcional con un documento real y permiso autorizado. Hasta entonces, incidencia PENDING; producción documental sin cambios por esta preparación.
+1. Autorización específica recibida para el SQL original del commit `3fc1cca`: PASS.
+2. Destino `yptrqowmviixlkrxjrqr` ACTIVE_HEALTHY; versión/nombre ausentes, ningún conflicto de funciones/políticas/índice, siete tablas con RLS: PASS.
+3. Aplicación oficial de una sola migración `controlled_document_upload_registration`, registrada como `20261107034515`: PASS. Sin `db push`, reparaciones de historial ni otras migraciones.
+4. Postflight: 50 entradas en historial, una sola de esta reparación; siete funciones nuevas, 15 políticas (13 RESTRICTIVE, dos permisivas acotadas), índice presente y cero funciones nuevas ejecutables por anon: PASS.
+5. Integridad posterior: instantáneas de archivos/documentos/versiones idénticas, 544 archivos y versiones vinculados, cero objetos ausentes, cero nuevas reservas o cargas: PASS. No se modificaron documentos, códigos, asignaciones ni archivos históricos.
+6. Publicación del código documental y comprobación CI/Netlify: en curso al preparar este commit.
+7. Aceptación funcional con documento real y sesión autorizada: PENDING. No se han creado documentos de prueba ni alterado documentos reales para las pruebas.
