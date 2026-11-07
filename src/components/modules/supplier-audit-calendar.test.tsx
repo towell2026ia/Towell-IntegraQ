@@ -20,10 +20,17 @@ describe("supplier audit calendar navigation", () => {
     expect(html.match(/aria-pressed=/g)).toHaveLength(12);
     expect(html).not.toMatch(/Configurar inspector|sin titular|Inspector y alcance/);
   });
-  it.each([false, true])("reader admin=%s cannot schedule and has no secondary permission configuration", administrator => {
+  it.each([false, true])("a server-denied reader admin=%s cannot bypass the result in the UI", administrator => {
     const html = renderToStaticMarkup(createElement(SupplierAuditCalendar, { directory: directory(false, administrator), onOpen: vi.fn() }));
     expect(html).not.toMatch(/aria-label="Programar auditoría el |Programar auditoría<|Importar histórico|Configurar inspector/);
     expect(html).toContain("Usuarios y acceso");
+  });
+  it("administrator with inherited effective management sees Programar and selectable dates", () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date("2026-11-06T18:00:00Z"));
+    const html = renderToStaticMarkup(createElement(SupplierAuditCalendar, { directory: directory(true, true), onOpen: vi.fn() }));
+    expect(html).toContain("Programar auditoría</button>");
+    expect(html.match(/aria-label="Programar auditoría el /g)).toHaveLength(30);
+    expect(html).not.toMatch(/Vista de consulta|Configurar inspector/);
   });
   it("opens the selected year month and day and includes authorized legacy suppliers without extra checklists", () => {
     const html = renderToStaticMarkup(createElement(SupplierAuditDialog, { directory: directory(true), focus: { year: 2028, month: 2, plannedDate: "2028-02-29" }, onClose: vi.fn() }));

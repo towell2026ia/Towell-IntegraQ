@@ -28,6 +28,9 @@ const proposals = readdirSync("supabase/migrations").filter(n => n.endsWith("_su
 sql("-f", join("supabase/migrations", proposals[0]));
 const access = readdirSync("supabase/migrations").filter(n => n.endsWith("_supplier_audit_access_navigation.sql")); assert.equal(access.length, 1);
 sql("-f", join("supabase/migrations", access[0]));
+sql("-c", "set role authenticated;select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);select public.test_assert(not (public.iq_supplier_audit_context()->>'canManage')::boolean,'pre-fix reproduces administrator blocked despite inherited permissions');");
+const adminAccess = readdirSync("supabase/migrations").filter(n => n.endsWith("_supplier_audit_admin_effective_access.sql")); assert.equal(adminAccess.length, 1);
+sql("-f", join("supabase/migrations", adminAccess[0]));
 sql("-f", "supabase/tests/supplier-audit-test.sql");
 const id = sql("-At", "-c", "select id from public.supplier_audit_events where criteria='Concurrency target'");
 assert.match(id, /^[a-f0-9-]{36}$/);

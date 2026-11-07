@@ -1,10 +1,16 @@
 -- All identities, PDF metadata, evaluations and source rows here are synthetic, never production data.
 set role authenticated;
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000001',false);
-select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean=false,'administrator does not automatically become inspector');
+select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'active administrator inherits calendar management without an explicit permission row');
 select public.test_assert(has_table_privilege('authenticated','public.supplier_audit_events','INSERT') and has_table_privilege('authenticated','public.supplier_audit_events','DELETE'),'fixture reproduces Supabase default table grants');
 select public.test_denied($q$insert into public.supplier_audit_events(organization_id,supplier_id,calendar_year,calendar_month,date_precision,created_by,updated_by) values('00000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001',2026,11,'month',auth.uid(),auth.uid())$q$,'row-level security','direct insert is denied despite default table privileges');
-select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-10"}',null)$q$,'AUDIT_INSPECTOR_REQUIRED','unassigned administrator cannot program');
+-- Prove an administrator can persist a schedule as their own identity, not as an inspector.
+begin;
+select public.iq_supplier_audit_save(null,0,'{"supplierId":"20000000-0000-4000-8000-000000000001","year":2026,"month":11,"precision":"date","plannedDate":"2026-11-10"}',null);
+select public.test_assert((select count(*)=1 from public.supplier_audit_events where created_by=auth.uid() and updated_by=auth.uid()),'administrator schedules with their own actor identity');
+select public.test_assert((select count(*)=1 from public.audit_log where resource_type='supplier_audit_event' and actor_id=auth.uid()),'administrator schedule retains the actual actor in audit history');
+select public.test_assert((select count(*)=0 from public.user_module_action_permissions where user_id=auth.uid()),'administrator scheduling does not insert an explicit permission grant');
+rollback;
 select public.test_denied($q$select public.iq_supplier_audit_configure(array['10000000-0000-4000-8000-000000000007'::uuid],array[]::uuid[],0,'Removed configuration request')$q$,'permission denied','administrator cannot bypass Usuarios y acceso with retired configuration RPC');
 reset role;
 select public.test_assert((select count(*)=0 from public.workspace_data where area='supplierAuditSettings'),'no extra calendar assignment or legacy scope setup is needed');
@@ -12,7 +18,7 @@ select public.test_assert((select count(*)=0 from public.workspace_data where ar
 begin;
 insert into public.user_module_action_permissions values('10000000-0000-4000-8000-000000000001','suppliers','update');
 set role authenticated;
-select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'administrator can manage only with explicit supplier edit permission');
+select public.test_assert((public.iq_supplier_audit_context()->>'canManage')::boolean,'legacy explicit administrator grant remains compatible but is not required');
 rollback;
 begin;
 update public.user_module_action_permissions set action='view' where user_id='10000000-0000-4000-8000-000000000007';
@@ -110,7 +116,9 @@ select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000005'
 select public.test_assert((select count(*)=0 from public.supplier_audit_events),'administrator from organization B cannot read A');
 select public.test_assert((select count(*)=0 from public.supplier_assessments where audit_event_id is not null),'legacy permissive assessment select does not expose managed results across organizations');
 select public.test_assert((select count(*)=0 from public.audit_log where resource_type in ('supplier_audit_event','supplier_assessment')),'legacy OR log policy does not expose managed logs or null-organization legacy result logs across organizations');
-select public.test_denied($q$select public.iq_supplier_audit_result((select id from audit_fixture_ids where label='main'),4,'{}',true,'Cross organization write')$q$,'AUDIT_INSPECTOR_REQUIRED','other organization administrator cannot write');
+select public.test_denied($q$select public.iq_supplier_audit_save((select id from audit_fixture_ids where label='main'),4,'{}','Cross organization write')$q$,'AUDIT_ACCESS_DENIED','other organization administrator cannot update an event outside their scope');
+select public.test_denied($q$select public.iq_supplier_audit_result((select id from audit_fixture_ids where label='main'),4,'{}',true,'Cross organization result')$q$,'AUDIT_ACCESS_DENIED','administrator cannot modify another organizations grades despite inherited management');
+select public.test_denied($q$select public.iq_supplier_audit_file((select id from audit_fixture_ids where label='main'),4,'{}')$q$,'AUDIT_ACCESS_DENIED','administrator cannot attach a report to another organizations event');
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000004',false);
 select public.test_assert((select count(*)=0 from public.supplier_audit_events),'supplier portal not activated by scheduling');
 select public.test_assert((select count(*)=0 from public.supplier_assessments where audit_event_id is not null),'supplier cannot access unpublished grades');
@@ -120,6 +128,7 @@ select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000003'
 select public.test_assert((select count(*)=0 from public.supplier_audit_events),'customer portal remains separate');
 select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000006',false);
 select public.test_denied($q$select public.iq_supplier_audit_context()$q$,'AUDIT_ACCESS_DENIED','inactive administrator rejected');
+select public.test_denied($q$select public.iq_supplier_audit_save(null,0,'{}',null)$q$,'AUDIT_ACCESS_DENIED','inactive administrator cannot schedule by direct RPC');
 reset role;
 select public.test_assert((select count(*)=0 from public.notifications) and (select count(*)=0 from public.integration_outbox),'no real notifications from audit creation import or finalization');
 select public.test_assert((select count(*)=8 from public.profiles) and (select count(*)=5 from public.organizations),'no accounts created or company identities replaced');

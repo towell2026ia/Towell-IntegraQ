@@ -22,6 +22,18 @@ describe("central supplier audit permissions", () => {
     await expect(auditContext("manage")).rejects.toMatchObject({ status: 403 });
     expect(mocks.admin).not.toHaveBeenCalled();
   });
+  it("honors fresh inherited administrator management without a second account assignment", async () => {
+    mocks.session.mockResolvedValue({ authUserId: "admin-A", userType: "Administrador", workspaceMode: "production" });
+    mocks.rpc.mockResolvedValue({ data: { organizationId: "org-A", administrator: true, canManage: true }, error: null });
+    expect(await auditContext("manage")).toMatchObject({ canManage: true, administrator: true, organizationId: "org-A" });
+    expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_context");
+  });
+  it("does not override a database denial just because the cached session says administrator", async () => {
+    mocks.session.mockResolvedValue({ authUserId: "admin-A", userType: "Administrador", workspaceMode: "production" });
+    mocks.rpc.mockResolvedValue({ data: null, error: { code: "42501", message: "AUDIT_ACCESS_DENIED" } });
+    await expect(auditContext("manage")).rejects.toMatchObject({ status: 403 });
+    expect(mocks.admin).not.toHaveBeenCalled();
+  });
   it.each(["Cliente", "Proveedor"])("%s never reaches internal audit context", async userType => {
     mocks.session.mockResolvedValue({ authUserId: "external", userType, workspaceMode: "production", assignedModuleIds: ["suppliers"] });
     await expect(auditContext()).rejects.toMatchObject({ status: 403 });

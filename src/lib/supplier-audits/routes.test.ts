@@ -16,7 +16,12 @@ describe("supplier audit API authorization", () => {
   for (const state of ["scheduled", "rescheduled", "cancelled"]) expect((await POST(request({ command: "save", id: "event-1", reason: "Unauthorized request", payload: { state } }))).status).toBe(403);
   expect((await POST(request({ command: "result", id: "event-1", reason: "Unauthorized result" }))).status).toBe(403); expect(mocks.rpc).not.toHaveBeenCalled();
  });
- it("administrator without explicit editing permission cannot manage just by knowing the event ID", async () => { mocks.context.mockRejectedValue(new SupplierAuditError("Inspector required", 403)); expect((await POST(request({ command: "save", id: "known-id" }))).status).toBe(403); expect(mocks.rpc).not.toHaveBeenCalled(); });
+ it("administrator with fresh inherited management permission can program through the normal scoped RPC", async () => {
+  mocks.context.mockResolvedValue({ organizationId: "org-1", administrator: true, canManage: true, supabase: { rpc: mocks.rpc } });
+  const payload = { year: 2026, month: 11, precision: "date", plannedDate: "2026-11-12", supplierId: "supplier-1", state: "scheduled" };
+  expect((await POST(request({ command: "save", payload }))).status).toBe(200);
+  expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_save", { p_id: null, p_expected_revision: 0, p_payload: payload, p_reason: null });
+ });
  it("removed calendar configuration cannot grant permissions through the API", async () => { expect((await POST(request({ command: "configure", inspectorIds: ["known-user"], legacySupplierIds: ["known-supplier"] }))).status).toBe(400); expect(mocks.context).not.toHaveBeenCalled(); expect(mocks.rpc).not.toHaveBeenCalled(); });
  it.each(["Customer A", "Customer B", "Supplier A", "Supplier B", "Inactive user"])("%s cannot read internal audits or their files", async () => { mocks.context.mockRejectedValue(new SupplierAuditError("Denied", 403)); expect((await GET()).status).toBe(403); expect((await fileGET(new Request("https://integraq.test/file"), { params: Promise.resolve({ eventId: "event-1", fileId: "file-1" }) })).status).toBe(403); expect(mocks.workspace).not.toHaveBeenCalled(); });
  it("inspector scheduling uses identity-scoped RPC and passes actual version for concurrency", async () => {
