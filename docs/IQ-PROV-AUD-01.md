@@ -61,7 +61,7 @@ El job PostgreSQL efímero aplica el esquema RNCP y las evaluaciones legacy junt
 
 Resultados disponibles: 694 pruebas de la suite general PASS (el cotejo con archivos privados se omite en CI y se ejecutó localmente con las fuentes originales); 57 comprobaciones SQL de auditorías PASS, más una prueba de dos transacciones concurrentes; 17 comprobaciones visuales aisladas PASS. Typecheck, lint y build aprobados. Las regresiones SQL existentes de RNCP y reemplazo documental también pasaron.
 
-PENDING: autorización de la propuesta complementaria de acceso, importación histórica por el usuario autorizado, carga de informes reales y aceptación con sesión real. Correos y portal externo permanecen desactivados.
+PENDING: importación histórica por el usuario autorizado, carga de informes reales y aceptación de programación con sesión real. Correos y portal externo permanecen desactivados.
 
 ## Evidencia de aplicación autorizada
 
@@ -77,6 +77,16 @@ Las condiciones de aplicación de la primera migración están cumplidas. Esa ve
 
 - Los números de día antes eran texto. Ahora cada día abre Programar auditoría con año, mes y fecha precargados, también en móvil. Elegir otro mes o año conserva la navegación y evita enviar una fecha del periodo anterior; elegir fecha o semana sincroniza su periodo. La lista mensual sigue abriendo el expediente existente, sin duplicarlo.
 - Se retiran el icono Configuración, la lista de inspectores, el bloque de proveedores históricos sin titular y su comando API. El servidor deja de leer o enviar identidades y asignaciones adicionales al navegador.
-- La propuesta `20261106230012_supplier_audit_access_navigation.sql` reemplaza exclusivamente dos helpers de autorización/catálogo y revoca la ejecución pública del antiguo configurador. Exige perfil activo interno, organización vigente, permiso explícito `suppliers:update` y permiso efectivo. El rol administrador por sí solo no da permiso de programación. No modifica filas de permisos, proveedores, perfiles, documentos, archivos ni agenda.
+- La corrección `20261107012723_supplier_audit_access_navigation.sql` reemplaza exclusivamente dos helpers de autorización/catálogo y revoca la ejecución pública del antiguo configurador. Exige perfil activo interno, organización vigente, permiso explícito `suppliers:update` y permiso efectivo. El rol administrador por sí solo no da permiso de programación. No modifica filas de permisos, proveedores, perfiles, documentos, archivos ni agenda.
 - El catálogo autorizado aplica el mismo criterio en servidor y RPC: titular exacto, o proveedor sin titular únicamente si existe una sola organización interna. No se infiere ni persiste titularidad. En producción se verificó por consulta de sólo lectura una organización interna, 61 proveedores sin titular y cero configuraciones adicionales. Si aparece una configuración antes de aplicar, la propuesta se detiene para revisión.
-- Se conservan RLS, CAS, separación P/R, resultados manuales y los controles privados de archivo. La propuesta todavía no está autorizada ni aplicada. La publicación funcional depende de esa autorización; no se ejecutan las otras migraciones pendientes.
+- Se conservan RLS, CAS, separación P/R, resultados manuales y los controles privados de archivo. El usuario autorizó exclusivamente esta corrección; no se ejecutaron las otras migraciones pendientes.
+
+## Aplicación autorizada de la corrección de navegación y acceso
+
+Se aplicó únicamente el SQL del commit `7de5be8`, blob `6978db7fb73de4f75b6e88b9319d6433181ceec0`, en `yptrqowmviixlkrxjrqr`. Supabase lo registró como `20261107012723`, `supplier_audit_access_navigation`, exactamente una vez: 47 → 48 entradas, sin alterar ni retirar las versiones anteriores. El archivo propuesto `20261106230012` se renombró a esa versión real sin cambiar contenido ni huella SHA-256 `be34dab91bc2fb1ac0068d3c9f4b0ff84910fdb7b0bc68dceabcc4a7ac5ec896`.
+
+La comparación inmediata antes/después confirmó igualdad de conteos y huellas en las 17 tablas comprobadas: empresas, perfiles, RNCP, acciones RNCP, agenda, evaluaciones, documentos, versiones, referencias de archivo, objetos de Storage, workspace, cuatro tablas de permisos, notificaciones y cola general. Permanecieron 95 empresas, 61 proveedores, 45 perfiles, 226 RNCP, 544 documentos y versiones, 634 referencias de archivo y 642 objetos de Storage. No se crearon auditorías ni resultados de prueba, cuentas, asignaciones o comunicaciones.
+
+La huella de todas las políticas de `public` y `storage` permaneció idéntica, así como la de las definiciones y permisos de ejecución de las funciones ajenas a los tres objetos autorizados. Los cuerpos de los dos helpers coinciden con el SQL aprobado y no son ejecutables directamente por `anon` ni `authenticated`. El configurador retirado tampoco es ejecutable por esos roles. El análisis de seguridad no añadió hallazgos y retiró el aviso de ejecución del configurador anterior.
+
+Validación del commit funcional: 707 pruebas PASS y una prueba de archivos privados omitida en CI; typecheck, lint y build PASS. Los cuatro jobs de CI pasaron, incluidas las pruebas PostgreSQL efímeras de auditorías, RNCP y reemplazo documental. Las 21 comprobaciones aisladas de navegador pasaron en escritorio y móvil: selección de día, fecha precargada, sincronización de mes/año, periodos anteriores, consulta sin escritura, PDF/historial y ausencia del configurador. No sustituyen una prueba de programación con la sesión autorizada real.
