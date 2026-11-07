@@ -88,6 +88,7 @@ select public.test_assert((select count(*)=1 from public.controlled_document_ver
 select public.test_assert((select count(*)=3 from public.controlled_document_versions where document_id=:'new_doc'),'all historical versions retained');
 set request.jwt.claim.sub='10000000-0000-4000-8000-000000000002';
 select public.test_assert((select count(*)=0 from public.file_objects where id=(select (reservation->>'fileId')::uuid from upload_cases where label='initial')),'ordinary viewer cannot download superseded original');
+select public.test_assert((select count(*)=1 from public.controlled_document_versions where document_id=:'new_doc'),'ordinary viewer cannot enumerate restricted historical versions');
 select public.test_denied(format('select public.soft_delete_document(%L,''Unprivileged removal'')',:'new_doc'),'FORBIDDEN','internal reader cannot retire document');
 set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
 select public.test_assert((select count(*)=3 from public.file_objects where resource_id=:'new_doc'),'organization administrator can consult all preserved originals');

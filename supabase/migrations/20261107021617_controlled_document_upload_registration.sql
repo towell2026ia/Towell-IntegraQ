@@ -395,6 +395,9 @@ create policy iq_document_organization_scope on public.controlled_documents as r
  using(public.iq_document_scope_values(process_id,organization_id)) with check(public.iq_document_scope_values(process_id,organization_id));
 create policy iq_document_version_organization_scope on public.controlled_document_versions as restrictive for all to authenticated
  using(public.iq_document_record_scope(document_id)) with check(public.iq_document_record_scope(document_id));
+create policy iq_document_version_authorized_history on public.controlled_document_versions for select to authenticated
+ using(public.iq_document_record_scope(document_id) and exists(select 1 from public.controlled_documents d where d.id=document_id
+  and (public.has_process_document_role(d.process_id,'authorizer') or public.has_permission('documents.history',null,null,d.process_id,null,false,null))));
 create policy iq_document_lifecycle_organization_scope on public.document_lifecycle as restrictive for select to authenticated using(public.iq_document_record_scope(document_id));
 create policy iq_document_audit_organization_scope on public.document_audit_log as restrictive for select to authenticated using(public.iq_document_record_scope(document_id));
 create policy iq_document_workflow_organization_scope on public.document_workflow_events as restrictive for select to authenticated using(public.iq_document_record_scope(document_id));

@@ -46,6 +46,8 @@ grant all on all tables in schema public,storage to authenticated;
 alter table public.file_objects enable row level security;
 create policy existing_file_read on public.file_objects for select to authenticated using(true);
 create policy existing_file_insert on public.file_objects for insert to authenticated with check(uploaded_by=auth.uid() and public.is_administrator());
+create policy existing_file_update on public.file_objects for update to authenticated using(public.is_administrator()) with check(public.is_administrator());
+create policy existing_file_delete on public.file_objects for delete to authenticated using(public.is_administrator());
 alter table storage.objects enable row level security;
 create policy existing_storage_read on storage.objects for select to authenticated using(true);
 create policy existing_storage_insert on storage.objects for insert to authenticated with check(public.is_administrator() and owner_id=auth.uid()::text);
