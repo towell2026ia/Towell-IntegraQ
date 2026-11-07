@@ -443,4 +443,3 @@ revoke all on function public.soft_delete_document(uuid,text) from public,anon;
 grant execute on function public.soft_delete_document(uuid,text) to authenticated;
 notify pgrst,'reload schema';
 commit;
-

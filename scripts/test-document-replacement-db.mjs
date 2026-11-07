@@ -35,7 +35,7 @@ select public.register_controlled_document_upload('TEST-DOC','Original','P-TEST'
 select pg_sleep(${delay}); commit;`;
 function concurrent(query) {
   return new Promise(resolve => {
-    const p = spawn("psql", ["-X", "-v", "ON_ERROR_STOP=1", "-c", query]);
+    const p = spawn("psql", ["-X", "-qAt", "-v", "ON_ERROR_STOP=1", "-c", query]);
     let out = ""; p.stdout.on("data", x => out += x); p.stderr.on("data", x => out += x);
     p.on("close", status => resolve({ status, out }));
   });
@@ -49,3 +49,30 @@ assert.ok(outcomes.some(r => r.out.includes("DOCUMENT_CHANGED")), JSON.stringify
 assert.equal(sql("-Atc", `select count(*) from public.controlled_document_versions where document_id='${doc}' and status='current'`), "1");
 assert.equal(sql("-Atc", `select count(*) from public.controlled_document_versions where document_id='${doc}' and status='pending'`), "1");
 console.log("PASS: concurrent upload serialized; one pending candidate, one authorized current.");
+
+// Exercise the new reservation/receipt protocol from separate authenticated
+// transactions, not just the legacy registration path above.
+const modifier = "set local role authenticated;set local request.jwt.claim.sub='10000000-0000-4000-8000-000000000007';";
+const payload = "public.test_upload_payload('CONCURRENT-RESERVED')";
+const reserve = `begin;${modifier}select public.test_reserve(${payload})->>'fileId';select pg_sleep(0.2);commit;`;
+const reservations = await Promise.all([concurrent(reserve), concurrent(reserve)]);
+assert.ok(reservations.every(r => r.status === 0), JSON.stringify(reservations));
+const reservationIds = reservations.map(r => r.out.match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)?.[0]);
+assert.ok(reservationIds[0], JSON.stringify(reservations));
+assert.equal(reservationIds[0], reservationIds[1]);
+const fileId = reservationIds[0];
+assert.equal(sql("-Atc", `select count(*) from public.file_objects where id='${fileId}' and validity_status='upload_pending'`), "1");
+sql("-c", `begin;${modifier}insert into storage.objects(bucket_id,name,owner_id,metadata)
+ select bucket_id,object_path,auth.uid()::text,'{"size":100}'::jsonb from public.file_objects where id='${fileId}';commit;`);
+console.log("PASS: concurrent identical captures reuse one tracked reservation and one private object.");
+const commit = `begin;${modifier}select public.test_commit(${payload},jsonb_build_object('fileId','${fileId}'));select pg_sleep(0.2);commit;`;
+const receipts = await Promise.all([concurrent(commit), concurrent(commit)]);
+assert.ok(receipts.every(r => r.status === 0), JSON.stringify(receipts));
+const documentIds = receipts.map(r => r.out.match(/[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}/i)?.[0]);
+assert.ok(documentIds[0], JSON.stringify(receipts));
+assert.equal(documentIds[0], documentIds[1]);
+assert.equal(sql("-Atc", "select count(*) from public.controlled_documents where code='CONCURRENT-RESERVED'"), "1");
+assert.equal(sql("-Atc", `select count(*) from public.controlled_document_versions where document_id='${documentIds[0]}' and status='pending' and file_id='${fileId}'`), "1");
+assert.equal(sql("-Atc", `select count(*) from public.document_workflow_events where document_id='${documentIds[0]}'`), "2");
+assert.equal(sql("-Atc", `select count(*) from public.document_audit_log where document_id='${documentIds[0]}'`), "1");
+console.log("PASS: concurrent final retries return one receipt without duplicate document, version or audit events.");
