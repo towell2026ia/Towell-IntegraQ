@@ -18,7 +18,15 @@ sql("-f", "supabase/tests/document-replacement-fixture.sql");
 const migrations = readdirSync("supabase/migrations").filter(name => name.endsWith("_controlled_document_replacement.sql"));
 assert.equal(migrations.length, 1);
 sql("-f", join("supabase/migrations", migrations[0]));
+// Reproduce the exact authenticated INSERT RETURNING failure before the repair.
+sql("-c", `set role authenticated;set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+select public.test_denied($q$insert into public.file_objects(id,bucket_id,object_path,original_name,size_bytes,uploaded_by,resource_type,module_id,audience,process_id,category)
+values('30000000-0000-4000-8000-999999999999','integraq-private','synthetic-returning.pdf','Synthetic.pdf',100,auth.uid(),'controlled_document','documents','internal','P-TEST','visual-aid') returning id$q$,
+'iq_document_replacement_file_read','baseline reproduces exact INSERT RETURNING RLS error');`);
+const repairs = readdirSync("supabase/migrations").filter(name => name.endsWith("_controlled_document_upload_registration.sql")); assert.equal(repairs.length, 1);
+sql("-f", join("supabase/migrations", repairs[0]));
 console.log(sql("-f", "supabase/tests/document-replacement-test.sql"));
+console.log(sql("-f", "supabase/tests/document-upload-registration-test.sql"));
 
 const doc = sql("-Atc", "select id from public.controlled_documents where code='TEST-DOC'");
 const base = sql("-Atc", `select id from public.controlled_document_versions where document_id='${doc}' order by revision desc limit 1`);

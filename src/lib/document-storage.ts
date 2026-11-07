@@ -54,17 +54,7 @@ export interface EditDocumentMetadataInput {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function safeObjectName(fileName: string) {
-  return fileName
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(-140);
-}
-
-async function sha256For(file: File) {
+async function sha256For(file: Blob) {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(digest))
     .map((value) => value.toString(16).padStart(2, "0"))
@@ -89,6 +79,10 @@ function errorMessage(error: unknown) {
   if (message.includes("DOCUMENT_SCOPE_MISMATCH")) return "El código pertenece a otro proceso o tipo documental.";
   if (message.includes("REPLACEMENT_REQUIRED")) return "Es necesario cargar un reemplazo para recuperar este documento.";
   if (message.includes("REASON_REQUIRED")) return "El motivo es obligatorio.";
+  if (message.includes("INVALID_DOCUMENT_CODE")) return "Código debe contener sólo el identificador documental, por ejemplo AV-SGC-04. Escribe el nombre en Nombre oficial.";
+  if (message.includes("INVALID_UPLOAD_FILE")) return "Comprueba el nombre, formato y tamaño del archivo documental (máximo 50 MB).";
+  if (message.includes("INVALID_UPLOAD_REFERENCE")) return "No se pudo verificar la referencia privada de esta carga. No se modificó el expediente.";
+  if (message.includes("PGRST202") || message.includes("reserve_controlled_document_upload")) return "La reparación documental está pendiente de activación. No se subió ningún archivo.";
   if (message.includes("SUMMARY_REQUIRED")) return "El resumen de cambios es obligatorio.";
   if (message) return message;
   return "No fue posible almacenar el documento.";
@@ -116,39 +110,44 @@ export async function loadStoredControlledDocument(documentId: string) {
 
 export async function uploadPendingControlledDocument(input: ManualDocumentUploadInput): Promise<ControlledDocument> {
   if (input.file.size < 1 || input.file.size > maximumDocumentSizeBytes) throw new Error("Selecciona un archivo de hasta 50 MB.");
+  if (!input.replacementKind && !/^[A-Z0-9]+([-._/][A-Z0-9]+)*_?$/.test(input.code.trim().toUpperCase())) throw new Error("Código debe contener sólo el identificador documental. Captura el nombre por separado en Nombre oficial.");
   const databaseType = databaseDocumentTypeIds[input.documentTypeId];
   if (!databaseType) throw new Error("El tipo documental no tiene configuración de almacenamiento.");
-  const match = await inspectControlledDocumentCode(input.code, input.processId, input.documentTypeId);
-  if (match && !input.replacementKind) throw new Error("Ya existe un documento con ese código. Selecciona ¿Requiere reemplazo? para sustituirlo.");
-  if (input.replacementKind && (!match || !match.compatible || match.id !== input.expectedDocumentId || match.baseVersionId !== input.expectedBaseVersionId)) {
-    throw new Error("El expediente cambió o no corresponde al proceso y tipo seleccionados. Consulta el código nuevamente.");
-  }
-  if (match?.pending) throw new Error("El documento ya tiene una versión pendiente de autorización.");
   if (input.replacementKind && !input.changeReason?.trim()) throw new Error("El motivo es obligatorio.");
   const supabase = createClient();
   const { data: auth, error: authError } = await supabase.auth.getUser();
   if (authError || !auth.user) throw new Error("La sesión expiró. Inicia sesión nuevamente.");
-  const objectPath = [auth.user.id, "documents", crypto.randomUUID(), safeObjectName(input.file.name)].join("/");
-  const { error: uploadError } = await supabase.storage.from(privateBucket).upload(objectPath, input.file, {
-    contentType: input.file.type || "application/octet-stream", upsert: false,
-  });
-  if (uploadError) throw new Error(errorMessage(uploadError));
-  const { data: file, error: fileError } = await supabase.from("file_objects").insert({
-    bucket_id: privateBucket, object_path: objectPath, original_name: input.file.name,
-    mime_type: input.file.type || "application/octet-stream", size_bytes: input.file.size,
-    sha256: await sha256For(input.file), process_id: input.processId, module_id: "documents",
-    audience: "internal", resource_type: "controlled_document", resource_id: match?.id ?? null,
-    category: databaseType, uploaded_by: auth.user.id,
-  }).select("id").single();
-  // Never delete an uploaded original to compensate a metadata/network error.
-  if (fileError || !file) throw new Error(errorMessage(fileError));
-  const { data: documentId, error } = await supabase.rpc("register_controlled_document_upload", {
-    p_code: input.code.trim().toUpperCase(), p_title: match?.title ?? input.name.trim(),
-    p_process_id: input.processId, p_document_type_id: databaseType, p_file_id: file.id,
+  const sha256 = await sha256For(input.file);
+  const parameters = {
+    p_code: input.code.trim().toUpperCase(), p_title: input.name.trim(),
+    p_process_id: input.processId, p_document_type_id: databaseType,
     p_kind: input.replacementKind ?? "initial", p_reason: input.changeReason?.trim() || "Carga inicial",
     p_document_id: input.expectedDocumentId ?? null, p_base_version_id: input.expectedBaseVersionId ?? null,
+  };
+  // Reserve before uploading: every binary has a tracked, private reference, even
+  // if the network fails. Repeating the same capture resumes the same reservation.
+  const { data: reserved, error: reservationError } = await supabase.rpc("reserve_controlled_document_upload", {
+    ...parameters, p_file: { name: input.file.name, mime: input.file.type || "application/octet-stream", size: input.file.size, sha256 },
   });
-  if (error) throw new Error(errorMessage(error));
+  if (reservationError) throw new Error(errorMessage(reservationError));
+  const file = reserved as { fileId?: string; objectPath?: string; documentId?: string; state?: string } | null;
+  if (!file?.fileId || !file.objectPath || !file.objectPath.startsWith(`${auth.user.id}/documents/${input.processId}/`)) throw new Error("No se pudo verificar la reserva de carga. No se subió ningún archivo.");
+  if (file.state === "upload_registered" && file.documentId) return loadStoredControlledDocument(file.documentId);
+  const { error: uploadError } = await supabase.storage.from(privateBucket).upload(file.objectPath, input.file, {
+    contentType: input.file.type || "application/octet-stream", upsert: false,
+  });
+  if (uploadError) {
+    // An interrupted response or a retry can find the original already present.
+    // Verify its bytes, never overwrite or remove it to compensate an error.
+    const { data: existing, error: readError } = await supabase.storage.from(privateBucket).download(file.objectPath);
+    if (readError || !existing || existing.size !== input.file.size || await sha256For(existing) !== sha256) {
+      throw new Error(`${errorMessage(uploadError)} La carga conserva su referencia pendiente; reintenta con el mismo archivo.`);
+    }
+  }
+  const { data: documentId, error } = await supabase.rpc("register_controlled_document_upload", {
+    ...parameters, p_file_id: file.fileId,
+  });
+  if (error) throw new Error(`${errorMessage(error)} La carga permanece identificada; reintenta con el mismo archivo sin crear otro expediente.`);
   return loadStoredControlledDocument(String(documentId));
 }
 

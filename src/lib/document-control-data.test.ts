@@ -34,6 +34,15 @@ const baseSession: ActiveSession = {
 };
 
 describe("document control permissions", () => {
+  it("allows authenticated process modifiers to upload only with explicit module edit in production", () => {
+    const editor: ActiveSession = { ...baseSession, authUserId: "real-user", userType: "Usuario interno", workspaceMode: "production",
+      assignedProcessIds: ["P-35"], assignedModuleIds: ["documents"], documentAccess: [{ processId: "P-35", role: "modifier" }],
+      moduleActionPermissions: [{ moduleId: "documents", action: "view" }, { moduleId: "documents", action: "update" }] };
+    expect(getDocumentPermissions(editor,"P-35")).toMatchObject({ upload: true, version: true, submit: true, edit: false, delete: false, restore: false });
+    expect(getDocumentPermissions({ ...editor, moduleActionPermissions: [{ moduleId: "documents", action: "view" }] },"P-35").upload).toBe(false);
+    expect(getDocumentPermissions({ ...editor, workspaceMode: "demo" },"P-35").upload).toBe(false);
+    expect(getDocumentPermissions(editor,"P-SECRET").upload).toBe(false);
+  });
   it("gives administrators every document permission and version history", () => {
     expect(getDocumentPermissions(baseSession, "P-01")).toEqual({
       view: true,

@@ -203,7 +203,7 @@ export function getDocumentPermissions(
       delete: false,
       restore: false,
       masterList: assignment.permissions.view,
-    });
+    }, session, processId);
   }
 
   const inheritedAccess =
@@ -211,19 +211,27 @@ export function getDocumentPermissions(
     (session.authUserId ? undefined : getPositionDocumentAccess(session.positionId, processId));
   return inheritedAccess
     ? restrictDocumentMutationsToAdministrator(
-        getDocumentPermissionsForRole(inheritedAccess.role),
+        getDocumentPermissionsForRole(inheritedAccess.role), session, processId,
       )
     : getDocumentPermissionsForRole("viewer");
 }
 
 function restrictDocumentMutationsToAdministrator(
   permissions: DocumentPermissions,
+  session?: ActiveSession,
+  processId?: string,
 ): DocumentPermissions {
+  const role = session?.documentAccess?.find(access => access.processId === processId)?.role;
+  const explicitUpload = Boolean(session?.authUserId && session.workspaceMode === "production"
+    && session.userType === "Usuario interno" && (role === "modifier" || role === "authorizer")
+    && session.moduleActionPermissions?.some(permission => permission.moduleId === "documents" && permission.action === "update")
+    && (session.assignedModuleIds?.includes("documents") || session.moduleActionPermissions?.some(permission => permission.moduleId === "documents" && permission.action === "view")));
   return {
     ...permissions,
-    upload: false,
+    upload: explicitUpload,
     edit: false,
-    version: false,
+    version: explicitUpload,
+    submit: permissions.submit || explicitUpload,
     obsolete: false,
     delete: false,
     restore: false,
