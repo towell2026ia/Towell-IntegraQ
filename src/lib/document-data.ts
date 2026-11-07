@@ -145,3 +145,21 @@ export function getAuthorizedDocumentProcessIds(
 ) {
   return getDocumentProcessIds(processId).filter(canRead);
 }
+
+/** A PR code is an explicit process-document prefix, not an arbitrary text match. */
+export function isProcessDocumentCode(code: string) {
+  return /^PR(?:-|_|$)/i.test(code.trim());
+}
+
+export function getVisibleProcessDocuments<T extends { processId: string; code: string; lifecycle?: { isDeleted?: boolean } }>(
+  documents: T[],
+  processId: string,
+  canRead: (processId: string) => boolean,
+): T[] {
+  const authorizedIds = new Set(getAuthorizedDocumentProcessIds(processId, canRead));
+  return documents.filter(document =>
+    isProcessDocumentCode(document.code) &&
+    !document.lifecycle?.isDeleted &&
+    authorizedIds.has(document.processId),
+  );
+}
