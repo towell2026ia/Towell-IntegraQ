@@ -67,7 +67,7 @@ begin
    then raise exception using errcode='42501',message='INVALID_UPLOAD_REFERENCE'; end if;
   if reserved.validity_status='upload_registered' then
    perform public.iq_document_upload_scope(p_process_id,reserved.resource_id);
-   if not exists(select 1 from public.controlled_document_versions where document_id=reserved.resource_id and file_id=reserved.id)
+   if not exists(select 1 from public.controlled_document_versions v where v.document_id=reserved.resource_id and v.file_id=reserved.id)
     then raise exception 'INVALID_UPLOAD_REFERENCE'; end if;
   end if;
   return jsonb_build_object('fileId',reserved.id,'objectPath',reserved.object_path,'state',reserved.validity_status,
