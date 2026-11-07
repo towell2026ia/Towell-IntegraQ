@@ -260,13 +260,15 @@ begin
   select * into candidate from public.controlled_document_versions where id=requested_version_id and status='pending' for update;
   if candidate.id is null then raise exception 'La version no esta pendiente de autorizacion.'; end if;
   select * into actor from public.profiles where id=auth.uid() and status='active' and workspace_mode='production' and user_type in ('administrator','internal');
-  if actor.id is null or actor.organization_id is distinct from coalesce(doc.organization_id,(select organization_id from public.processes where id=doc.process_id))
+  if actor.id is null or not public.iq_document_record_scope(doc.id) or actor.organization_id is distinct from coalesce(doc.organization_id,(select organization_id from public.processes where id=doc.process_id))
     or not public.has_process_document_role(doc.process_id,'authorizer') then
     raise exception using errcode='42501',message='FORBIDDEN';
   end if;
   if decision='approve' then
     if (doc.deleted_at is not null or exists(select 1 from public.document_lifecycle where document_id=doc.id and is_deleted))
-      and candidate.replacement_kind is null then
+      and (candidate.replacement_kind is null or (candidate.replacement_kind<>'restoration'
+        and coalesce(candidate.submitted_at,'-infinity'::timestamptz)<=coalesce(doc.deleted_at,
+          (select deleted_at from public.document_lifecycle where document_id=doc.id),'-infinity'::timestamptz))) then
       raise exception using errcode='55000',message='REPLACEMENT_REQUIRED';
     end if;
     update public.controlled_document_versions set status='obsolete' where document_id=doc.id and status='current';
@@ -304,7 +306,7 @@ begin
   select * into candidate from public.controlled_document_versions where id=requested_version_id and status in ('draft','rejected') for update;
   if candidate.id is null then raise exception 'La version no esta disponible para envio.'; end if;
   select * into actor from public.profiles where id=auth.uid() and status='active' and workspace_mode='production' and user_type in ('administrator','internal');
-  if actor.id is null or actor.organization_id is distinct from coalesce(doc.organization_id,(select organization_id from public.processes where id=doc.process_id))
+  if actor.id is null or not public.iq_document_record_scope(doc.id) or actor.organization_id is distinct from coalesce(doc.organization_id,(select organization_id from public.processes where id=doc.process_id))
     or not public.has_module_permission('documents','update') or not public.has_process_document_role(doc.process_id,'modifier') then
     raise exception using errcode='42501',message='FORBIDDEN';
   end if;

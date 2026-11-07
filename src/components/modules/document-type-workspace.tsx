@@ -11,7 +11,7 @@ import { DocumentPreviewViewer, type DocumentPreviewViewerHandle } from "@/compo
 import { isSpreadsheetFileName } from "@/lib/spreadsheet-preview";
 import type { ProcessCatalogItem } from "@/lib/configuration-data";
 import {
-  getDocumentPermissions, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
+  getDocumentPermissions, getDocumentPreviewVersions, documentAdvancedActionsEnabled, getWorkingVersion, obsoleteControlledDocument,
   rejectDocumentVersion, softDeleteControlledDocument,
   submitDocumentVersion, type ControlledDocument, type ControlledDocumentStatus,
   type DocumentAuditEventType, type DocumentPermissions,
@@ -75,7 +75,7 @@ export function DocumentTypeWorkspace({
   const visibleDocuments = documents.filter((document) => getDocumentPermissions(session, document.processId).view);
   const selected = (id: string | null) => visibleDocuments.find((item) => item.id === id) ?? null;
   const selectedPreview = selected(previewId);
-  const preview = selectedPreview && !getDocumentPermissions(session, selectedPreview.processId).validate ? { ...selectedPreview, versions: selectedPreview.versions.filter(version => version.status === "current") } : selectedPreview;
+  const preview = selectedPreview ? { ...selectedPreview, versions: getDocumentPreviewVersions(selectedPreview, session) } : null;
   const history = selected(historyId);
   const rejecting = selected(rejectId);
   const editing = selected(editId);

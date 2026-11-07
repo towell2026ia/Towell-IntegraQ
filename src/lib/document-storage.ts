@@ -133,6 +133,7 @@ export async function uploadPendingControlledDocument(input: ManualDocumentUploa
   const file = reserved as { fileId?: string; objectPath?: string; documentId?: string; state?: string } | null;
   if (!file?.fileId || !file.objectPath || !file.objectPath.startsWith(`${auth.user.id}/documents/${input.processId}/`)) throw new Error("No se pudo verificar la reserva de carga. No se subió ningún archivo.");
   if (file.state === "upload_registered" && file.documentId) return loadStoredControlledDocument(file.documentId);
+  if (file.state !== "upload_pending") throw new Error("La reserva no está pendiente de carga. No se subió ningún archivo.");
   const { error: uploadError } = await supabase.storage.from(privateBucket).upload(file.objectPath, input.file, {
     contentType: input.file.type || "application/octet-stream", upsert: false,
   });
@@ -320,6 +321,7 @@ type StoredDocumentRow = {
     updated_at: string;
     authorized_at: string | null;
     rejection_reason: string | null;
+    uploaded_by: string | null;
     uploader: RelatedProfile;
     validator: RelatedProfile;
     file: RelatedFile;
@@ -386,6 +388,7 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
           updated_at,
           authorized_at,
           rejection_reason,
+          uploaded_by,
           uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
           validator:profiles!controlled_document_versions_validator_id_fkey(full_name),
           file:file_objects!controlled_document_versions_file_id_fkey(
@@ -464,6 +467,7 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
             status: version.status,
             fileName: version.file_name,
             uploadedBy: firstRelation(version.uploader)?.full_name ?? "Carga documental masiva",
+            uploadedById: version.uploaded_by ?? undefined,
             validator: validatorName,
             modifiedAt: version.updated_at,
             changeReason: version.change_reason,

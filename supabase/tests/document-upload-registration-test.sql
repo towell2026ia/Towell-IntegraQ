@@ -101,6 +101,35 @@ select id as restored from public.controlled_document_versions where document_id
 select public.review_document_version(:'restored','approve');
 select public.test_assert((select deleted_at is null and deletion_reason='Administrative isolated retirement' from public.controlled_documents where id=:'new_doc'),'approved recovery preserves original retirement reason');
 select public.test_assert((select count(*)=3 from public.file_objects where resource_id=:'new_doc'),'recovery reuses preserved file without creating another binary');
+-- Reject a newly reserved revision through the same workflow, leaving current intact.
+begin;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000007',true);
+insert into upload_cases values('reject-reserved',public.test_upload_payload('AV-TEST-04','revision',:'new_doc',:'restored'),null);
+update upload_cases set reservation=public.test_reserve(payload) where label='reject-reserved';
+insert into storage.objects(bucket_id,name,owner_id,metadata) select 'integraq-private',reservation->>'objectPath',auth.uid()::text,'{"size":100}' from upload_cases where label='reject-reserved';
+select public.test_commit(payload,reservation) from upload_cases where label='reject-reserved';
+select id as reject_reserved from public.controlled_document_versions where document_id=:'new_doc' and status='pending' \gset
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000008',true);
+select public.review_document_version(:'reject_reserved','reject','Complete the original documentation');
+select public.test_assert((select status='rejected' from public.controlled_document_versions where id=:'reject_reserved'),'reserved revision can be rejected with traceability');
+select public.test_assert((select status='current' from public.controlled_document_versions where id=:'restored'),'rejecting a reserved revision preserves the authorized original');
+rollback;
+
+-- Retired identity is replaced through a new reserved file, not a duplicate code.
+select public.soft_delete_document(:'new_doc','Retire for an explicitly requested replacement');
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000007';
+select public.test_denied(format('select public.restore_document(%L)',:'new_doc'),'FORBIDDEN','process modifier cannot perform administrative recovery');
+select public.test_denied(format('select public.test_reserve(public.test_upload_payload(''AV-TEST-04'',''revision'',%L,%L))',:'new_doc',:'restored'),'FORBIDDEN','process modifier cannot reactivate a retired identity by uploading');
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+insert into upload_cases values('retired',public.test_upload_payload('AV-TEST-04','revision',:'new_doc',:'restored'),null);
+update upload_cases set reservation=public.test_reserve(payload) where label='retired';
+insert into storage.objects(bucket_id,name,owner_id,metadata) select 'integraq-private',reservation->>'objectPath',auth.uid()::text,'{"size":100}' from upload_cases where label='retired';
+select public.test_commit(payload,reservation) from upload_cases where label='retired';
+select id as retired_replacement from public.controlled_document_versions where document_id=:'new_doc' and status='pending' \gset
+select public.test_assert((select deleted_at is not null from public.controlled_documents where id=:'new_doc'),'reserved replacement does not expose the retired document before approval');
+select public.review_document_version(:'retired_replacement','approve');
+select public.test_assert((select count(*)=1 from public.controlled_documents where code='AV-TEST-04'),'retired replacement preserves one document identity');
+select public.test_assert((select count(*)=2 from public.document_audit_log where document_id=:'new_doc' and event_type='DOCUMENT_DELETED'),'both retirements remain in the audit history');
 with removed as(delete from public.file_objects where resource_id=:'new_doc' returning id) select public.test_assert((select count(*)=0 from removed),'raw physical file deletion denied even to administrator');
 with removed as(delete from storage.objects where name=(select reservation->>'objectPath' from upload_cases where label='revision') returning name) select public.test_assert((select count(*)=0 from removed),'physical Storage deletion denied for a document original');
 with changed as(update storage.objects set metadata='{"size":1}' where name=(select reservation->>'objectPath' from upload_cases where label='revision') returning name) select public.test_assert((select count(*)=0 from changed),'Storage upsert cannot overwrite the preserved original');
@@ -113,6 +142,7 @@ select public.test_assert((select count(*)=0 from public.file_objects where reso
 select public.test_assert((select count(*)=0 from public.document_lifecycle where document_id=:'new_doc'),'administrator B cannot read foreign retirement metadata');
 select public.test_assert((select count(*)=0 from public.document_audit_log where document_id=:'new_doc'),'administrator B cannot read foreign documentary history');
 select public.test_assert((select count(*)=0 from public.document_workflow_events where document_id=:'new_doc'),'administrator B cannot read foreign workflow events');
+select public.test_assert((select count(*)=0 from storage.objects where name=(select reservation->>'objectPath' from upload_cases where label='retired')),'administrator B cannot read the foreign private object');
 select public.test_denied(format('select public.soft_delete_document(%L,''Foreign retirement'')',:'new_doc'),'FORBIDDEN','administrator B cannot retire A');
 select public.test_denied(format('select public.restore_document(%L)',:'new_doc'),'FORBIDDEN','administrator B cannot recover A');
 set request.jwt.claim.sub='10000000-0000-4000-8000-000000000012';
@@ -135,6 +165,19 @@ select public.test_assert((select count(*)=0 from public.controlled_documents wh
 insert into storage.objects(bucket_id,name,owner_id,metadata) select 'integraq-private',reservation->>'objectPath',auth.uid()::text,'{"size":100}' from upload_cases where label='interrupted';
 select public.test_commit(payload,reservation) from upload_cases where label='interrupted';
 select public.test_assert((select count(*)=1 from public.controlled_documents where code='INTERRUPTED'),'retry completes the same tracked upload once');
+select v.id as interrupted_version from public.controlled_document_versions v join public.controlled_documents d on d.id=v.document_id where d.code='INTERRUPTED' and v.status='pending' \gset
+reset role;
+begin;
+update public.organizations set active=false where id='00000000-0000-4000-8000-000000000001';
+set local role authenticated;
+select set_config('request.jwt.claim.sub','10000000-0000-4000-8000-000000000008',true);
+select public.test_denied(format('select public.review_document_version(%L,''approve'')',:'interrupted_version'),'FORBIDDEN','an inactive organization cannot authorize by a known version ID');
+rollback;
+set role authenticated;
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+select public.soft_delete_document((select id from public.controlled_documents where code='INTERRUPTED'),'Retire before authorizing the old pending version');
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000008';
+select public.test_denied(format('select public.review_document_version(%L,''approve'')',:'interrupted_version'),'REPLACEMENT_REQUIRED','approval of an older pending version cannot silently undo a retirement');
 reset role;
 -- Inject a failure after parent creation to exercise transaction rollback, not a mock.
 create function public.fixture_fail_document_version() returns trigger language plpgsql as $$ begin
@@ -152,4 +195,21 @@ select public.test_assert((select validity_status='upload_pending' and resource_
 reset role;
 drop trigger fixture_document_version_failure on public.controlled_document_versions;
 select public.test_assert(not exists(select 1 from storage.objects o where o.name like '%/documents/P-35/%' and not exists(select 1 from public.file_objects f where f.bucket_id=o.bucket_id and f.object_path=o.name)),'no uploaded binary is orphaned after failed or successful attempts');
-select public.test_assert((select count(*)=3 from public.file_objects where resource_id=:'new_doc'),'versions and recovery never erase historical files');
+select public.test_assert((select count(*)=4 from public.file_objects where resource_id=:'new_doc'),'versions recovery and retired replacement never erase historical files');
+set role authenticated;
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000006';
+select public.test_denied($q$select public.test_reserve(public.test_upload_payload('INACTIVE-WRITE'))$q$,'FORBIDDEN','inactive administrator cannot reserve an upload');
+reset role;
+set role authenticated;
+set request.jwt.claim.sub='10000000-0000-4000-8000-000000000001';
+insert into public.file_objects(id,bucket_id,object_path,original_name,size_bytes,uploaded_by,resource_type,module_id,audience)
+ values('30000000-0000-4000-8000-888888888888','integraq-private',auth.uid()::text||'/other-module/unrelated.pdf','Unrelated synthetic file.pdf',100,auth.uid(),'unrelated_test_resource','other-module','internal') returning id;
+insert into storage.objects(bucket_id,name,owner_id,metadata) values('integraq-private',auth.uid()::text||'/other-module/unrelated.pdf',auth.uid()::text,'{"size":100}');
+with changed as(update public.file_objects set original_name='Updated unrelated file.pdf' where id='30000000-0000-4000-8000-888888888888' returning id)
+ select public.test_assert((select count(*)=1 from changed),'unrelated file metadata keeps its existing write permission');
+with changed as(update storage.objects set metadata='{"size":101}' where name=auth.uid()::text||'/other-module/unrelated.pdf' returning name)
+ select public.test_assert((select count(*)=1 from changed),'unrelated Storage objects keep their existing write permission');
+reset role;
+set role anon;
+select public.test_denied($q$select public.reserve_controlled_document_upload('ANON','Synthetic','P-35','visual-aid','{}','initial','Reason',null,null)$q$,'permission denied','anonymous caller cannot invoke the reservation RPC');
+reset role;

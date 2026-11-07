@@ -29,6 +29,7 @@ export interface ControlledDocumentVersion {
   status: ControlledDocumentStatus;
   fileName: string;
   uploadedBy: string;
+  uploadedById?: string;
   validator: string;
   modifiedAt: string;
   changeReason: string;
@@ -236,6 +237,16 @@ function restrictDocumentMutationsToAdministrator(
     delete: false,
     restore: false,
   };
+}
+
+export function getDocumentPreviewVersions(document: ControlledDocument, session: ActiveSession) {
+  const permissions = getDocumentPermissions(session, document.processId);
+  if (!permissions.view) return [];
+  if (permissions.validate) return document.versions;
+  return document.versions.filter(version => version.status === "current" || Boolean(
+    permissions.upload && session.authUserId && version.uploadedById === session.authUserId
+    && ["draft", "pending", "rejected"].includes(version.status),
+  ));
 }
 
 export function getDocumentPermissionsForRole(

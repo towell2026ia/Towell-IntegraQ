@@ -6,6 +6,7 @@ import {
   buildInitialControlledDocuments,
   createDocumentRevision,
   getDocumentPermissions,
+  getDocumentPreviewVersions,
   obsoleteControlledDocument,
   rejectDocumentVersion,
   restoreControlledDocument,
@@ -42,6 +43,13 @@ describe("document control permissions", () => {
     expect(getDocumentPermissions({ ...editor, moduleActionPermissions: [{ moduleId: "documents", action: "view" }] },"P-35").upload).toBe(false);
     expect(getDocumentPermissions({ ...editor, workspaceMode: "demo" },"P-35").upload).toBe(false);
     expect(getDocumentPermissions(editor,"P-SECRET").upload).toBe(false);
+    const document = { id: "doc", processId: "P-35", versions: [
+      { id: "current", status: "current", uploadedById: "another-user" },
+      { id: "own", status: "pending", uploadedById: "real-user" },
+      { id: "other", status: "pending", uploadedById: "another-user", uploadedBy: editor.name },
+    ] } as Parameters<typeof getDocumentPreviewVersions>[0];
+    expect(getDocumentPreviewVersions(document, editor).map(v => v.id)).toEqual(["current","own"]);
+    expect(getDocumentPreviewVersions(document, { ...editor, authUserId: "different-user" }).map(v => v.id)).toEqual(["current"]);
   });
   it("gives administrators every document permission and version history", () => {
     expect(getDocumentPermissions(baseSession, "P-01")).toEqual({

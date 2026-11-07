@@ -54,6 +54,10 @@ describe("reserved controlled document upload", () => {
   mock.rpc.mockResolvedValueOnce({ data: { ...reservation, objectPath: "another/documents/P-35/file-1/new.png" } });
   await expect(uploadPendingControlledDocument(input())).rejects.toThrow("reserva"); expect(mock.upload).not.toHaveBeenCalled();
  });
+ it("rejects unknown reservation states before uploading", async () => {
+  mock.rpc.mockResolvedValueOnce({ data: { ...reservation, state: "unexpected_state" } });
+  await expect(uploadPendingControlledDocument(input())).rejects.toThrow("no está pendiente"); expect(mock.upload).not.toHaveBeenCalled();
+ });
  it("requires a replacement reason before reservation", async () => {
   await expect(uploadPendingControlledDocument({ ...input(), replacementKind: "revision" })).rejects.toThrow("motivo"); expect(mock.rpc).not.toHaveBeenCalled();
  });
