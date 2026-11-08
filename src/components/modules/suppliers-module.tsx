@@ -27,6 +27,7 @@ import { useSupplierAudits } from "@/hooks/use-supplier-audits";
 import { SupplierAuditCalendar, SupplierAuditDialog, SupplierAuditProfile, SupplierAuditResults, type AuditFocus } from "./supplier-audit-calendar";
 import { rncpIdFromSearch } from "@/lib/rncp/link";
 import { RncpMatrixDashboard } from "./rncp-matrix-dashboard";
+import { NewSupplierDialog } from "./new-supplier-dialog";
 import { saveExternalCompany, type ExternalCompany } from "@/lib/external-company-data";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import {
@@ -52,8 +53,10 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const [editingRncpId, setEditingRncpId] = useState<string | undefined>();
   const [supplierNotice, setSupplierNotice] = useState("");
   const [supplierError, setSupplierError] = useState("");
+  const [createSupplierOpen, setCreateSupplierOpen] = useState(false);
   const [auditFocus, setAuditFocus] = useState<AuditFocus | null>(null);
   const demo = isDemoSession(session);
+  const canCreateSupplier = isAdministrator(session) && !demo;
   const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
   const companyDirectory = useExternalCompanies();
@@ -112,12 +115,19 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
           <h2>Gestión de calidad de proveedores</h2>
           <p>RNCP, calendario de auditorías, evaluaciones y seguimiento por proveedor.</p>
         </div>
-        {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}>
-          <Plus size={17} /> Nuevo RNCP
-        </button> : null}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {canCreateSupplier ? <button className="button button-primary" type="button" onClick={() => { setSupplierError(""); setSupplierNotice(""); setCreateSupplierOpen(true); }}><Plus size={17} /> Nuevo proveedor</button> : null}
+          {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}><Plus size={17} /> Nuevo RNCP</button> : null}
+        </div>
       </section>
       {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
       {supplierError ? <p role="alert">{supplierError}</p> : null}
+      {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
+        companyDirectory.setCompanies(companies);
+        setSelectedId(company.id); setQuery(""); setView("directory"); setCreateSupplierOpen(false);
+        setSupplierNotice(`${company.code} · ${company.name} se registró correctamente.`);
+        void auditDirectory.refresh();
+      }} /> : null}
 
       <section className="metric-grid" aria-label="Resumen de proveedores">
         <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={suppliers.length} tone="neutral" />
@@ -170,7 +180,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
                 <div><FileSpreadsheet size={17} /><span><strong>Compras capturadas manualmente</strong><small>La efectividad se actualizará contra RNCP y compras del periodo.</small></span></div>
               </div>
             </section>}
-          </div> : <div className="party-detail-panel"><div className="access-empty"><ShieldCheck size={24} /><h3>Sin proveedores activos</h3><p>Un administrador puede registrar el primero en Usuarios y acceso → Empresas externas.</p></div></div>}
+          </div> : <div className="party-detail-panel"><div className="access-empty"><ShieldCheck size={24} /><h3>Sin proveedores activos</h3><p>{canCreateSupplier ? "Usa Nuevo proveedor para registrar el primero." : "Solicita el alta del proveedor a un administrador."}</p></div></div>}
         </section>
       ) : null}
 
