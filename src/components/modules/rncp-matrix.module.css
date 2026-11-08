@@ -24,3 +24,11 @@
 @media(max-width:650px) { .panel { padding: 10px; }.topRow,.bottomRow { grid-template-columns: 1fr; }.kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }.slicers { order: -1; }.topRow .chart { min-height: 300px; }.tableFilters,.formGrid { grid-template-columns: 1fr; }.alert { flex-direction: column; }.modalBody { padding: 12px; }.toolbar .buttons { gap: 6px; } }
 
 .slicers h4,.slicers button,.slicers .dayFilter,.slicers .srOnlyLabel { grid-column: 1 / -1; }
+
+.originalPanel,.originalViewer { min-width: 0; max-width: 100%; }
+.originalPanel { display: grid; gap: 12px; }
+.originalIdentity { overflow-wrap: anywhere; font-size: .85em; color: #566761; }
+.originalViewer { display: grid; gap: 10px; }
+.reportModal { overflow-x: hidden; }
+
+.reportModal:global(.quality-modal) { max-width: min(1100px,calc(100vw - 30px)); width: min(1100px,calc(100vw - 30px)); }

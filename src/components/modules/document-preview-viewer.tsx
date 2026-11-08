@@ -17,6 +17,8 @@ import {
   useState,
 } from "react";
 import type { PDFDocumentProxy } from "pdfjs-dist";
+import { ContinuousPdfPages } from "./continuous-pdf-pages";
+import continuousStyles from "./continuous-pdf-pages.module.css";
 
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { getControlledDocumentDownloadUrl } from "@/lib/document-storage";
@@ -33,6 +35,7 @@ interface DocumentPreviewViewerProps {
   version: ControlledDocumentVersion;
   onReadyChange: (ready: boolean) => void;
   sourceUrl?: () => Promise<string | null>;
+  pdfLayout?: "single-page" | "continuous";
 }
 
 type PreviewKind = "pdf" | "document" | "spreadsheet" | "image";
@@ -62,7 +65,7 @@ function triggerDownload(blob: Blob, fileName: string) {
 export const DocumentPreviewViewer = forwardRef<
   DocumentPreviewViewerHandle,
   DocumentPreviewViewerProps
->(function DocumentPreviewViewer({ code, version, onReadyChange, sourceUrl }, ref) {
+>(function DocumentPreviewViewer({ code, version, onReadyChange, sourceUrl, pdfLayout = "single-page" }, ref) {
   const [kind, setKind] = useState<PreviewKind | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -157,7 +160,7 @@ export const DocumentPreviewViewer = forwardRef<
   }, [onReadyChange, sourceUrl, version]);
 
   useEffect(() => {
-    if (!pdfDocument || !pdfCanvasRef.current) return;
+    if (pdfLayout !== "single-page" || !pdfDocument || !pdfCanvasRef.current) return;
     let active = true;
     setPdfRendering(true);
     void pdfDocument.getPage(pdfPage).then(async (page) => {
@@ -179,7 +182,7 @@ export const DocumentPreviewViewer = forwardRef<
     return () => {
       active = false;
     };
-  }, [pdfDocument, pdfPage, pdfZoom]);
+  }, [pdfDocument, pdfPage, pdfZoom, pdfLayout]);
 
   async function capturePreview() {
     const surface = previewSurfaceRef.current;
@@ -242,7 +245,7 @@ export const DocumentPreviewViewer = forwardRef<
   const sheetPage = selectedSheet && spreadsheetUtils ? getSpreadsheetPage(selectedSheet, spreadsheetUtils, sheetRowStart, sheetColumnStart) : null;
 
   return (
-    <section className="secure-document-viewer" aria-busy={loading}>
+    <section className={`secure-document-viewer ${pdfLayout === "continuous" ? continuousStyles.continuousViewer : ""}`} aria-busy={loading}>
       {loading ? (
         <div className="secure-document-state"><LoaderCircle className="spin" size={28} /><strong>Generando vista de solo lectura</strong><span>El archivo original permanece protegido.</span></div>
       ) : null}
@@ -253,14 +256,15 @@ export const DocumentPreviewViewer = forwardRef<
         <>
           {kind === "pdf" && pdfDocument ? (
             <nav className="secure-preview-navigation" aria-label="Páginas del PDF">
+              {pdfLayout === "continuous" ? <span>{pdfDocument.numPages} páginas · Desplazamiento vertical</span> : <>
               <button type="button" disabled={pdfPage <= 1} onClick={() => setPdfPage((page) => Math.max(1, page - 1))}><ChevronLeft size={15} /> Anterior</button>
               <span>Página {pdfPage} de {pdfDocument.numPages}</span>
-              <button type="button" disabled={pdfPage >= pdfDocument.numPages} onClick={() => setPdfPage((page) => Math.min(pdfDocument.numPages, page + 1))}>Siguiente <ChevronRight size={15} /></button>
+              <button type="button" disabled={pdfPage >= pdfDocument.numPages} onClick={() => setPdfPage((page) => Math.min(pdfDocument.numPages, page + 1))}>Siguiente <ChevronRight size={15} /></button></>}
               <button type="button" onClick={() => setPdfZoom((value) => Math.max(.5, value - .25))}><ZoomOut size={15} /> Zoom -</button>
               <span>{Math.round(pdfZoom * 100)}%</span>
               <button type="button" onClick={() => setPdfZoom((value) => Math.min(3, value + .25))}><ZoomIn size={15} /> Zoom +</button>
-              <button type="button" onClick={() => setPdfZoom(1.45)}><Maximize2 size={15} /> Ajustar ancho</button>
-              <button type="button" onClick={() => setPdfZoom(.85)}><Maximize2 size={15} /> Ajustar página</button>
+              <button type="button" onClick={() => setPdfZoom(pdfLayout === "continuous" ? 1 : 1.45)}><Maximize2 size={15} /> Ajustar ancho</button>
+              {pdfLayout === "single-page" ? <button type="button" onClick={() => setPdfZoom(.85)}><Maximize2 size={15} /> Ajustar página</button> : null}
             </nav>
           ) : null}
           {kind !== "spreadsheet" && version.previewStatus && version.previewStatus !== "not_required" ? <div className={`document-preview-processing ${version.previewStatus}`}><strong>{version.previewStatus === "ready" ? "Preview PDF normalizado" : version.previewStatus === "processing" ? "Procesando preview" : version.previewStatus === "error" ? "Error de conversión" : "Sin procesar"}</strong><span>{version.previewStatus === "ready" ? "La orientación y paginación provienen del motor documental." : version.previewError || "Se muestra una vista provisional. El original permanece disponible."}</span></div> : null}
@@ -279,7 +283,7 @@ export const DocumentPreviewViewer = forwardRef<
           </nav> : null}
           <div className={`secure-preview-viewport secure-preview-${kind}`}>
             <div className="secure-preview-surface" ref={previewSurfaceRef}>
-              {kind === "pdf" ? <canvas aria-label={`Página ${pdfPage}`} className={pdfRendering ? "rendering" : ""} ref={pdfCanvasRef} /> : null}
+              {kind === "pdf" && pdfDocument ? pdfLayout === "continuous" ? <ContinuousPdfPages document={pdfDocument} zoom={pdfZoom} /> : <canvas aria-label={`Página ${pdfPage}`} className={pdfRendering ? "rendering" : ""} ref={pdfCanvasRef} /> : null}
               {kind === "document" ? <article className="secure-docx-content" dangerouslySetInnerHTML={{ __html: documentHtml }} /> : null}
               {kind === "spreadsheet" && sheetPage ? (
                 <div className="secure-sheet-content">

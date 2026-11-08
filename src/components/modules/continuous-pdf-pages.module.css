@@ -1,0 +1,11 @@
+.continuousViewer { min-width: 0; max-width: 100%; }
+.continuousViewer :global(.secure-preview-navigation) { flex-wrap: wrap; gap: 8px; padding: 10px; }
+.continuousViewer :global(.secure-preview-navigation button),.continuousViewer :global(.secure-preview-navigation span) { font-size: 12px; }
+.continuousViewer :global(.secure-preview-viewport) { height: min(60dvh,800px); max-height: 60dvh; overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.continuousViewer :global(.secure-preview-surface) { width: 100%; min-width: 0; box-shadow: none; background: transparent; }
+.pages { width: 100%; min-width: 0; display: grid; gap: 18px; }
+.page { width: max-content; min-width: 100%; margin: 0; padding: 0; background: #fff; box-shadow: 0 2px 8px #0002; }
+.canvas { display: block; max-width: none !important; margin: 0 auto; }
+.canvas[hidden] { display: none; }
+.page figcaption { padding: 8px; text-align: center; font-size: 12px; color: #566761; }
+@media(max-width:650px) { .continuousViewer :global(.secure-preview-viewport) { padding: 6px; } }
