@@ -25,6 +25,7 @@ import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import { useSupplierAudits } from "@/hooks/use-supplier-audits";
 import { SupplierAuditCalendar, SupplierAuditDialog, SupplierAuditProfile, SupplierAuditResults, type AuditFocus } from "./supplier-audit-calendar";
+import { supplierRncpEffectiveness } from "@/lib/rncp/effectiveness";
 import { rncpIdFromSearch } from "@/lib/rncp/link";
 import { RncpMatrixDashboard } from "./rncp-matrix-dashboard";
 import { NewSupplierDialog } from "./new-supplier-dialog";
@@ -85,6 +86,9 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
     filteredSuppliers.find((supplier) => supplier.id === selectedId) ??
     filteredSuppliers[0] ??
     suppliers[0];
+
+  const effectivenessDetails = supplierRncpEffectiveness(activeRncp, selected?.id ?? "");
+  const effectivenessUnavailable = !demo && (rncpDirectory.loading || Boolean(rncpDirectory.error));
 
   const deactivateSupplier = async () => {
     if (!isAdministrator(session) || demo || !selected) return;
@@ -167,7 +171,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
               <div><small>RNCP</small><strong>{selected.rncpTotal}</strong></div>
               <div><small>Cerrados</small><strong>{selected.rncpClosed}</strong></div>
               <div><small>Tardíos</small><strong>{selected.rncpLate}</strong></div>
-              <div><small>Efectividad</small><strong>{selected.effectiveness === null ? "Pendiente" : `${selected.effectiveness}%`}</strong></div>
+              <div><small>Efectividad RNCP</small><strong>{effectivenessUnavailable ? rncpDirectory.loading ? "Consultando RNCP…" : "No disponible" : selected.effectiveness === null ? "Sin RNCP evaluables" : `${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 }).format(selected.effectiveness)} %`}</strong>{!demo && !effectivenessUnavailable ? <><small>{effectivenessDetails.closed} cerrados / ({effectivenessDetails.closed} cerrados + {effectivenessDetails.late} tardíos) · {effectivenessDetails.evaluable} evaluables</small><small>F-CA-24: {effectivenessDetails.historicalClosed} Cerrado y {effectivenessDetails.historicalLate} Tarde. «Cerrado» histórico no acredita cierre puntual.</small><small>Nuevos cerrados con respuesta completa validada: {effectivenessDetails.nativeClosed} dentro de plazo y {effectivenessDetails.nativeLate} fuera de plazo. {effectivenessDetails.excluded} RNCP no evaluables excluidos.</small></> : null}</div>
             </div>
             {!demo ? <SupplierAuditProfile supplierId={selected.id} directory={auditDirectory} reports={activeRncp} onOpen={setAuditFocus} onRncp={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }} /> : <section className="party-detail-section">
               <div className="section-title-row"><h4>Clasificación de auditoría</h4><span className={selected.auditRequired ? "quality-state warning" : "quality-state success"}>{selected.auditRequired ? "Auditable" : "Alto desempeño"}</span></div>
@@ -671,7 +675,7 @@ function toSupplierQualityRecord(company: ExternalCompany, reports: RncpReport[]
     rncpClosed: companyReports.filter((report) => report.status === "closed").length,
     rncpLate: companyReports.filter((report) => report.late).length,
     rncpOpen: companyReports.filter((report) => report.status === "submitted" || report.status === "in_progress").length,
-    effectiveness: null,
+    effectiveness: supplierRncpEffectiveness(companyReports, company.id).percent,
     auditRequired: true,
     nextAudit: null,
   };

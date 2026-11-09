@@ -43,6 +43,10 @@ export interface RncpResponseAction {
 }
 
 export interface RncpReport {
+  historicalStatus?: string;
+  completeSubmittedAt?: string;
+  validatedAt?: string;
+  validationOutcome?: "pending" | "accepted" | "rejected";
   origin?: "native" | "historical" | "legacy";
   notifiedAt?: string;
   responseDeadline?: string;
