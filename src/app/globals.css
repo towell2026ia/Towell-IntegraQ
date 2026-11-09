@@ -1856,6 +1856,13 @@ button:disabled {
 
 .organization-section,
 .documents-detail-section { padding: 18px 22px; border-bottom: 1px solid var(--line); }
+.document-process-file-list { display: grid; gap: 8px; margin-top: 12px; }
+.document-process-file-list article { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.document-process-file-list article > span { display: grid; min-width: 0; gap: 4px; }
+.document-process-file-list strong { overflow-wrap: anywhere; font-size: calc(10px * var(--app-text-scale, 1)); }
+.document-process-file-list small { color: var(--muted); overflow-wrap: anywhere; font-size: calc(8px * var(--app-text-scale, 1)); }
+.document-process-file-list button { flex: 0 0 auto; }
+@media (max-width: 600px) { .document-process-file-list article { align-items: stretch; flex-direction: column; } }
 
 .position-process-list,
 .process-position-list,
