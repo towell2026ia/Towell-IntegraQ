@@ -12,6 +12,8 @@ type ReportRow = {
   notified_at?: string | null;
   response_deadline?: string | null;
   complete_submitted_at?: string | null;
+  validated_at?: string | null;
+  validation_outcome?: "pending" | "accepted" | "rejected" | null;
   response_requirements?: { containment?: boolean; documents?: string[] } | null;
   id: string;
   folio: string;
@@ -142,6 +144,8 @@ function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseActi
     reason: audit.reason ?? undefined,
   }));
   return {
+    historicalStatus: row.historical_status ?? undefined, completeSubmittedAt: row.complete_submitted_at ?? undefined,
+    validatedAt: row.validated_at ?? undefined, validationOutcome: row.validation_outcome ?? undefined,
     origin: row.source_kind ?? "legacy", notifiedAt: row.notified_at ?? undefined,
     responseDeadline: row.response_deadline ?? undefined, responseRequirements: row.response_requirements ?? undefined,
     id: row.id, folio: row.folio, supplierId: row.supplier_id ?? undefined,
