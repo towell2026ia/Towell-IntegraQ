@@ -1,5 +1,7 @@
 import { emptyMatrixFilters, materialColors, statusColors, stateLabels, supplierKey, type MatrixDashboard, type MatrixFilters, type MatrixReport, type LifecycleResult } from "./model";
 
+import { compareRncpFolios } from "./folio";
+
 const dayMs = 86_400_000;
 export function responseDeadline(notifiedAt: string | null) {
   if (!notifiedAt || !Number.isFinite(Date.parse(notifiedAt))) return null;
@@ -8,6 +10,10 @@ export function responseDeadline(notifiedAt: string | null) {
 }
 export function deriveLifecycle(report: MatrixReport, now: string): LifecycleResult {
   const historical = report.origin === "historical";
+  if(report.origin === "legacy" && !report.notifiedAt && report.legacyStatus){
+    const state=({draft:"draft",submitted:"open",in_progress:"in_process",closed:"closed"} as const)[report.legacyStatus];
+    return {state,chartStatus:stateLabels[state],timeliness:"unknown",deadline:null,remainingDays:null,historical:false,lateReason:null};
+  }
   if (historical || !report.notifiedAt) {
     const state = historical ? ({ Cerrado: "closed", Tarde: "late", "En Proceso": "in_process" } as const)[report.historicalStatus ?? ""] ?? "draft" : "draft";
     return { state, chartStatus: historical ? report.historicalStatus ?? "Sin estado histórico" : stateLabels.draft,
@@ -24,7 +30,7 @@ export function deriveLifecycle(report: MatrixReport, now: string): LifecycleRes
   const timeliness = completedAt ? completedAt <= deadlineMs ? "within_deadline" : "late" : late ? "late" : "pending";
   const state = report.closedAt && report.validationOutcome === "accepted" ? "closed"
     : complete ? "validation" : late ? "late" : report.firstValidProgressAt ? "in_process"
-    : nowMs > notifiedMs + dayMs ? "unattended" : "open";
+    : nowMs > notifiedMs + dayMs ? "unattended" : "in_process";
   return { state, chartStatus: stateLabels[state], timeliness, deadline, historical: false,
     remainingDays: Math.ceil((deadlineMs - nowMs) / dayMs),
     lateReason: late && !complete ? report.firstValidProgressAt ? "incomplete" : "no_response" : null };
@@ -45,7 +51,7 @@ export function matchesFilters(report: MatrixReport, filters: MatrixFilters, now
 }
 export function buildMatrixDashboard(all: MatrixReport[], filters = emptyMatrixFilters, now = new Date().toISOString()): MatrixDashboard {
   const available = all.filter(report => !report.deletedAt);
-  const reports = available.filter(report => matchesFilters(report, filters, now));
+  const reports = available.filter(report => matchesFilters(report, filters, now)).sort(compareRncpFolios);
   const metrics: MatrixDashboard["metrics"] = { total: reports.length, draft: 0, open: 0, unattended: 0, in_process: 0, late: 0, validation: 0, closed: 0,
     timely: 0, overdueNoResponse: 0, measurable: 0, responseCompliance: null, historical: 0 };
   const materials = new Map<string, number>(), statuses = new Map<string, number>(), dates = new Map<string, number>();

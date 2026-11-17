@@ -1,3 +1,5 @@
+import { isAuditWithdrawn } from "./withdrawal";
+
 export const AUDIT_PROGRAM_SHA = "28f5784c76c2cb077f9d0aae69c8de10175f2c66f7b1ad130c98e7261ff164df";
 export const EVALUATION_TEMPLATE_SHA = "fa8dd9b090a9a2e5d210ab75531f44b717c46fa7ba1ec92144472c74ff6669c5";
 export const auditStates = { scheduled: "Programada", confirmed: "Confirmada", rescheduled: "Reprogramada", pending: "Pendiente", cancelled: "Cancelada", performed: "Realizada", completed: "Finalizada" } as const;
@@ -15,12 +17,13 @@ export interface SupplierAudit {
   criteria: string; audit_method: string; responsible_names: string; observations: string;
   source_sha256: string | null; source_sheet: string | null; source_row: number | null; source_column: string | null;
   source_payload: Record<string, unknown> | null; source_status: string | null;
+  withdrawn_at?: string | null; withdrawn_by?: string | null; withdrawal_reason?: string | null;
   revision: number; created_at: string; updated_at: string;
 }
 export interface SupplierAuditFile { id: string; resource_id: string; resource_type: "supplier_audit_report" | "supplier_audit_action_plan"; original_name: string; version: number; is_current: boolean; created_at: string; size_bytes: number; }
 export interface SupplierContacts { qualityName: string; notificationName: string; email: string; emailVerified: boolean; emailVerifiedAt?: string | null; phone: string; alternateName: string; alternateEmail: string; alternatePhone: string; notes: string; }
 export interface AuditSupplier { id: string; code: string; name: string; active: boolean; owning_organization_id: string | null; contact_name: string | null; contact_email: string | null; metadata: Record<string, unknown>; updated_at: string; }
-export interface AuditWorkspace { events: SupplierAudit[]; results: AuditResult[]; files: SupplierAuditFile[]; suppliers: AuditSupplier[]; canManage: boolean; administrator: boolean; history: Array<{ id: string; resource_id: string; action: string; created_at: string; reason: string | null; actor_id: string | null; user_name_snapshot: string | null }>; }
+export interface AuditWorkspace { events: SupplierAudit[]; results: AuditResult[]; files: SupplierAuditFile[]; suppliers: AuditSupplier[]; canManage: boolean; administrator: boolean; withdrawalVersion?: number; history: Array<{ id: string; resource_id: string; action: string; created_at: string; reason: string | null; actor_id: string | null; user_name_snapshot: string | null }>; }
 export const emptyContacts: SupplierContacts = { qualityName: "", notificationName: "", email: "", emailVerified: false, phone: "", alternateName: "", alternateEmail: "", alternatePhone: "", notes: "" };
 export function validDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
@@ -31,10 +34,12 @@ export function monthDays(year: number, month: number) {
   return Array.from({ length: Math.ceil((offset + last) / 7) * 7 }, (_, i) => i < offset || i >= last + offset ? null : `${year}-${String(month).padStart(2, "0")}-${String(i - offset + 1).padStart(2, "0")}`);
 }
 export function auditDayMatch(event: SupplierAudit, day: string) {
+  if (isAuditWithdrawn(event)) return false;
   if (event.date_precision === "week" && event.week_start) return day >= event.week_start && day <= new Date(Date.parse(`${event.week_start}T00:00:00Z`) + 6 * 86400000).toISOString().slice(0, 10);
   return event.planned_date === day;
 }
 export function monthSummary(events: SupplierAudit[]) {
+  events = events.filter(e => !isAuditWithdrawn(e));
   return { scheduled: events.filter(e => ["scheduled", "confirmed", "rescheduled"].includes(e.state)).length,
     performed: events.filter(e => ["performed", "completed"].includes(e.state)).length,
     pending: events.filter(e => e.state === "pending").length, cancelled: events.filter(e => e.state === "cancelled").length };

@@ -84,8 +84,17 @@ export async function uploadAttachment(
     await assertAdministrator(supabase, userData.user.id);
   }
 
+  if(scope.resourceType==="root2cause_evidence"&&replace)throw new Error("Las evidencias Root2Cause se conservan; agrega una nueva versión como archivo distinto.");
+  const rootEvidence=scope.moduleId==="corrective-actions"&&scope.resourceType==="root2cause_evidence";
+  let cleanupTicket="";
+  let reservedPath="";
+  if(rootEvidence){
+    const response=await fetch("/api/root2cause/evidence-upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:scope.resourceKey,processId:scope.processId,fileName:file.name})});
+    if(!response.ok)throw new Error("No se autorizó la reserva de evidencia.");
+    const reservation=await response.json() as {path:string;ticket:string};reservedPath=reservation.path;cleanupTicket=reservation.ticket;
+  }
   const attachmentId = crypto.randomUUID();
-  const objectPath = [
+  const objectPath = rootEvidence ? reservedPath : [
     userData.user.id,
     "attachments",
     scope.moduleId,
@@ -140,6 +149,11 @@ export async function uploadAttachment(
   }).select("id").single();
 
   if (result.error) {
+    if (rootEvidence) {
+      let cleaned = false;
+      try { const response = await fetch("/api/root2cause/evidence-upload",{method:"DELETE",headers:{"Content-Type":"application/json"},body:JSON.stringify({ticket:cleanupTicket})});cleaned=response.ok; } catch { /* Report unresolved cleanup below. */ }
+      throw new Error(cleaned?"No se registró la evidencia; el archivo nuevo fue retirado.":"No se registró la evidencia y la limpieza no se confirmó. Solicita conciliación administrativa; no repitas la carga.");
+    }
     if (replace) await supabase.from("file_objects").update({ is_current: true }).eq("id", replace.id);
     await supabase.storage.from(privateBucket).remove([objectPath]);
     throw new Error("No fue posible registrar la evidencia.");

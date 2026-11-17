@@ -8,7 +8,8 @@ export function useRncpMatrix(initialSupplierId = "") {
   const [data, setData] = useState<MatrixResult | null>(null);
   const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
   const sequence = useRef(0); const abort = useRef<AbortController | null>(null);
-  const query = matrixQuery(filters);
+  const scopedFilters = { ...filters, supplierId: initialSupplierId || filters.supplierId };
+  const query = matrixQuery(scopedFilters);
   const refresh = useCallback(async () => {
     const request = ++sequence.current;
     abort.current?.abort(); const controller = new AbortController(); abort.current = controller;
@@ -25,5 +26,5 @@ export function useRncpMatrix(initialSupplierId = "") {
     const clock = window.setInterval(() => { if (!document.hidden) void refresh(); }, 60_000);
     return () => { window.clearTimeout(timer); window.clearInterval(clock); abort.current?.abort(); };
   }, [refresh]);
-  return { data, filters, setFilters, refresh, loading, error };
+  return { data, filters: scopedFilters, setFilters, refresh, loading, error };
 }

@@ -46,6 +46,8 @@ export async function paginatedRows<T extends { id: string }>(page: (from: numbe
   return rows;
 }
 export interface ReportRow {
+  status?: MatrixReport["legacyStatus"];
+  classification?: string | null;
   id: string; folio: string; organization_id: string; supplier_id: string | null; report_date: string | null;
   material_or_service: string | null; description: string | null; finding_type: string | null;
   source_kind: MatrixReport["origin"] | null; source_row: number | null; source_sha256: string | null;
@@ -97,8 +99,8 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     return { id: row.id, folio: row.folio, organizationId: row.organization_id, supplierId: row.supplier_id,
       supplierName: names.get(row.supplier_id ?? "")?.name ?? row.historical_supplier_name ?? "Proveedor pendiente de conciliación",
       supplierCode: names.get(row.supplier_id ?? "")?.code ?? row.historical_supplier_code ?? "",
-      reportDate: row.report_date, material: row.material_or_service ?? "", defect: row.description ?? row.finding_type ?? "", actionType: row.action_type ?? "",
-      origin: row.source_kind ?? "legacy", historicalStatus: row.historical_status, sourceRow: row.source_row ?? undefined, sourceSha256: row.source_sha256 ?? undefined,
+      reportDate: row.report_date, material: row.classification ?? (row.source_kind === "historical" ? row.material_or_service ?? "" : "Sin clasificación"), defect: row.description ?? row.finding_type ?? "", actionType: row.action_type ?? "",
+      legacyStatus: row.status, origin: row.source_kind ?? "legacy", historicalStatus: row.historical_status, sourceRow: row.source_row ?? undefined, sourceSha256: row.source_sha256 ?? undefined,
       sourceSupplierName: row.historical_supplier_name ?? undefined, sourceSupplierCode: row.historical_supplier_code ?? undefined,
       notifiedAt: row.notified_at, responseDeadline: row.response_deadline, firstValidProgressAt: row.first_valid_progress_at,
       completeSubmittedAt: row.complete_submitted_at, validatedAt: row.validated_at, closedAt: row.closed_at,

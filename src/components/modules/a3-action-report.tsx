@@ -1,8 +1,12 @@
 "use client";
 
 import { ArrowLeft, Download, FileText } from "lucide-react";
-import type { ReactNode } from "react";
+import {useState,type ReactNode} from "react";
 
+import { A3StepEvidence } from "./a3-step-evidence";
+import { A3ReportEvidence } from "./a3-report-evidence";
+import { A3RedboothPlan } from "./a3-redbooth-plan";
+import type { ActiveSession } from "@/lib/session-data";
 import { getCorrectiveActionLabel } from "@/lib/domain";
 import type {
   A3Analysis,
@@ -39,11 +43,14 @@ export function A3ActionReport({
   action,
   onBack,
   children,
+  session,
 }: {
   action: CorrectiveAction;
+  session?: ActiveSession;
   onBack: () => void;
   children?: ReactNode;
 }) {
+  const [preparingEvidence,setPreparingEvidence]=useState(false);
   const analysis = action.a3;
   const fiveW2H = analysis
     ? [
@@ -65,7 +72,7 @@ export function A3ActionReport({
         </button>
         <div>
           {children}
-          <button className="button button-primary" type="button" onClick={() => window.print()}>
+          <button className="button button-primary" type="button" disabled={preparingEvidence} onClick={() => window.print()}>
             <Download size={16} /> Exportar PDF
           </button>
         </div>
@@ -104,6 +111,7 @@ export function A3ActionReport({
             {action.relatedParty ? <ReportFact label="Cliente relacionado" value={action.relatedParty} /> : null}
             <div className="wide"><small>Descripción integral</small><p>{action.problem}</p></div>
           </div>
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={0} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="2" title="Evaluación de severidad">
@@ -111,6 +119,7 @@ export function A3ActionReport({
             <span className={`severity-badge severity-${action.severity}`}>{severityLabels[action.severity]}</span>
             <p>{analysis?.severityJustification || "Pendiente de justificar la severidad."}</p>
           </div>
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={1} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="3" title="Definición 5W2H">
@@ -119,12 +128,14 @@ export function A3ActionReport({
               {fiveW2H.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value || "Pendiente"}</dd></div>)}
             </dl>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={2} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="4" title="Lluvia de ideas">
           {analysis?.brainstorm.length ? (
             <ol className="a3-report-numbered-list">{analysis.brainstorm.map((idea) => <li key={idea}>{idea}</li>)}</ol>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={3} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="5" title="Ishikawa 6M">
@@ -135,6 +146,7 @@ export function A3ActionReport({
               ))}
             </div>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={4} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="6" title="Causa de no detección y causa raíz">
@@ -144,6 +156,7 @@ export function A3ActionReport({
               <div><small>Causa raíz de ocurrencia</small><p>{analysis.rootCause || "Pendiente"}</p></div>
             </div>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={5} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="7" title="Cinco Porqués">
@@ -153,6 +166,7 @@ export function A3ActionReport({
               <WhysColumn title="Causa raíz" values={analysis.rootCauseWhys} />
             </div>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={6} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
         <ReportSection number="8" title="Plan de acción">
@@ -161,8 +175,10 @@ export function A3ActionReport({
               <table><thead><tr><th>Acción</th><th>Responsable</th><th>Compromiso</th><th>Estado</th></tr></thead><tbody>{analysis.plans.map((plan) => <tr key={plan.id}><td>{plan.description || "Pendiente"}</td><td>{plan.owner || "Pendiente"}</td><td>{formatDate(plan.dueDate)}</td><td>{plan.status === "completed" ? "Completada" : plan.status === "in_progress" ? "En proceso" : "Pendiente"}</td></tr>)}</tbody></table>
             </div>
           ) : <PendingSection />}
+          {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={7} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
+        {analysis && session ? <><A3ReportEvidence analysis={analysis} onBusyChange={setPreparingEvidence}/><A3RedboothPlan action={action}/>{analysis.plans.map(plan=><section className="print-hidden" key={plan.id}><h4>Evidencias de acción: {plan.description}</h4><A3StepEvidence evidenceId={analysis.evidenceId} step={plan.id} processId={action.processId} readOnly={action.status==="closed"}/></section>)}</> : null}
         <footer className="a3-report-footer">
           <span><FileText size={14} /> {action.folio}</span>
           <span>Copia controlada para consulta · IntegraQ</span>

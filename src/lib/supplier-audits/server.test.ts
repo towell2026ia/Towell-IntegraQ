@@ -5,7 +5,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: mocks.session }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ rpc: mocks.rpc }) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: mocks.admin }));
-import { auditContext, auditSuppliers } from "./server";
+import { auditContext, auditEvent, auditSuppliers } from "./server";
 
 describe("central supplier audit permissions", () => {
   beforeEach(() => {
@@ -68,4 +68,23 @@ describe("real supplier catalog scope", () => {
   it("fails explicitly if organization count cannot be verified", async () => {
     await expect(auditSuppliers(catalogContext(["org-A"], null))).rejects.toMatchObject({ status: 503 });
   });
+});
+
+
+describe("withdrawal fresh authorization and scope", () => {
+ it("requires management even if the fresh profile is an administrator", async () => {
+  mocks.session.mockResolvedValue({ authUserId: "admin-A", userType: "Administrador", workspaceMode: "production" });
+  mocks.rpc.mockResolvedValue({ data: { organizationId: "org-A", administrator: true, canManage: false }, error: null });
+  await expect(auditContext("admin")).rejects.toMatchObject({ status: 403 });
+ });
+ it("requires administrator even if a user can manage the calendar", async () => {
+  mocks.session.mockResolvedValue({ authUserId: "internal-A", userType: "Usuario interno", workspaceMode: "production", assignedModuleIds: ["suppliers"] });
+  mocks.rpc.mockResolvedValue({ data: { organizationId: "org-A", administrator: false, canManage: true }, error: null });
+  await expect(auditContext("admin")).rejects.toMatchObject({ status: 403 });
+ });
+ it("a foreign event lookup keeps the organization predicate and returns no record", async () => {
+  const filters: unknown[] = [], query = { select: vi.fn().mockReturnThis(), eq: vi.fn((k, v) => { filters.push([k, v]); return query; }), maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) };
+  await expect(auditEvent({ organizationId: "org-A", admin: { from: () => query } } as unknown as AuditContext, "foreign-event")).rejects.toMatchObject({ status: 404 });
+  expect(filters).toEqual([["id", "foreign-event"], ["organization_id", "org-A"]]);
+ });
 });

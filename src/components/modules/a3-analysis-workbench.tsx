@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  Bot,
   Brain,
   Check,
   ChevronLeft,
@@ -14,7 +13,6 @@ import {
   ListChecks,
   LoaderCircle,
   Plus,
-  RefreshCw,
   RotateCcw,
   Save,
   ShieldAlert,
@@ -22,17 +20,21 @@ import {
   Target,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { A3ProposalReview } from "@/components/modules/a3-proposal-review";
+import { A3StepEvidence } from "@/components/modules/a3-step-evidence";
+import { applyStageSuggestion, stageSnapshot, proposalContext, assertProposalContext, assertProposalSnapshots, type RootCauseProposal, type StageSuggestion } from "@/lib/root2cause/assistant";
+import { processCatalog } from "@/lib/configuration-data";
+import { canAccessProcess } from "@/lib/session-data";
 
 import { useScopedDraft, useContinuityState } from "@/components/workspace-continuity";
 import { confirmLeaving } from "@/lib/workspace-continuity";
-import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
 import { ClaimEditor } from "@/components/modules/customer-claims-panel";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import { buildRootCauseAiRequest } from "@/lib/ai-context";
 import { loadRootCauseCustomers, type RootCauseClaim, type RootCauseCustomer } from "@/lib/root-cause-customers";
 import type { ActiveSession } from "@/lib/session-data";
+
 import type {
   A3Analysis,
   AiRootCauseDraft,
@@ -41,6 +43,7 @@ import type {
 } from "@/lib/types";
 
 export interface A3Submission {
+  processId?: string;
   title: string;
   problem: string;
   source: CorrectiveActionSource;
@@ -56,6 +59,9 @@ export interface A3Submission {
 }
 
 interface A3Draft {
+  evidenceId?: string;
+  processId?: string;
+  reviewedSteps?: number[];
   origin: "customer" | "internal" | "system";
   eventType: string;
   relatedParty: string;
@@ -81,6 +87,7 @@ interface A3Draft {
 type IshikawaKey = keyof A3Analysis["ishikawa"];
 
 const draftStorageKey = "a3";
+
 const stepLabels = [
   "Apertura",
   "Severidad",
@@ -126,8 +133,11 @@ const emptyFiveW2H: A3Analysis["fiveW2H"] = {
 
 function createInitialDraft(claim?: CustomerClaim): A3Draft {
   return {
+    evidenceId: crypto.randomUUID(),
+    reviewedSteps: [],
     origin: claim ? "customer" : "internal",
     eventType: claim ? eventTypes.customer[0] : eventTypes.internal[0],
+
     relatedParty: "",
     relatedPartyId: claim?.external_organization_id ?? "",
     qualityCaseId: claim?.id ?? "",
@@ -155,12 +165,16 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
   const [step, setStep] = useContinuityState(`${storageKey}:step`,0);
   const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft(initialClaim));
+
   const [loaded, setLoaded] = useState(false);
   const [newIdea, setNewIdea] = useState("");
   const [causeInputs, setCauseInputs] = useState<Record<IshikawaKey, string>>({ workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" });
   const [aiDraft, setAiDraft] = useState<AiRootCauseDraft>();
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [proposal, setProposal] = useState<RootCauseProposal>();
+  const requestSnapshots = useRef<string[]>([]);
+  const requestContext = useRef("");
   const [customers, setCustomers] = useState<RootCauseCustomer[]>([]);
   const [claims, setClaims] = useState<RootCauseClaim[]>([]);
   const [customerError, setCustomerError] = useState("");
@@ -182,7 +196,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       if (saved) {
         try {
           const parsed = saved;
-          if (parsed.draft) setDraft({ ...createInitialDraft(), ...parsed.draft, relatedPartyId: parsed.draft.relatedPartyId ?? "", qualityCaseId: parsed.draft.qualityCaseId ?? "" });
+          if (parsed.draft) setDraft({ ...createInitialDraft(), ...parsed.draft, evidenceId: parsed.draft.evidenceId ?? crypto.randomUUID(), relatedPartyId: parsed.draft.relatedPartyId ?? "", qualityCaseId: parsed.draft.qualityCaseId ?? "" });
           if(parsed.newIdea)setNewIdea(parsed.newIdea);
           if(parsed.causeInputs)setCauseInputs(parsed.causeInputs);
           if (parsed.aiDraft) setAiDraft(parsed.aiDraft);
@@ -199,10 +213,11 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
   useEffect(() => {
     if (loaded) {
-      const hasText=JSON.stringify(draft)!==JSON.stringify(createInitialDraft(initialClaim))||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
+      const hasText=JSON.stringify({...draft,evidenceId:undefined})!==JSON.stringify({...createInitialDraft(initialClaim),evidenceId:undefined})||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
       if(hasText){persistence.write({ step, draft, ...(aiDraft?{aiDraft}:{}),newIdea,causeInputs });persistence.dirty(true);}
     }
   }, [aiDraft, draft, loaded, step, storageKey, newIdea, causeInputs, initialClaim,persistence]);
+
 
   useEffect(()=>()=>persistence.dirty(false),[persistence]);
   const completedSteps = useMemo(() => stepLabels.map((_, index) => isStepComplete(index, draft)), [draft]);
@@ -235,72 +250,29 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   const resetDraft = () => {
-    window.localStorage.removeItem(storageKey);
-    setDraft(createInitialDraft());
+    if (!window.confirm("Reiniciar vaciará el análisis no aprobado. Se conservarán los vínculos de evidencias del expediente.")) return;
+    persistence.clear();
+    setProposal(undefined);
+    setDraft(current => ({...createInitialDraft(initialClaim),evidenceId:current.evidenceId,plans:current.plans,processId:current.processId}));
+
     setAiDraft(undefined);
     setAiError("");
     setStep(0);
   };
 
-  const requestAiSuggestions = async () => {
-    setAiLoading(true);
-    setAiError("");
+  const requestAiSuggestions = async (mode:"full"|"step"="step") => {
+    setAiLoading(true);setAiError("");setProposal(undefined);
+    requestContext.current=proposalContext(draft.problem,draft.processId);
+    const analysis=toA3Analysis(draft);requestSnapshots.current=stepLabels.map((_,i)=>stageSnapshot(analysis,i));
     try {
-      const source = getCorrectiveSource(draft.origin);
-      const response = await fetch("/api/ai/root-cause", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          buildRootCauseAiRequest({
-            title: draft.title,
-            problem: draft.problem,
-            source,
-            severity: draft.severity,
-            area: draft.area,
-            owner: draft.owner,
-            relatedParty: draft.relatedParty || undefined,
-            analysis: toA3Analysis(draft),
-          }),
-        ),
-      });
-      const payload = (await response.json()) as AiRootCauseDraft & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "No fue posible generar sugerencias.");
-      setAiDraft(payload);
-    } catch (error) {
-      setAiError(error instanceof Error ? error.message : "No fue posible consultar la IA.");
-    } finally {
-      setAiLoading(false);
-    }
+      const response=await fetch("/api/ai/root-cause/assist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,problem:draft.problem,analysis})});
+      const payload=await response.json();if(!response.ok)throw new Error(payload.error??"No fue posible consultar la IA.");setProposal(payload);
+    }catch(error){setAiError(error instanceof Error?error.message:"No fue posible consultar la IA.");}finally{setAiLoading(false);}
   };
-
-  const addSuggestedAction = (description: string) => {
-    setDraft((current) => {
-      const emptyPlan = current.plans.find((plan) => !plan.description.trim());
-      if (emptyPlan) {
-        return {
-          ...current,
-          plans: current.plans.map((plan) =>
-            plan.id === emptyPlan.id
-              ? { ...plan, description, owner: current.owner, dueDate: current.dueDate }
-              : plan,
-          ),
-        };
-      }
-
-      return {
-        ...current,
-        plans: [
-          ...current.plans,
-          {
-            id: crypto.randomUUID(),
-            description,
-            owner: current.owner,
-            dueDate: current.dueDate,
-            status: "pending",
-          },
-        ],
-      };
-    });
+  const acceptSuggestion=(suggestion:StageSuggestion)=>{
+    if(!window.confirm("¿Incorporar esta propuesta revisada como borrador de la etapa? No confirma la causa ni aprueba acciones."))return false;
+    try{assertProposalContext(requestContext.current,draft.problem,draft.processId);const currentAnalysis=toA3Analysis(draft);assertProposalSnapshots(currentAnalysis,requestSnapshots.current);const next=applyStageSuggestion(currentAnalysis,suggestion,requestSnapshots.current[suggestion.step],draft.reviewedSteps?.includes(suggestion.step));requestSnapshots.current[suggestion.step]=stageSnapshot(next,suggestion.step);setDraft(current=>({...current,...next}));return true;}
+    catch(error){setAiError(error instanceof Error?error.message:"No se incorporó la propuesta.");return false;}
   };
 
   const completeAnalysis = async () => {
@@ -309,6 +281,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     setSaving(true); setSaveError("");
     try {
       await onComplete({
+      processId: draft.processId,
       title: draft.title.trim(),
       problem: draft.problem.trim(),
       source,
@@ -322,16 +295,18 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       a3: toA3Analysis(draft),
       aiDraft,
       });
-      window.localStorage.removeItem(storageKey);
+      persistence.clear();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "No fue posible guardar el análisis.");
     } finally { setSaving(false); }
+
   };
 
   return (
     <section className="a3-workbench">
       <header className="a3-workbench-header">
         <div><p className="module-kicker">Metodología A3</p><h3>Nuevo análisis de acción correctiva</h3><p>Flujo adaptado de CAPA-V01; el borrador se conserva en esta pestaña para tu usuario y organización.</p></div>
+
         <div className="a3-header-actions">
           <a className="button button-secondary" href="https://github.com/Gronk93/CAPA-V01" target="_blank" rel="noreferrer"><ExternalLink size={15} /> Referencia</a>
           <button className="icon-button" type="button" title="Reiniciar borrador" aria-label="Reiniciar borrador" onClick={resetDraft}><RotateCcw size={17} /></button>
@@ -347,8 +322,9 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       </nav>
 
       <div className="a3-stage">
-        {step === 0 ? <><OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} claims={claims} customerError={customerError} />{draft.origin==="customer"&&draft.relatedPartyId&&canPerformModuleAction(session,"customers","create")?<button className="button button-secondary" type="button" onClick={()=>{void claimsRequest<ClaimsCatalog>().then(setClaimEditorCatalog).catch(e=>setCustomerError((e as Error).message));}}>Registrar reclamo sin perder el avance del A3</button>:null}</> : null}
+        {step === 0 ? <><OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} claims={claims} customerError={customerError} session={session} loading={isAiLoading} generate={()=>void requestAiSuggestions("full")} />{draft.origin==="customer"&&draft.relatedPartyId&&canPerformModuleAction(session,"customers","create")?<button className="button button-secondary" type="button" onClick={()=>{void claimsRequest<ClaimsCatalog>().then(setClaimEditorCatalog).catch(e=>setCustomerError((e as Error).message));}}>Registrar reclamo sin perder el avance del A3</button>:null}</> : null}
         {claimEditorCatalog?<ClaimEditor onCustomerCatalog={onCustomerCatalog} catalog={claimEditorCatalog} customerId={draft.relatedPartyId} title={draft.title} description={draft.problem} administrator={session.userType==="Administrador"} onClose={()=>setClaimEditorCatalog(null)} onSaved={async claim=>{const result=await loadRootCauseCustomers();setClaims(result.claims);setCustomers(result.customers);setDraft(current=>({...current,relatedPartyId:claim.external_organization_id,relatedParty:result.customers.find(c=>c.id===claim.external_organization_id)?.name??"",qualityCaseId:claim.id}));setClaimEditorCatalog(null);}}/>:null}
+
         {step === 1 ? <SeverityStage draft={draft} setDraft={setDraft} /> : null}
         {step === 2 ? <FiveW2HStage value={draft.fiveW2H} onChange={(fiveW2H) => setDraft((current) => ({ ...current, fiveW2H }))} /> : null}
         {step === 3 ? <BrainstormStage ideas={draft.brainstorm} newIdea={newIdea} setNewIdea={setNewIdea} addIdea={addIdea} removeIdea={(index) => setDraft((current) => ({ ...current, brainstorm: current.brainstorm.filter((_, itemIndex) => itemIndex !== index) }))} /> : null}
@@ -356,27 +332,20 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
         {step === 5 ? <CausesStage draft={draft} setDraft={setDraft} /> : null}
         {step === 6 ? <WhysStage draft={draft} setDraft={setDraft} /> : null}
         {step === 7 ? <PlansStage draft={draft} setDraft={setDraft} updatePlan={updatePlan} /> : null}
+        <A3StepEvidence key={`${draft.evidenceId}:${step}`} evidenceId={draft.evidenceId} step={step} processId={draft.processId}/>
+        <label><input type="checkbox" checked={draft.reviewedSteps?.includes(step)??false} onChange={e=>setDraft(d=>({...d,reviewedSteps:e.target.checked?[...(d.reviewedSteps??[]),step]:(d.reviewedSteps??[]).filter(n=>n!==step)}))}/>Etapa revisada; bloquear incorporación de IA</label>
       </div>
 
       <section className="a3-ai-assistant">
         <header>
           <span><Sparkles size={18} /></span>
           <div><h4>Sugerencias de IA con contexto</h4><p>Descripción integral, proceso, documentación indexada y avance actual del A3.</p></div>
-          <button className="button button-ai" type="button" disabled={isAiLoading || draft.problem.trim().length < 15} onClick={requestAiSuggestions}>
-            {isAiLoading ? <LoaderCircle className="spin" size={16} /> : aiDraft ? <RefreshCw size={16} /> : <Bot size={16} />}
-            {aiDraft ? "Actualizar sugerencias" : "Generar sugerencias"}
+          <button className="button button-ai" type="button" disabled={isAiLoading || draft.problem.trim().length < 15 || !draft.processId} onClick={()=>void requestAiSuggestions("step")}>
+            {isAiLoading ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} Ayudarme con IA en este paso
           </button>
         </header>
         {aiError ? <div className="inline-error"><ShieldAlert size={16} />{aiError}</div> : null}
-        {aiDraft ? (
-          <AiSuggestionResult
-            draft={aiDraft}
-            onUseRootCause={(rootCause) => setDraft((current) => ({ ...current, rootCause }))}
-            onAddSuggestedAction={addSuggestedAction}
-          />
-        ) : (
-          <div className="a3-ai-context-state"><span>{draft.problem.trim().length >= 15 ? "Contexto listo para revisión" : "La descripción integral está pendiente"}</span><small>La causa y las acciones solo cambian cuando el responsable acepta una sugerencia.</small></div>
-        )}
+        {proposal ? <A3ProposalReview key={JSON.stringify(proposal)} proposal={proposal} reviewed={draft.reviewedSteps??[]} onAccept={acceptSuggestion} onReject={()=>setProposal(undefined)}/> : <p>Las propuestas requieren revisión. No se inventan documentos ni se aprueban causas automáticamente.</p>}
       </section>
 
       <footer className="a3-footer">
@@ -385,6 +354,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
         <div>
           <button className="button button-secondary" type="button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))}><ChevronLeft size={16} /> Anterior</button>
           {step < stepLabels.length - 1 ? <button className="button button-primary" type="button" disabled={!canContinue} onClick={() => setStep((current) => Math.min(stepLabels.length - 1, current + 1))}>Siguiente <ChevronRight size={16} /></button> : <button className="button button-primary" type="button" disabled={!canContinue || isSaving} onClick={() => void completeAnalysis()}><ClipboardCheck size={16} /> {isSaving ? "Guardando…" : "Crear acción A3"}</button>}
+
         </div>
       </footer>
       {saveError ? <p role="alert">{saveError} El borrador se conservó para reintentar.</p> : null}
@@ -392,13 +362,14 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   );
 }
 
-function OpeningStage({ draft, setDraft, setOrigin, customers, claims, customerError }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; setOrigin: (origin: A3Draft["origin"]) => void; customers: RootCauseCustomer[]; claims: RootCauseClaim[]; customerError: string }) {
+function OpeningStage({ draft, setDraft, setOrigin, customers, claims, customerError, session, loading, generate }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; setOrigin: (origin: A3Draft["origin"]) => void; customers: RootCauseCustomer[]; claims: RootCauseClaim[]; customerError: string; session: ActiveSession; loading: boolean; generate: () => void }) {
   const [claimSearch,setClaimSearch]=useState("");
   const [customerSearch, setCustomerSearch] = useState("");
   const [showCustomerOptions, setShowCustomerOptions] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === draft.relatedPartyId);
   const matchingCustomers = customers.filter(customer => `${customer.code} ${customer.name}`.toLocaleLowerCase("es")
     .includes(customerSearch.trim().toLocaleLowerCase("es"))).slice(0, 12);
+
   return <StageHeading icon={<ClipboardCheck size={20} />} title="1. Apertura del caso" description="Define el origen, el problema y la responsabilidad del análisis.">
     <div className="a3-origin-switch" aria-label="Origen de la acción">
       <button className={draft.origin === "customer" ? "active" : ""} type="button" onClick={() => setOrigin("customer")}>Externa / cliente</button>
@@ -418,6 +389,7 @@ function OpeningStage({ draft, setDraft, setOrigin, customers, claims, customerE
       <label><span>Responsable del análisis</span><input value={draft.owner} onChange={(event) => setDraft((current) => ({ ...current, owner: event.target.value }))} /></label>
       <label className="wide"><span>Título</span><input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Resumen breve del problema" /></label>
       <label className="wide"><span>Descripción del problema</span><textarea rows={4} value={draft.problem} onChange={(event) => setDraft((current) => ({ ...current, problem: event.target.value }))} placeholder="Qué ocurrió, dónde, cuándo y con qué evidencia" /></label>
+      <div className="wide"><label><span>Proceso autorizado para consulta documental</span><select value={draft.processId??""} onChange={e=>setDraft(d=>({...d,processId:e.target.value}))}><option value="">Seleccionar proceso</option>{processCatalog.filter(p=>canAccessProcess(session,p.id)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><button type="button" className="button button-ai" disabled={loading||draft.problem.trim().length<15||!draft.processId} onClick={generate}>Generar análisis completo con IA</button></div>
       <label><span>Fecha compromiso</span><input type="date" value={draft.dueDate} onChange={(event) => setDraft((current) => ({ ...current, dueDate: event.target.value }))} /></label>
     </div>
   </StageHeading>;
@@ -461,7 +433,7 @@ function WhysEditor({ title, source, values, onChange }: { title: string; source
 }
 
 function PlansStage({ draft, setDraft, updatePlan }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; updatePlan: (id: string, changes: Partial<A3Analysis["plans"][number]>) => void }) {
-  return <StageHeading icon={<ClipboardCheck size={20} />} title="8. Plan de acción" description="Convierte el análisis en acciones responsables y verificables."><div className="a3-analysis-summary"><div><small>Origen</small><strong>{draft.origin === "customer" ? "Externa / cliente" : draft.origin === "system" ? "Sistema de gestión" : "Interna"}</strong></div><div><small>Causa raíz</small><strong>{draft.rootCause}</strong></div><div><small>Causas 6M</small><strong>{Object.values(draft.ishikawa).flat().length}</strong></div></div><div className="a3-plan-list">{draft.plans.map((plan, index) => <section key={plan.id}><header><strong>Acción {index + 1}</strong>{draft.plans.length > 1 ? <button type="button" title="Eliminar acción" aria-label="Eliminar acción" onClick={() => setDraft((current) => ({ ...current, plans: current.plans.filter((item) => item.id !== plan.id) }))}><Trash2 size={14} /></button> : null}</header><div><label className="wide"><span>Acción propuesta</span><textarea rows={3} value={plan.description} onChange={(event) => updatePlan(plan.id, { description: event.target.value })} /></label><label><span>Responsable</span><input value={plan.owner} onChange={(event) => updatePlan(plan.id, { owner: event.target.value })} /></label><label><span>Fecha compromiso</span><input type="date" value={plan.dueDate} onChange={(event) => updatePlan(plan.id, { dueDate: event.target.value })} /></label></div></section>)}</div><button className="button button-secondary" type="button" onClick={() => setDraft((current) => ({ ...current, plans: [...current.plans, { id: crypto.randomUUID(), description: "", owner: "", dueDate: "", status: "pending" }] }))}><Plus size={15} /> Agregar acción</button></StageHeading>;
+  return <StageHeading icon={<ClipboardCheck size={20} />} title="8. Plan de acción" description="Convierte el análisis en acciones responsables y verificables."><div className="a3-analysis-summary"><div><small>Origen</small><strong>{draft.origin === "customer" ? "Externa / cliente" : draft.origin === "system" ? "Sistema de gestión" : "Interna"}</strong></div><div><small>Causa raíz</small><strong>{draft.rootCause}</strong></div><div><small>Causas 6M</small><strong>{Object.values(draft.ishikawa).flat().length}</strong></div></div><div className="a3-plan-list">{draft.plans.map((plan, index) => <section key={plan.id}><header><strong>Acción {index + 1}</strong>{draft.plans.length > 1 ? <button type="button" title="Eliminar acción" aria-label="Eliminar acción" onClick={() => setDraft((current) => ({ ...current, plans: current.plans.filter((item) => item.id !== plan.id) }))}><Trash2 size={14} /></button> : null}</header><div><label className="wide"><span>Acción propuesta</span><textarea rows={3} value={plan.description} onChange={(event) => updatePlan(plan.id, { description: event.target.value })} /></label><label><span>Responsable</span><input value={plan.owner} onChange={(event) => updatePlan(plan.id, { owner: event.target.value })} /></label><label><span>Fecha compromiso</span><input type="date" value={plan.dueDate} onChange={(event) => updatePlan(plan.id, { dueDate: event.target.value })} /></label></div>{(["cause","expectedResult","completionEvidence","effectivenessMethod"] as const).map((field,n)=><label className="a3-single-field" key={field}><span>{["Causa que atiende","Resultado esperado","Evidencia de cumplimiento","Verificación de efectividad"][n]}</span><textarea value={plan[field]??""} onChange={e=>updatePlan(plan.id,{[field]:e.target.value})}/></label>)}<A3StepEvidence evidenceId={draft.evidenceId} step={plan.id} processId={draft.processId}/></section>)}</div><button className="button button-secondary" type="button" onClick={() => setDraft((current) => ({ ...current, plans: [...current.plans, { id: crypto.randomUUID(), description: "", owner: "", dueDate: "", status: "pending" }] }))}><Plus size={15} /> Agregar acción</button></StageHeading>;
 }
 
 function StageHeading({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }) {
@@ -488,6 +460,8 @@ function getCorrectiveSource(origin: A3Draft["origin"]): CorrectiveActionSource 
 
 function toA3Analysis(draft: A3Draft): A3Analysis {
   return {
+    evidenceId: draft.evidenceId,
+    reviewedSteps: draft.reviewedSteps,
     eventType: draft.eventType,
     severityJustification: draft.severityJustification,
     fiveW2H: draft.fiveW2H,

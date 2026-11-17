@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { processCatalog } from "./configuration-data";
 import {
   appFormCatalog,
+  normalizeAppForms,
   buildFormDashboard,
   createDraftAppForm,
   createImportedAppForm,
@@ -150,4 +151,28 @@ describe("application form catalog", () => {
     expect(csv).toContain('"Calificación","Observaciones"');
     expect(csv).toContain('"Medida ""aprobada"", sin ajuste"');
   });
+});
+
+
+describe("RNCP retired catalog field",()=>{
+ it("removes the required field and export column while preserving existing record data",()=>{
+  const form=appFormCatalog.find(f=>f.registrationNumber==="F-CA-25")!;
+  expect(form.fields.some(f=>f.id==="purchaseOrder")).toBe(false);
+  expect(form.records[0].values.purchaseOrder).toBe("OC-260618");
+  const csv=serializeFormRecordsToCsv(form);
+  expect(csv).not.toContain("Orden de compra");expect(csv).not.toContain("OC-260618");
+ });
+});
+
+
+it("hides a cached RNCP purchase-order field without mutating saved values or other forms",()=>{
+  const current=appFormCatalog.find(f=>f.registrationNumber==="F-CA-25")!;
+  const legacy={...current,fields:[...current.fields,{id:"purchaseOrder",label:"Orden de compra",type:"text" as const,required:true}]};
+  const other=appFormCatalog[0];
+  const [normalized,untouched]=normalizeAppForms([legacy,other]);
+  expect(normalized.fields.some(f=>f.id==="purchaseOrder")).toBe(false);
+  expect(normalized.records).toBe(legacy.records);
+  expect(normalized.records[0].values.purchaseOrder).toBe("OC-260618");
+  expect(legacy.fields.some(f=>f.id==="purchaseOrder")).toBe(true);
+  expect(untouched).toBe(other);
 });

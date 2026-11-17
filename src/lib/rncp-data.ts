@@ -43,6 +43,9 @@ export interface RncpResponseAction {
 }
 
 export interface RncpReport {
+  classification?: import("./rncp/flow").RncpClassification;
+  firstValidProgressAt?: string;
+  requirementsComplete?: boolean;
   historicalStatus?: string;
   completeSubmittedAt?: string;
   validatedAt?: string;
@@ -60,7 +63,6 @@ export interface RncpReport {
   siteCode?: string;
   siteName?: string;
   reportDate?: string;
-  purchaseOrder?: string;
   materialOrService?: string;
   findingType?: string;
   rejectedQuantity?: number;
@@ -82,10 +84,10 @@ export interface RncpReport {
 }
 
 export interface RncpDraftInput {
+  classification?: import("./rncp/flow").RncpClassification;
   supplierId?: string;
   siteId?: string;
   reportDate?: string;
-  purchaseOrder?: string;
   materialOrService?: string;
   findingType?: string;
   rejectedQuantity?: string;
@@ -107,13 +109,13 @@ export async function loadRncpReports() {
   return parseResponse<{ reports: RncpReport[] }>(response);
 }
 
-export async function saveRncpReport(action: RncpAction, values: RncpDraftInput, reportId?: string, reason?: string) {
+export async function saveRncpReport(action: RncpAction, values: RncpDraftInput, reportId?: string, reason?: string, draftKey?: string) {
   const response = await fetch("/api/suppliers/rncp", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action, reportId, values, reason }),
+    body: JSON.stringify({ action, reportId, values, reason, draftKey }),
   });
-  return parseResponse<{ report: Pick<RncpReport, "id" | "folio" | "status"> }>(response);
+  return parseResponse<{ report: Pick<RncpReport, "id" | "folio" | "status">; requiresReload?:boolean }>(response);
 }
 
 export async function setRncpDeleted(reportId: string, deleted: boolean, reason: string) {
@@ -158,4 +160,8 @@ export async function uploadRncpEvidence(actionId: string, file: File) {
 export async function getRncpEvidenceUrl(fileId: string) {
   const response = await fetch(`/api/suppliers/rncp/evidence/${encodeURIComponent(fileId)}`, { cache: "no-store" });
   return parseResponse<{ signedUrl: string; expiresIn: number }>(response);
+}
+
+export async function generateStoredRncpPdf(reportId:string){
+ return parseResponse<{fileId:string;version:number;state:string}>(await fetch(`/api/suppliers/rncp/${encodeURIComponent(reportId)}/pdf`,{method:"POST"}));
 }

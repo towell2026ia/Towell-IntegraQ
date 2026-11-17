@@ -1,3 +1,4 @@
+import { isOperationalAssessment } from "@/lib/supplier-audits/withdrawal";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
 
@@ -15,7 +16,7 @@ type ReportRow = { id: string; folio: string; supplier_id: string | null; site_i
 type ActionRow = { id: string; report_id: string; description: string; status: string; created_at: string; validated_at: string | null };
 type AuditRow = { id: string; code: string; external_organization_id: string | null; external_site_id: string | null; scheduled_date: string; completed_at: string | null; status: string; score: number | null };
 type EvaluationRow = { id: string; supplier_id: string; site_id: string | null; period_end: string; effectiveness: number; quality_level: number; created_at: string };
-type AssessmentDashboardRow = { id: string; supplier_id: string; site_id: string | null; assessment_type: string; assessment_date: string; score: number | null; classification: string | null };
+type AssessmentDashboardRow = { audit_event_id: string | null; audit_event: { id: string; withdrawn_at?: string | null } | null; id: string; supplier_id: string; site_id: string | null; assessment_type: string; assessment_date: string; score: number | null; classification: string | null };
 type HistoryRow = { id: string; resource_id: string; action: string; created_at: string; reason: string | null };
 
 const openActionStatuses = new Set(["pending", "in_progress", "submitted", "rejected"]);
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
     admin.from("supplier_rncp_actions").select("id,report_id,description,status,created_at,validated_at").order("created_at", { ascending: false }),
     admin.from("audits").select("id,code,external_organization_id,external_site_id,scheduled_date,completed_at,status,score").eq("audit_type", "supplier").order("scheduled_date", { ascending: false }),
     admin.from("supplier_quality_evaluations").select("id,supplier_id,site_id,period_end,effectiveness,quality_level,created_at").order("period_end", { ascending: false }),
-    assessmentScope.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification").order("assessment_date", { ascending: false }),
+    assessmentScope.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification,audit_event_id,audit_event:supplier_audit_events(*)").order("assessment_date", { ascending: false }),
   ]);
   const failed = [companiesResult, profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult].find((result) => result.error);
   if (failed?.error) {
@@ -51,7 +52,7 @@ export async function GET(request: Request) {
   const actions = (actionsResult.data ?? []) as ActionRow[];
   const audits = (auditsResult.data ?? []) as AuditRow[];
   const evaluations = (evaluationsResult.data ?? []) as EvaluationRow[];
-  const assessments = (assessmentsResult.data ?? []) as AssessmentDashboardRow[];
+  const assessments = ((assessmentsResult.data ?? []) as unknown as AssessmentDashboardRow[]).filter(isOperationalAssessment);
   const companyMap = new Map(companies.map((company) => [company.id, company]));
   const siteMap = new Map(sites.map((site) => [site.id, site]));
   const categoryMap = new Map(profiles.map((profile) => [profile.organization_id, profile.category ?? "Sin categoría"]));

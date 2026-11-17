@@ -1,0 +1,15 @@
+import {beforeEach,it,expect,vi} from 'vitest';
+const m=vi.hoisted(()=>({session:vi.fn(),permission:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/supabase/auth-session',()=>({getAuthenticatedSession:m.session}));
+vi.mock('@/lib/supabase/server',()=>({createClient:async()=>({rpc:m.rpc})}));
+vi.mock('@/lib/module-permissions',()=>({canPerformModuleAction:m.permission}));
+import {GET} from './route';
+beforeEach(()=>{vi.clearAllMocks();m.session.mockResolvedValue({authUserId:'actor',userType:'Administrador'});m.permission.mockReturnValue(true);m.rpc.mockResolvedValue({data:1,error:null});});
+it('rejects anonymous access before querying the contract',async()=>{m.session.mockResolvedValue(null);expect((await GET()).status).toBe(403);expect(m.rpc).not.toHaveBeenCalled();});
+it('rejects external users even with a mocked module permission',async()=>{m.session.mockResolvedValue({authUserId:'external',userType:'Proveedor'});expect((await GET()).status).toBe(403);expect(m.rpc).not.toHaveBeenCalled();});
+it('rejects an internal user lacking module access',async()=>{m.permission.mockReturnValue(false);expect((await GET()).status).toBe(403);expect(m.rpc).not.toHaveBeenCalled();});
+it('never grants uploads when the security contract is missing',async()=>{m.rpc.mockResolvedValue({data:null,error:{code:'42883'}});expect(await (await GET()).json()).toEqual({enabled:false,write:false});});
+it('never grants uploads when the contract reports no access',async()=>{m.rpc.mockResolvedValue({data:0,error:null});expect(await (await GET()).json()).toEqual({enabled:false,write:false});});
+it('permits administrative controls only after the exact contract is available',async()=>{const r=await GET();expect(await r.json()).toEqual({enabled:true,write:true});expect(r.headers.get('Cache-Control')).toBe('no-store');});
+it('retains read-only controls for an authorized internal participant',async()=>{m.session.mockResolvedValue({authUserId:'internal',userType:'Usuario interno'});expect(await (await GET()).json()).toEqual({enabled:true,write:false});});
+it('fails closed on a connection error without leaking details',async()=>{m.rpc.mockRejectedValue(new Error('private backend details'));const r=await GET();expect(r.status).toBe(503);expect(await r.json()).toEqual({enabled:false,write:false});});

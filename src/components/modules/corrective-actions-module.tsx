@@ -235,7 +235,7 @@ export function CorrectiveActionsModule({
       ) + 1;
     const action: CorrectiveAction = {
       ...values,
-      a3: { ...values.a3, plans: values.a3.plans.map(plan => ({ ...plan, id: crypto.randomUUID() })) },
+      a3: values.a3,
       id: crypto.randomUUID(),
       folio: `AC-${year}-${String(nextNumber).padStart(3, "0")}`,
       createdAt: today,
@@ -448,7 +448,7 @@ export function CorrectiveActionsModule({
         </div> : null}
 
         {registryView === "report" && selected ? <article className="corrective-report-view">
-          <A3ActionReport action={selected} onBack={() => setRegistryView("index")}>
+          <A3ActionReport action={selected} session={session} onBack={() => setRegistryView("index")}>
             {canEditSelected ? <button className="button button-secondary" type="button">
               <Paperclip size={16} /> Adjuntar evidencia
             </button> : null}

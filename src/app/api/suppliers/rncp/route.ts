@@ -1,5 +1,9 @@
+import { requireRncpFlow } from "@/lib/rncp/flow-server";
+import { isRncpClassification } from "@/lib/rncp/flow";
+import { compareRncpFolios } from "@/lib/rncp/folio";
 import { NextResponse } from "next/server";
-import { paginatedRows, RncpError } from "@/lib/rncp/server";
+import { photoFailure, photoRpcError, requirePhotoV2 } from "@/lib/rncp/initial-photo-server";
+import { paginatedRows, rncpContext, RncpError } from "@/lib/rncp/server";
 
 import type { RncpHistoryEvent, RncpReport, RncpResponseAction, RncpResponseStatus, RncpStatus } from "@/lib/rncp-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -7,6 +11,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type ReportRow = {
+  organization_id: string;
+  classification?: string | null;
+  first_valid_progress_at?: string | null;
   source_kind?: "native" | "historical" | "legacy" | null;
   historical_status?: string | null;
   notified_at?: string | null;
@@ -20,7 +27,6 @@ type ReportRow = {
   supplier_id: string | null;
   site_id: string | null;
   report_date: string | null;
-  purchase_order: string | null;
   material_or_service: string | null;
   finding_type: string | null;
   rejected_quantity: number | null;
@@ -77,9 +83,19 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const supabase = await createClient();
   try {
+    const context = await rncpContext("view",true);
     const rows = await paginatedRows<ReportRow>((from,to) => supabase.from("supplier_rncp_reports")
       .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)", { count: "exact" })
+      .eq(context.supplier ? "supplier_id" : "organization_id", context.supplier ? context.profile.external_party_id! : context.organizationId)
       .order("report_date", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).order("id").range(from,to));
+    if (rows.some(row => context.supplier ? row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
+    const requirements: Record<string,boolean> = {};
+    const nativeIds=rows.filter(r=>r.source_kind==="native").map(r=>r.id);
+    for(let offset=0;offset<nativeIds.length;offset+=500){
+      const ids=nativeIds.slice(offset,offset+500), result=await supabase.rpc("iq_rncp_requirements_summary",{p_report_ids:ids});
+      if(result.error || ids.some(id=>!Array.isArray(result.data?.[id]))) throw new RncpError("No se pudo comprobar el seguimiento documental.",503);
+      for(const id of ids)requirements[id]=result.data[id].length===0;
+    }
     const actions: ActionRow[] = [], audits: AuditRow[] = [], evidenceLinks: EvidenceLinkRow[] = [];
     const admin = createAdminClient();
     for(let offset=0;offset<rows.length;offset+=100){
@@ -92,9 +108,9 @@ export async function GET() {
       const ids=actions.slice(offset,offset+100).map(action=>action.id);
       evidenceLinks.push(...await paginatedRows<EvidenceLinkRow>((from,to) => supabase.from("supplier_rncp_action_evidence").select("id,action_id,file:file_objects!supplier_rncp_action_evidence_file_id_fkey(id,original_name,mime_type,size_bytes,uploaded_by,created_at)",{count:"exact"}).in("action_id",ids).order("id").range(from,to)));
     }
-    return NextResponse.json({ reports: rows.map(row => mapReport(row,
+    return NextResponse.json({ reports: rows.sort(compareRncpFolios).map(row => ({...mapReport(row,
       audits.filter(audit=>audit.resource_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)),
-      actions.filter(action=>action.report_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(action=>mapAction(action,evidenceLinks.filter(link=>link.action_id===action.id))))) }, {headers:{"Cache-Control":"private, no-store"}});
+      actions.filter(action=>action.report_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)).map(action=>mapAction(action,evidenceLinks.filter(link=>link.action_id===action.id)))) , requirementsComplete: requirements[row.id]===true })) }, {headers:{"Cache-Control":"private, no-store"}});
   } catch(error) { return NextResponse.json({ error: error instanceof RncpError ? error.message : "No fue posible consultar los RNCP completos. Reintenta." }, {status:error instanceof RncpError?error.status:503}); }
 
 }
@@ -105,14 +121,34 @@ export async function POST(request: Request) {
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.action !== "string") return NextResponse.json({ error: "Solicitud RNCP no válida." }, { status: 400 });
   const supabase = await createClient();
-  const result = await supabase.rpc("save_supplier_rncp", {
+  const flowEnabled = process.env.RNCP_FLOW_ENABLED === "true";
+  const keyedDraft = payload.action === "draft" && !payload.reportId && typeof payload.draftKey === "string";
+  if (keyedDraft && !/^[a-f0-9-]{36}$/i.test(String(payload.draftKey))) return NextResponse.json({error:"Identificador de recuperación no válido."},{status:400});
+  if (keyedDraft && flowEnabled) {
+    try {await requirePhotoV2({supabase,admin:createAdminClient()});}catch(error){return photoFailure(error);}
+  }
+  const values: Record<string, unknown> = payload.values && typeof payload.values === "object" && !Array.isArray(payload.values)
+    ? { ...payload.values as Record<string, unknown> } : {};
+  // Retired field: never accept changes from a client, including older clients.
+  delete values.purchaseOrder;
+  delete values.purchase_order;
+  if (keyedDraft && !flowEnabled) return NextResponse.json({error:"Fotografías RNCP pendientes de activación autorizada."},{status:503});
+  if (flowEnabled && ((!payload.reportId && !isRncpClassification(values.classification)) || (values.classification !== undefined && !isRncpClassification(values.classification)))) return NextResponse.json({error:"Selecciona la clasificación QAC, Hilo o Avíos."},{status:400});
+  if (flowEnabled) { try { await requireRncpFlow({supabase}); } catch(error) { return photoFailure(error); } }
+  // Until the reviewed flow SQL is installed, retain the production RPC contract.
+  if (!flowEnabled) delete values.classification;
+  const result = keyedDraft ? await supabase.rpc("iq_rncp_initial_photo_draft", {p_request:payload.draftKey,p_payload:values}) : await supabase.rpc("save_supplier_rncp", {
     requested_report_id: typeof payload.reportId === "string" ? payload.reportId : null,
     requested_action: payload.action,
-    requested_payload: payload.values && typeof payload.values === "object" ? payload.values : {},
+    requested_payload: values,
     requested_reason: typeof payload.reason === "string" ? payload.reason : null,
   });
-  if (result.error) return rncpError(result.error.message);
-  return NextResponse.json({ report: mutationIdentity(result.data) });
+  if (result.error) {
+    if(keyedDraft){try{photoRpcError(result.error);}catch(error){return photoFailure(error);}}
+    if (keyedDraft && result.error.code === "PGRST202") return NextResponse.json({error:"La recuperación de borradores con fotografías requiere la propuesta SQL específica revisada."},{status:503});
+    return rncpError(result.error.message);
+  }
+  return NextResponse.json({ report: mutationIdentity(result.data), ...(keyedDraft?{requiresReload:true}:{}) });
 }
 
 export async function PATCH(request: Request) {
@@ -144,6 +180,7 @@ function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseActi
     reason: audit.reason ?? undefined,
   }));
   return {
+    classification: isRncpClassification(row.classification) ? row.classification : undefined, firstValidProgressAt: row.first_valid_progress_at ?? undefined,
     historicalStatus: row.historical_status ?? undefined, completeSubmittedAt: row.complete_submitted_at ?? undefined,
     validatedAt: row.validated_at ?? undefined, validationOutcome: row.validation_outcome ?? undefined,
     origin: row.source_kind ?? "legacy", notifiedAt: row.notified_at ?? undefined,
@@ -151,7 +188,7 @@ function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseActi
     id: row.id, folio: row.folio, supplierId: row.supplier_id ?? undefined,
     supplierCode: supplier?.code, supplierName: supplier?.name,
     siteId: row.site_id ?? undefined, siteCode: site?.code, siteName: site?.name,
-    reportDate: row.report_date ?? undefined, purchaseOrder: row.purchase_order ?? undefined,
+    reportDate: row.report_date ?? undefined,
     materialOrService: row.material_or_service ?? undefined, findingType: row.finding_type ?? undefined,
     rejectedQuantity: row.rejected_quantity ?? undefined, description: row.description ?? undefined,
     immediateDisposition: row.immediate_disposition ?? undefined, responseDueDate: row.response_due_date ?? undefined,
@@ -187,13 +224,16 @@ function mutationIdentity(value: unknown) {
 
 function rncpError(message: string) {
   const errors: Record<string, string> = {
+    RNCP_INSPECTOR_VALIDATION_REQUIRED: "El cierre requiere la validación de Calidad desde el seguimiento del expediente.",
+    RNCP_CLASSIFICATION_REQUIRED: "Selecciona la clasificación QAC, Hilo o Avíos.",
+    RNCP_HISTORICAL_IMMUTABLE: "La clasificación histórica se conserva sin cambios.",
     RNCP_WRITE_FORBIDDEN: "No tienes permiso para modificar RNCP.",
     RNCP_REQUIRED_FIELDS_MISSING: "Completa proveedor, sucursal cuando aplique, fecha, problema, descripción, producto o material, responsable y fecha compromiso.",
     RNCP_SITE_REQUIRED: "Selecciona la sucursal del proveedor.",
     RNCP_SUPPLIER_INVALID: "El proveedor seleccionado no está activo.",
     RNCP_SITE_INVALID: "La sucursal seleccionada no pertenece al proveedor o está inactiva.",
-    RNCP_DRAFT_LOCKED: "La RNCP ya fue enviada y no puede volver a borrador.",
-    RNCP_ALREADY_SUBMITTED: "La RNCP ya fue enviada.",
+    RNCP_DRAFT_LOCKED: "La RNCP ya fue registrada y no puede volver a borrador.",
+    RNCP_ALREADY_SUBMITTED: "La RNCP ya fue registrada.",
     RNCP_TRANSITION_INVALID: "El cambio de estado solicitado no está permitido.",
     RNCP_ADMIN_REASON_REQUIRED: "Indica el motivo de la corrección administrativa.",
     RNCP_DELETE_ADMIN_ONLY: "Sólo un administrador puede eliminar o restaurar RNCP.",

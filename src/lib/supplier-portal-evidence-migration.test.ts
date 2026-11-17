@@ -1,5 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PhotoAttachmentPicker } from "@/components/images/photo-attachment-picker";
 
 import { describe, expect, it } from "vitest";
 
@@ -32,7 +35,15 @@ describe("supplier portal evidence contract", () => {
   });
 
   it("supports camera, files, quality approval and mandatory rejection comments", () => {
-    expect(portal).toContain('capture="environment"');
+    expect(portal).toContain('import { PhotoAttachmentPicker } from "@/components/images/photo-attachment-picker"');
+    expect(portal).toMatch(/<PhotoAttachmentPicker\b[^>]*\bscope="supplier-response"\s+camera\s/);
+    const picker = renderToStaticMarkup(createElement(PhotoAttachmentPicker, {
+      scope: "supplier-response", camera: true, onAccept: () => undefined,
+    }));
+    const cameraInput = picker.match(/<input\b[^>]*capture="environment"[^>]*>/)?.[0];
+    expect(cameraInput).toBeDefined();
+    expect(cameraInput).toContain('type="file"');
+    expect(cameraInput).toContain('accept="image/jpeg,image/png,image/webp"');
     expect(portal).toContain(".jpg,.jpeg,.png,.webp,.pdf,.xls,.xlsx");
     expect(migration).toContain("rncp.action_validated");
     expect(migration).toContain("rncp.action_rejected");

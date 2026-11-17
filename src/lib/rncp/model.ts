@@ -9,6 +9,7 @@ export interface MatrixReport {
   id: string; folio: string; organizationId: string; supplierId: string | null;
   supplierName: string; supplierCode: string; reportDate: string | null;
   material: string; defect: string; actionType: string; origin: "historical" | "native" | "legacy";
+  legacyStatus?: "draft" | "submitted" | "in_progress" | "closed";
   historicalStatus: string | null; sourceRow?: number; sourceSha256?: string;
   sourceSupplierName?: string; sourceSupplierCode?: string;
   notifiedAt: string | null; responseDeadline: string | null; firstValidProgressAt: string | null;
@@ -33,7 +34,7 @@ export const statusColors: Record<string, string> = {
   Abierto: "#0F9ED5", "Sin atención": "#E97132", "En validación": "#4EA72E", "Pendiente de notificación": "#8497A0",
 };
 export const materialColors: Record<string, string> = {
-  "Avíos": "#156082", Colorantes: "#E97132", Hilo: "#196B24", Auxiliar: "#0F9ED5", "Químico": "#A02B93",
+  QAC: "#8064A2", "Avíos": "#156082", Colorantes: "#E97132", Hilo: "#196B24", Auxiliar: "#0F9ED5", "Químico": "#A02B93",
 };
 export interface MatrixFilters { year: string; month: string; day: string; from: string; to: string; material: string; supplierId: string; state: string; search: string; }
 export const emptyMatrixFilters: MatrixFilters = { year: "", month: "", day: "", from: "", to: "", material: "", supplierId: "", state: "", search: "" };

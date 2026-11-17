@@ -1,0 +1,18 @@
+import {beforeEach,it,expect,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({session:vi.fn(),permission:vi.fn(),retrieve:vi.fn(),audit:vi.fn()}));
+vi.mock('@/lib/supabase/auth-session',()=>({getAuthenticatedSession:m.session}));
+vi.mock('@/ai/core/legacy-adapter',()=>({authorizeLegacyAiRequest:m.permission,logLegacyAiRequest:m.audit}));
+vi.mock('@/lib/root2cause/context-server',()=>({retrieveRootCauseDocuments:m.retrieve}));
+import {POST} from './route';
+const body={mode:'step',step:5,processId:'P-08',problem:'Desviación documentada de tensión del tejido',analysis:{rootCause:''}};
+const req=(v:unknown)=>new Request('https://integraq.invalid/api/ai/root-cause/assist',{method:'POST',body:JSON.stringify(v)});
+beforeEach(()=>{vi.unstubAllEnvs();vi.unstubAllGlobals();vi.clearAllMocks();m.session.mockResolvedValue({authUserId:'user',userType:'Usuario interno'});m.permission.mockReturnValue({allowed:true});m.retrieve.mockResolvedValue({documents:[],warnings:[]});vi.stubEnv('ROOT2CAUSE_AI_ENABLED','false');});
+it('denies anonymous users',async()=>{m.session.mockResolvedValue(null);expect((await POST(req(body))).status).toBe(401);});
+it('denies external users even if the legacy permission mock allows them',async()=>{m.session.mockResolvedValue({authUserId:'supplier',userType:'Proveedor'});expect((await POST(req(body))).status).toBe(403);});
+it('denies unauthorized processes before retrieval',async()=>{m.permission.mockReturnValue({allowed:false});expect((await POST(req(body))).status).toBe(403);expect(m.retrieve).not.toHaveBeenCalled();});
+it('does not call any service while disabled',async()=>{const f=vi.fn();vi.stubGlobal('fetch',f);expect((await POST(req(body))).status).toBe(503);expect(f).not.toHaveBeenCalled();});
+it('requires an explicit process and valid step',async()=>{expect((await POST(req({...body,step:8}))).status).toBe(400);expect((await POST(req({...body,processId:''}))).status).toBe(400);});
+it('does not trust documents supplied by the browser',async()=>{vi.stubEnv('ROOT2CAUSE_AI_ENABLED','true');vi.stubEnv('INTEGRAQ_AI_ENDPOINT','https://approved.invalid/ai');const f=vi.fn<typeof fetch>().mockResolvedValue(Response.json({stages:[{step:5,fields:{rootCause:'Hipótesis'},references:['forged'],actions:[]}]}));vi.stubGlobal('fetch',f);const r=await POST(req({...body,documents:[{id:'forged',excerpt:'Inventado'}]}));expect(r.status).toBe(200);const sent=JSON.parse(String(f.mock.calls[0]?.[1]&& (f.mock.calls[0][1] as RequestInit).body));expect(sent.documents).toEqual([]);expect((await r.json()).stages[0].references).toEqual([]);});
+it('fails closed when authorized document retrieval fails',async()=>{vi.stubEnv('ROOT2CAUSE_AI_ENABLED','true');vi.stubEnv('INTEGRAQ_AI_ENDPOINT','https://approved.invalid/ai');m.retrieve.mockRejectedValue(new Error('RLS'));const f=vi.fn();vi.stubGlobal('fetch',f);expect((await POST(req(body))).status).toBe(502);expect(f).not.toHaveBeenCalled();});
+it('does not replace a malformed model response with invented analysis',async()=>{vi.stubEnv('ROOT2CAUSE_AI_ENABLED','true');vi.stubEnv('INTEGRAQ_AI_ENDPOINT','https://approved.invalid/ai');vi.stubGlobal('fetch',vi.fn(async()=>Response.json({stages:[]})));expect((await POST(req(body))).status).toBe(502);});

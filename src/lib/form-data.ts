@@ -181,9 +181,9 @@ export const appFormCatalog: AppFormDefinition[] = [
     version: 2,
     status: "Activo",
     fields: [
+      { id: "classification", label: "Clasificación", type: "select", required: true, options: ["QAC", "Hilo", "Avíos"] },
       { id: "reportDate", label: "Fecha del reporte", type: "date", required: true },
       { id: "supplier", label: "Proveedor", type: "text", required: true },
-      { id: "purchaseOrder", label: "Orden de compra", type: "text", required: true },
       {
         id: "findingType",
         label: "Tipo de hallazgo",
@@ -519,7 +519,12 @@ export function createImportedAppForm({
 }
 
 export function normalizeAppForms(forms: AppFormDefinition[]) {
-  return forms.map((form) => {
+  return forms.map((savedForm) => {
+    // Hide the retired RNCP field in cached definitions without removing values
+    // from historical records or changing other application forms.
+    const form = savedForm.id === "FORM-CA-25" && savedForm.registrationNumber === "F-CA-25"
+      ? { ...savedForm, fields: [...savedForm.fields.filter(field => field.id !== "purchaseOrder" && field.id !== "classification"), { id: "classification", label: "Clasificación", type: "select" as const, required: true, options: ["QAC", "Hilo", "Avíos"] }] }
+      : savedForm;
     if (form.dashboard.objective && form.dashboard.insights?.length) return form;
     const generated = generateDashboardDefinition(
       {

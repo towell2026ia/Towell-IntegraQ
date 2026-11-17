@@ -16,6 +16,13 @@ export type CorrectiveActionSource =
 export type CorrectiveActionSeverity = "low" | "medium" | "high" | "critical";
 
 export interface A3ActionPlanItem {
+  cause?: string;
+  expectedResult?: string;
+  completionEvidence?: string;
+  effectivenessMethod?: string;
+  documentRefs?: string[];
+  redboothTaskId?: string;
+  redboothUrl?: string;
   id: string;
   description: string;
   owner: string;
@@ -24,6 +31,8 @@ export interface A3ActionPlanItem {
 }
 
 export interface A3Analysis {
+  evidenceId?: string;
+  reviewedSteps?: number[];
   eventType: string;
   severityJustification: string;
   fiveW2H: {

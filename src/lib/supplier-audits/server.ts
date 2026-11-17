@@ -1,4 +1,5 @@
 import "server-only";
+import { isAuditWithdrawn } from "./withdrawal";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -11,6 +12,10 @@ export function auditRpcError(error: { code?: string; message?: string } | null)
   if (!error) return;
   if (["PGRST202", "42P01", "42703", "PGRST204"].includes(error.code ?? "")) throw new SupplierAuditError("Calendario pendiente de activación: falta aplicar la migración específica autorizada. No se modificó ningún registro.", 503);
   const messages: Record<string, string> = {
+    AUDIT_WITHDRAWN: "La auditoría está retirada de programación. Sólo puede consultarse hasta su restauración autorizada.",
+    AUDIT_ADMIN_REQUIRED: "El retiro y la restauración requieren un administrador autorizado.",
+    AUDIT_WITHDRAWAL_TRANSITION: "La situación del expediente cambió. Actualiza antes de intentar otra operación.",
+    AUDIT_WITHDRAWAL_REASON: "Indica un motivo de 5 a 2000 caracteres.",
     AUDIT_CONFLICT: "El expediente cambió. Actualiza los datos antes de guardar; tu captura permanece abierta.",
     AUDIT_INSPECTOR_REQUIRED: "La programación requiere el permiso Proveedores → Editar vigente en Usuarios y acceso.",
     AUDIT_SUPPLIER_SCOPE_UNVERIFIED: "El proveedor no está disponible dentro del catálogo autorizado de tu organización.",
@@ -23,7 +28,7 @@ export function auditRpcError(error: { code?: string; message?: string } | null)
     AUDIT_CANCELLED: "La auditoría está cancelada. Reprogámala con motivo antes de adjuntar resultados.",
   };
   const key = Object.keys(messages).find(k => error.message?.includes(k));
-  throw new SupplierAuditError(key ? messages[key] : "La operación no se completó. Verifica permisos, estado, fechas y relaciones del expediente.", error.code === "42501" ? 403 : error.message?.includes("CONFLICT") ? 409 : 400);
+  throw new SupplierAuditError(key ? messages[key] : "La operación no se completó. Verifica permisos, estado, fechas y relaciones del expediente.", error.code === "42501" ? 403 : error.message?.match(/CONFLICT|AUDIT_WITHDRAWN|AUDIT_WITHDRAWAL_TRANSITION/) ? 409 : 400);
 }
 export async function auditContext(mode: "view" | "manage" | "admin" = "view") {
   const session = await getAuthenticatedSession();
@@ -32,8 +37,8 @@ export async function auditContext(mode: "view" | "manage" | "admin" = "view") {
   const supabase = await createClient();
   const result = await supabase.rpc("iq_supplier_audit_context");
   auditRpcError(result.error);
-  const permissions = result.data as { organizationId: string; canManage: boolean; administrator: boolean } | null;
-  if (!permissions?.organizationId || mode === "manage" && !permissions.canManage || mode === "admin" && !permissions.administrator) throw new SupplierAuditError(mode === "manage" ? "La programación requiere Proveedores → Editar en Usuarios y acceso." : "Operación no autorizada.", 403);
+  const permissions = result.data as { organizationId: string; canManage: boolean; administrator: boolean; withdrawalVersion?: number } | null;
+  if (!permissions?.organizationId || mode === "manage" && !permissions.canManage || mode === "admin" && (!permissions.administrator || !permissions.canManage)) throw new SupplierAuditError(mode === "manage" ? "La programación requiere Proveedores → Editar en Usuarios y acceso." : "Operación no autorizada.", 403);
   return { ...permissions!, session, supabase, admin: createAdminClient() };
 }
 export type AuditContext = Awaited<ReturnType<typeof auditContext>>;
@@ -67,6 +72,9 @@ export async function auditEvent(context: AuditContext, id: string) {
   auditRpcError(result.error); if (!result.data) throw new SupplierAuditError("Expediente no disponible en tu organización.", 404);
   return result.data as SupplierAudit;
 }
+export function assertAuditWritable(event: SupplierAudit) {
+  if (isAuditWithdrawn(event)) throw new SupplierAuditError("La auditoría está retirada de programación. Restaúrala con autorización antes de modificarla.", 409);
+}
 export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWorkspace> {
   const events = await auditPages<SupplierAudit>((from, to) => context.admin.from("supplier_audit_events").select("*", { count: "exact" }).eq("organization_id", context.organizationId).order("id").range(from, to));
   const ids = events.map(e => e.id), results: AuditResult[] = [], files: SupplierAuditFile[] = [];
@@ -76,7 +84,7 @@ export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWo
     files.push(...await auditPages<SupplierAuditFile>((from, to) => context.admin.from("file_objects").select("id,resource_id,resource_type,original_name,version,is_current,created_at,size_bytes", { count: "exact" }).in("resource_type", ["supplier_audit_report", "supplier_audit_action_plan"]).eq("workspace_id", context.organizationId).in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
   const history = await auditPages<AuditWorkspace["history"][number]>((from, to) => context.admin.from("audit_log").select("id,resource_id,action,created_at,reason,actor_id,user_name_snapshot", { count: "exact" }).eq("organization_id", context.organizationId).eq("resource_type", "supplier_audit_event").order("id").range(from, to));
-  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, history };
+  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, withdrawalVersion: context.withdrawalVersion ?? 0, history };
 }
 export function auditFailure(error: unknown) {
   return Response.json({ error: error instanceof Error ? error.message : "La operación de auditoría no se completó." }, { status: error instanceof SupplierAuditError ? error.status : 500 });

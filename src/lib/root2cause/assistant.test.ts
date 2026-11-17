@@ -1,0 +1,26 @@
+import {describe,it,expect} from 'vitest';
+import {normalizeProposal,applyStageSuggestion,stageSnapshot,relevantExcerpts,proposalContext,assertProposalContext,assertProposalSnapshots} from './assistant';
+import type {A3Analysis} from '@/lib/types';
+export const analysis=():A3Analysis=>({eventType:'Evento documentado',severityJustification:'',fiveW2H:{what:'',why:'',where:'',when:'',who:'',how:'',howMuch:''},brainstorm:[],ishikawa:{workforce:[],machinery:[],method:[],material:[],environment:[],measurement:[]},nonDetectionCause:'',rootCause:'',nonDetectionWhys:[],rootCauseWhys:[],plans:[]});
+const stage=(step:number)=>({step,fields:{},rationale:'Hipótesis por validar',missingData:['Medición'],references:['known','foreign'],actions:[]});
+describe('Root2Cause contextual drafts',()=>{
+ it('requires all eight stages for complete generation',()=>expect(()=>normalizeProposal({stages:[stage(0)]},[])).toThrow());
+ it('accepts a complete draft without moving or saving records',()=>expect(normalizeProposal({stages:Array.from({length:8},(_,i)=>stage(i))},[]).stages).toHaveLength(8));
+ it('rejects duplicate stages',()=>expect(()=>normalizeProposal({stages:[stage(0),stage(0)]},[])).toThrow());
+ it('rejects an unrequested stage',()=>expect(()=>normalizeProposal({stages:[stage(5)]},[],2)).toThrow());
+ it('discards references not recovered by the server',()=>expect(normalizeProposal({stages:[stage(0)]},[{id:'known',code:'P',title:'Registro',type:'P'}],0).stages[0].references).toEqual(['known']));
+ it('does not trust model owner, date, status or arbitrary fields',()=>{const s=normalizeProposal({stages:[{...stage(5),fields:{rootCause:'Hipótesis',owner:'Inventado',dueDate:'2026-01-01',status:'closed'}}]},[],5).stages[0];expect(s.fields).toEqual({rootCause:'Hipótesis',nonDetectionCause:''});});
+ it('rejects generic corrective actions missing verification',()=>expect(()=>normalizeProposal({stages:[{...stage(7),actions:[{description:'Mejorar'}]}]},[],7)).toThrow());
+ it('assigns neither people nor dates when accepting suggested actions',()=>{const s=normalizeProposal({stages:[{...stage(7),actions:[{description:'Ajustar control',cause:'Variación',expectedResult:'Estabilidad',completionEvidence:'Registro',effectivenessMethod:'Comparar mediciones',owner:'Inventado',dueDate:'2026-01-01',status:'completed'}]}]},[],7).stages[0];const a=analysis();const next=applyStageSuggestion(a,s,stageSnapshot(a,7));expect(next.plans[0]).toMatchObject({owner:'',dueDate:'',status:'pending'});expect(a.plans).toEqual([]);});
+ it('blocks stale results after manual edits',()=>{const a=analysis(),snapshot=stageSnapshot(a,5);a.rootCause='Edición posterior';expect(()=>applyStageSuggestion(a,normalizeProposal({stages:[stage(5)]},[],5).stages[0],snapshot)).toThrow(/cambió/);});
+ it('blocks validated stages',()=>{const a=analysis();expect(()=>applyStageSuggestion(a,normalizeProposal({stages:[stage(5)]},[],5).stages[0],stageSnapshot(a,5),true)).toThrow(/validada/);});
+ it('changes only the accepted stage',()=>{const a=analysis();const next=applyStageSuggestion(a,normalizeProposal({stages:[{...stage(5),fields:{rootCause:'Hipótesis'}}]},[],5).stages[0],stageSnapshot(a,5));expect(next.eventType).toBe(a.eventType);expect(next.rootCause).toBe('Hipótesis');expect(a.rootCause).toBe('');});
+ it('retrieves related text instead of inventing excerpts',()=>{expect(relevantExcerpts('Medir tensión del tejido cada turno.','tensión')).toContain('Medir tensión');expect(relevantExcerpts('Manual de ventas.','teñido')).toBe('');});
+});
+
+it('preserves existing plans and their evidence identities on accepting AI',()=>{const a=analysis();a.plans=[{id:'existing',description:'Validated plan',owner:'Owner',dueDate:'2026-11-12',status:'completed'}];const s=normalizeProposal({stages:[{...stage(7),actions:[{description:'New proposal',cause:'Hypothesis',expectedResult:'Outcome',completionEvidence:'Record',effectivenessMethod:'Measure'}]}]},[],7).stages[0];const next=applyStageSuggestion(a,s,stageSnapshot(a,7));expect(next.plans[0]).toEqual(a.plans[0]);expect(next.plans).toHaveLength(2);});
+it('rejects a proposal after context or authorized process changes',()=>{const before=proposalContext('Context','P-08');expect(()=>assertProposalContext(before,'Changed','P-08')).toThrow();expect(()=>assertProposalContext(before,'Context','P-09')).toThrow();expect(()=>assertProposalContext(before,'Context','P-08')).not.toThrow();});
+
+it('invalidates action suggestions if an earlier cause was manually changed',()=>{const a=analysis();const snapshots=Array.from({length:8},(_,i)=>stageSnapshot(a,i));a.rootCause='Manual correction';expect(()=>assertProposalSnapshots(a,snapshots)).toThrow(/expediente cambió/);});
+it('allows accepting successive reviewed stages from one full proposal',()=>{let a=analysis();const snapshots=Array.from({length:8},(_,i)=>stageSnapshot(a,i));const s=normalizeProposal({stages:[{...stage(5),fields:{rootCause:'Reviewed hypothesis'}}]},[],5).stages[0];assertProposalSnapshots(a,snapshots);a=applyStageSuggestion(a,s,snapshots[5]);snapshots[5]=stageSnapshot(a,5);expect(()=>assertProposalSnapshots(a,snapshots)).not.toThrow();});
+it('rejects an incomplete request snapshot',()=>{expect(()=>assertProposalSnapshots(analysis(),[])).toThrow();});

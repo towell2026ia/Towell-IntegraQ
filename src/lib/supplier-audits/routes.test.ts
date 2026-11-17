@@ -10,7 +10,7 @@ import { GET as fileGET } from "@/app/api/suppliers/audits/[eventId]/files/[file
 import { SupplierAuditError } from "./server";
 const request = (body: object) => new Request("https://integraq.test/api/suppliers/audits", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 describe("supplier audit API authorization", () => {
- beforeEach(() => { vi.clearAllMocks(); mocks.rpc.mockResolvedValue({ data: "event-1", error: null }); mocks.context.mockImplementation(async (mode = "view") => { if (mode !== "view") throw new SupplierAuditError("Inspector required", 403); return { organizationId: "org-1", administrator: false, canManage: false, supabase: { rpc: mocks.rpc } }; }); mocks.workspace.mockResolvedValue({ events: [] }); });
+ beforeEach(() => { vi.clearAllMocks(); mocks.event.mockResolvedValue({ id: "event-1", withdrawn_at: null }); mocks.rpc.mockResolvedValue({ data: "event-1", error: null }); mocks.context.mockImplementation(async (mode = "view") => { if (mode !== "view") throw new SupplierAuditError("Inspector required", 403); return { organizationId: "org-1", administrator: false, canManage: false, supabase: { rpc: mocks.rpc } }; }); mocks.workspace.mockResolvedValue({ events: [] }); });
  it("authorized reader can view but cannot create reschedule cancel or finalize by direct requests", async () => {
   expect((await GET()).status).toBe(200);
   for (const state of ["scheduled", "rescheduled", "cancelled"]) expect((await POST(request({ command: "save", id: "event-1", reason: "Unauthorized request", payload: { state } }))).status).toBe(403);

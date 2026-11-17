@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { auditContext, auditEvent, auditFailure, auditRpcError, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
+import { assertAuditWritable, auditContext, auditEvent, auditFailure, auditRpcError, auditSuppliers, SupplierAuditError } from "@/lib/supplier-audits/server";
 import { verifyAuditPdf } from "@/lib/supplier-audits/pdf";
 export const maxDuration = 30;
 export async function POST(request: Request, { params }: { params: Promise<{ eventId: string }> }) {
   try {
     const context = await auditContext("manage"), { eventId } = await params, event = await auditEvent(context, eventId);
+    assertAuditWritable(event);
     const suppliers = await auditSuppliers(context);
     if (!event.supplier_id || !suppliers.some(s => s.id === event.supplier_id)) throw new SupplierAuditError("Confirma la asociación del proveedor antes de adjuntar archivos.", 403);
     const form = await request.formData(), file = form.get("file"), type = form.get("type"), reason = String(form.get("reason") ?? "").trim();

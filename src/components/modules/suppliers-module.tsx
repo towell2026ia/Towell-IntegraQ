@@ -18,14 +18,20 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState, useRef, useEffect } from "react";
 
 import { useExternalCompanies } from "@/hooks/use-external-companies";
+import { useRncpInitialPhotos } from "@/hooks/use-rncp-initial-photos";
+import { RncpInitialPhotos } from "./rncp-initial-photos";
+import { RncpGeneratedPreview } from "./rncp-generated-preview";
+import { buildRncpPdf, photoForPdf, loadRncpLogo } from "@/lib/rncp/generated-pdf";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import { useSupplierAudits } from "@/hooks/use-supplier-audits";
 import { SupplierAuditCalendar, SupplierAuditDialog, SupplierAuditProfile, SupplierAuditResults, type AuditFocus } from "./supplier-audit-calendar";
 import { supplierRncpEffectiveness } from "@/lib/rncp/effectiveness";
+import { generateStoredRncpPdf } from "@/lib/rncp-data";
+import { RNCP_CLASSIFICATIONS, isRncpClassification, reportOperationalState, reportStateLabel } from "@/lib/rncp/flow";
 import { rncpIdFromSearch } from "@/lib/rncp/link";
 import { RncpMatrixDashboard } from "./rncp-matrix-dashboard";
 import { NewSupplierDialog } from "./new-supplier-dialog";
@@ -192,8 +198,8 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
-        : <RncpMatrixDashboard initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
-      {view === "rncp" ? <RncpForm administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} report={rncpDirectory.reports.find((item) => item.id === editingRncpId)} /> : null}
+        : <RncpMatrixDashboard key={matrixSupplierId || "all-suppliers"} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
+      {view === "rncp" ? <RncpForm administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={rncpDirectory.reports.find((item) => item.id === editingRncpId)} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
         : <><SupplierAuditResults directory={auditDirectory} onOpen={setAuditFocus} /><SupplierAssessmentResults canUpdate={canUpdateRncp} companies={companyDirectory.companies} /></> : null}
@@ -460,7 +466,7 @@ function SupplierParetoChart() {
   );
 }
 
-function RncpForm({ administrator, companies, demo, onSaved, report }: { administrator: boolean; companies: ExternalCompany[]; demo: boolean; onSaved: (submitted: boolean) => Promise<void>; report?: RncpReport }) {
+export function RncpForm({ administrator, companies, demo, onSaved, onReopen, report }: { administrator: boolean; companies: ExternalCompany[]; demo: boolean; onSaved: (submitted: boolean) => Promise<void>; onReopen?:(id:string)=>void; report?: RncpReport }) {
   const [values, setValues] = useState<RncpDraftInput>(() => valuesFromReport(report));
   const [reason, setReason] = useState("");
   const [notice, setNotice] = useState("");
@@ -468,6 +474,13 @@ function RncpForm({ administrator, companies, demo, onSaved, report }: { adminis
   const [saving, setSaving] = useState(false);
   const [persistedId, setPersistedId] = useState(report?.id);
   const [persistedFolio, setPersistedFolio] = useState(report?.folio);
+  const native = !report || report.origin === "native";
+  const flowEnabled = process.env.NEXT_PUBLIC_RNCP_FLOW_ENABLED === "true";
+  const photos = useRncpInitialPhotos(report?.id, flowEnabled && native && !demo);
+  const draftRequest = useRef<{key:string;values:RncpDraftInput} | null>(null);
+  const [requiresReopen,setRequiresReopen]=useState(false);
+  const [pdf,setPdf] = useState<{url:string;name:string} | null>(null);
+  useEffect(()=>()=>{if(pdf)URL.revokeObjectURL(pdf.url);},[pdf]);
   const supplier = companies.find((company) => company.id === values.supplierId);
   const sites = supplier?.sites.filter((site) => site.active) ?? [];
   const correction = Boolean(report && report.status !== "draft");
@@ -477,15 +490,57 @@ function RncpForm({ administrator, companies, demo, onSaved, report }: { adminis
     setValues((current) => ({ ...current, [key]: value }));
   }
 
+  async function previewPdf() {
+    setSaving(true);setError("");
+    try {const pictures=await photos.blobs();const images:Awaited<ReturnType<typeof photoForPdf>>[]=[];for(const p of pictures)images.push(await photoForPdf(p.name,p.blob));
+      const result=await buildRncpPdf({values,folio:persistedFolio,supplierName:supplier?.name,supplierCode:supplier?.code,siteName:sites.find(s=>s.id===values.siteId)?.name,status:report?.status??"draft",photos:images},await loadRncpLogo());
+      setPdf({url:URL.createObjectURL(new Blob([new Uint8Array(result.bytes).buffer],{type:"application/pdf"})),name:(persistedFolio??"BORRADOR")+"-F-CA-25.pdf"});
+    }catch(cause){setError(cause instanceof Error?cause.message:"No se pudo generar el PDF.");}finally{setSaving(false);}
+  }
+
+  async function reopenSaved(){
+    if(!persistedId||!onReopen)return;
+    setSaving(true);setError("");
+    try{await onSaved(false);onReopen(persistedId);}catch(cause){setError(cause instanceof Error?cause.message:"No se pudo consultar el borrador guardado.");}finally{setSaving(false);}
+  }
+
   async function persist(action: "draft" | "submit" | "correct") {
     setSaving(true); setError(""); setNotice("");
     try {
+      if (flowEnabled && native && !isRncpClassification(values.classification)) throw new Error("Selecciona la clasificación QAC, Hilo o Avíos.");
       if (demo) {
         setNotice(action === "submit" ? "RNCP validada en modo demo; no se enviaron datos a producción." : "Borrador guardado únicamente en la sesión demo.");
       } else {
-        const result = await saveRncpReport(action, values, persistedId, action === "correct" ? reason : undefined);
+        if (!flowEnabled) {
+          const result = await saveRncpReport(action, values, persistedId, action === "correct" ? reason : undefined);
+          setPersistedId(result.report.id);
+          setPersistedFolio(result.report.folio);
+          await onSaved(action === "submit");
+          setNotice(action === "submit" ? "RNCP registrada para seguimiento. La comunicación real se registra por separado." : action === "correct" ? "Corrección administrativa registrada en el historial." : "Borrador guardado en IntegraQ.");
+          return;
+        }
+        if (native && action !== "correct") await photos.prepare();
+        if(requiresReopen && persistedId){
+          await photos.save(persistedId);await onSaved(false);
+          setNotice("Fotografías conservadas. Abre el borrador guardado para revisar sus datos actuales antes de editar o registrar.");return;
+        }
+        if (!persistedId) draftRequest.current ??= {key:crypto.randomUUID(),values:structuredClone(values)};
+        let result = await saveRncpReport(action === "submit" ? "draft" : action, !persistedId && draftRequest.current ? draftRequest.current.values : values, persistedId, action === "correct" ? reason : undefined, !persistedId ? draftRequest.current?.key : undefined);
         setPersistedId(result.report.id);
         setPersistedFolio(result.report.folio);
+        if(result.requiresReload)setRequiresReopen(true);
+        if(result.requiresReload && result.report.status!=="draft"){
+          await onSaved(false);setNotice("El expediente recuperado ya fue registrado. Ábrelo para consultar su versión actual; no se modificó.");return;
+        }
+        if (native && action !== "correct") await photos.save(result.report.id);
+        if(result.requiresReload){await onSaved(false);setNotice("Borrador con fotografías guardado. Ábrelo para revisar sus datos actuales y registrar; no se reaplicaron datos antiguos.");return;}
+        if (action === "submit") result = await saveRncpReport("submit",values,result.report.id);
+        if(action==="submit" || action==="correct") {
+          try{await generateStoredRncpPdf(result.report.id);}catch(cause){
+            await onSaved(true);setRequiresReopen(true);
+            setError("RNCP guardado. PDF pendiente: "+(cause instanceof Error?cause.message:"Consulta el expediente y reintenta generar el PDF."));return;
+          }
+        }
         await onSaved(action === "submit");
         setNotice(action === "submit" ? "RNCP registrada para seguimiento. La comunicación real se registra por separado." : action === "correct" ? "Corrección administrativa registrada en el historial." : "Borrador guardado en IntegraQ.");
       }
@@ -494,30 +549,34 @@ function RncpForm({ administrator, companies, demo, onSaved, report }: { adminis
   }
 
   return <section className="rncp-form-panel">
-    <header><div><p className="module-kicker">Formato F-CA-25</p><h3>{report ? `${report.folio} · ${correction ? "Corrección administrativa" : "Editar borrador"}` : "Nuevo Reporte de No Calidad"}</h3><p>Guardar borrador admite información incompleta. Registrar valida los campos obligatorios; el plazo inicia con una comunicación real verificada.</p></div><span>{report ? statusLabel(report.status) : "Nuevo"}</span></header>
+    <header><div><p className="module-kicker">Formato F-CA-25</p><h3>{report ? `${report.folio} · ${correction ? "Corrección administrativa" : "Editar borrador"}` : "Nuevo Reporte de No Calidad"}</h3><p>Guardar borrador admite información incompleta. Registrar valida los campos obligatorios; el plazo inicia con una comunicación real verificada.</p></div><span>{report ? reportStateLabel(report) : "Nuevo"}</span></header>
+    {requiresReopen&&persistedId&&onReopen?<button type="button" disabled={saving||photos.busy||photos.dirty} onClick={()=>void reopenSaved()}>Abrir borrador guardado</button>:null}
     <form onSubmit={(event) => event.preventDefault()}>
-      <fieldset disabled={!editable || saving}>
+      <fieldset disabled={!editable || saving || requiresReopen}>
         <div className="rncp-form-grid">
           <label><span>Folio</span><input disabled value={persistedFolio ?? "Se genera al guardar"} /></label>
           <label><span>Fecha de reporte *</span><input type="date" value={values.reportDate ?? ""} onChange={(event) => update("reportDate", event.target.value)} /></label>
           <label><span>Proveedor *</span><select value={values.supplierId ?? ""} onChange={(event) => { update("supplierId", event.target.value); update("siteId", ""); }}><option value="">Seleccionar proveedor</option>{companies.filter((company) => company.kind === "supplier" && company.active).map((company) => <option key={company.id} value={company.id}>{company.code} · {company.name}</option>)}</select></label>
           <label><span>Sucursal {sites.length ? "*" : "(opcional)"}</span><select disabled={!values.supplierId || !sites.length} value={values.siteId ?? ""} onChange={(event) => update("siteId", event.target.value)}><option value="">{sites.length ? "Seleccionar sucursal" : "Toda la empresa"}</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.code} · {site.name}</option>)}</select></label>
           <label><span>Problema o defecto *</span><input value={values.findingType ?? ""} onChange={(event) => update("findingType", event.target.value)} /></label>
+          {flowEnabled ? <label><span>Clasificación {native ? "*" : "(sin inferir históricos)"}</span><select value={values.classification ?? ""} onChange={event => update("classification", isRncpClassification(event.target.value) ? event.target.value : undefined)}><option value="">Seleccionar clasificación</option>{RNCP_CLASSIFICATIONS.map(value => <option key={value}>{value}</option>)}</select></label> : null}
           <label><span>Producto, material o servicio *</span><input value={values.materialOrService ?? ""} onChange={(event) => update("materialOrService", event.target.value)} /></label>
-          <label><span>Orden de compra</span><input value={values.purchaseOrder ?? ""} onChange={(event) => update("purchaseOrder", event.target.value)} /></label>
           <label><span>Cantidad rechazada</span><input min="0" step="any" type="number" value={values.rejectedQuantity ?? ""} onChange={(event) => update("rejectedQuantity", event.target.value)} /></label>
           <label><span>Responsable *</span><input value={values.responsibleName ?? ""} onChange={(event) => update("responsibleName", event.target.value)} /></label>
           <label><span>Vencimiento de respuesta</span><input readOnly value={values.responseDueDate ?? "Se calcula desde la notificación real"} /></label>
           <label className="wide"><span>Descripción y evidencia del problema *</span><textarea rows={5} value={values.description ?? ""} onChange={(event) => update("description", event.target.value)} /></label>
           <label className="wide"><span>Acciones inmediatas de contención</span><textarea rows={3} value={values.immediateDisposition ?? ""} onChange={(event) => update("immediateDisposition", event.target.value)} /></label>
-          <label className="checkbox-field"><input checked={values.portalVisible !== false} type="checkbox" onChange={(event) => update("portalVisible", event.target.checked)} /> Visible en el portal del proveedor después del envío</label>
+          <label className="checkbox-field"><input checked={values.portalVisible !== false} type="checkbox" onChange={(event) => update("portalVisible", event.target.checked)} /> Visible para el proveedor autorizado; guardar no envía correos</label>
           {correction ? <label className="wide"><span>Motivo de corrección administrativa *</span><textarea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} /></label> : null}
         </div>
       </fieldset>
+      {flowEnabled && native ? <RncpInitialPhotos photos={photos} editable={!correction && !demo} disabled={saving || !editable} /> : !native ? <p>Los RNCP históricos conservan sus originales; consulta su PDF desde el Dashboard RNCP.</p> : null}
       {notice ? <div className="form-success"><CheckCircle2 size={17} /> {notice}</div> : null}
       {error ? <div className="form-error" role="alert">{error}</div> : null}
-      <div className="configuration-actions"><button className="button button-secondary" type="button" disabled><Download size={16} /> Vista PDF</button>{!correction ? <button className="button button-secondary" disabled={saving} onClick={() => void persist("draft")} type="button">Guardar borrador</button> : null}{!report || report.status === "draft" ? <button className="button button-primary" disabled={saving} onClick={() => void persist("submit")} type="button">Registrar para seguimiento</button> : null}{correction && administrator ? <button className="button button-primary" disabled={saving || !reason.trim()} onClick={() => void persist("correct")} type="button">Guardar corrección</button> : null}</div>
+      <div className="configuration-actions">{flowEnabled ? <button className="button button-secondary" type="button" disabled={saving || photos.busy || photos.loading || !native || demo || requiresReopen} onClick={()=>void previewPdf()}><Download size={16} /> Vista PDF</button> : null}{!correction ? <button className="button button-secondary" disabled={saving || photos.busy || photos.loading} onClick={() => void persist("draft")} type="button">{requiresReopen?"Reintentar fotografías pendientes":"Guardar borrador"}</button> : null}{!report || report.status === "draft" ? <button className="button button-primary" disabled={saving || photos.busy || photos.loading || requiresReopen} onClick={() => void persist("submit")} type="button">Registrar para seguimiento</button> : null}{correction && administrator ? <button className="button button-primary" disabled={saving || !reason.trim()} onClick={() => void persist("correct")} type="button">Guardar corrección</button> : null}</div>
     </form>
+    <p>Vista PDF muestra una previsualización. Al registrar o corregir se guarda la versión oficial; si falla, puede reintentarse desde el expediente.</p>
+    {pdf ? <RncpGeneratedPreview url={pdf.url} name={pdf.name} folio={persistedFolio} onClose={()=>setPdf(null)} /> : null}
   </section>;
 }
 
@@ -672,9 +731,9 @@ function toSupplierQualityRecord(company: ExternalCompany, reports: RncpReport[]
     name: company.name,
     category: company.category ?? "Sin categoría",
     rncpTotal: companyReports.length,
-    rncpClosed: companyReports.filter((report) => report.status === "closed").length,
-    rncpLate: companyReports.filter((report) => report.late).length,
-    rncpOpen: companyReports.filter((report) => report.status === "submitted" || report.status === "in_progress").length,
+    rncpClosed: companyReports.filter((report) => reportOperationalState(report) === "closed").length,
+    rncpLate: companyReports.filter((report) => reportOperationalState(report) === "late").length,
+    rncpOpen: companyReports.filter((report) => ["open","in_process","unattended","validation"].includes(reportOperationalState(report))).length,
     effectiveness: supplierRncpEffectiveness(companyReports, company.id).percent,
     auditRequired: true,
     nextAudit: null,
@@ -684,27 +743,23 @@ function toSupplierQualityRecord(company: ExternalCompany, reports: RncpReport[]
 function summarizeRncp(reports: RncpReport[]) {
   return {
     total: reports.length,
-    draft: reports.filter((report) => report.status === "draft").length,
-    submitted: reports.filter((report) => report.status === "submitted").length,
-    inProgress: reports.filter((report) => report.status === "in_progress").length,
-    late: reports.filter((report) => report.late).length,
-    closed: reports.filter((report) => report.status === "closed").length,
+    draft: reports.filter((report) => reportOperationalState(report) === "draft").length,
+    submitted: reports.filter((report) => ["open","unattended","validation"].includes(reportOperationalState(report))).length,
+    inProgress: reports.filter((report) => reportOperationalState(report) === "in_process").length,
+    late: reports.filter((report) => reportOperationalState(report) === "late").length,
+    closed: reports.filter((report) => reportOperationalState(report) === "closed").length,
   };
 }
 
 function valuesFromReport(report?: RncpReport): RncpDraftInput {
   return report ? {
     supplierId: report.supplierId, siteId: report.siteId, reportDate: report.reportDate,
-    purchaseOrder: report.purchaseOrder, materialOrService: report.materialOrService,
+    materialOrService: report.materialOrService, classification: report.classification,
     findingType: report.findingType, rejectedQuantity: report.rejectedQuantity?.toString(),
     description: report.description, immediateDisposition: report.immediateDisposition,
     responseDueDate: report.responseDueDate, responsibleName: report.responsibleName,
     portalVisible: report.portalVisible,
   } : { portalVisible: true };
-}
-
-function statusLabel(status: RncpReport["status"]) {
-  return { draft: "Borrador", submitted: "Enviada", in_progress: "En proceso", closed: "Cerrada" }[status];
 }
 
 function formatDate(value: string) {
