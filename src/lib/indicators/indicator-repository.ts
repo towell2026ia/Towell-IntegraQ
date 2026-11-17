@@ -49,3 +49,10 @@ export async function persistIndicatorRuntimeSettings(settings: IndicatorRuntime
     body: JSON.stringify(settings),
   }));
 }
+
+export async function persistIndicatorObjective(indicatorId: string, expectedUpdatedAt: string, objective: string) {
+  return readJson<{ indicatorId: string; objective: string; updatedAt: string }>(await fetch("/api/indicators/objective", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ indicatorId, expectedUpdatedAt, objective }),
+  }));
+}

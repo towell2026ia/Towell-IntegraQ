@@ -14,6 +14,7 @@ import { canPerformModuleAction } from "@/lib/module-permissions";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createClient } from "@/lib/supabase/server";
+import { validQualityObjective } from "@/lib/indicators/quality-objectives";
 
 type RuntimeContext = {
   userId: string;
@@ -79,6 +80,13 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "La definición del indicador no es válida." }, { status: 400 });
     }
     const indicator = body.indicator;
+    if (!validQualityObjective(indicator.qualityObjective)) return NextResponse.json({ error: "Selecciona uno de los objetivos de Calidad registrados." }, { status: 400 });
+    const existingObjective = await resolved.supabase!.from("indicator_definitions").select("quality_objective")
+      .eq("code", indicator.id).eq("organization_id", resolved.context!.workspaceId)
+      .eq("workspace_mode", resolved.context!.workspaceMode).maybeSingle();
+    if (existingObjective.error) return databaseError(existingObjective.error);
+    if (existingObjective.data && (existingObjective.data.quality_objective ?? "") !== indicator.qualityObjective)
+      return NextResponse.json({ error: "Usa Editar objetivo vinculado para cambiar esta relación sin afectar otros datos." }, { status: 409 });
     const parsedRule = parseIndicatorMetric(indicator.metric);
     const periods = Object.entries(indicator.schedule).flatMap(([year, schedule]) =>
       quarters.map((quarter) => {
@@ -282,7 +290,7 @@ async function loadRuntimeSnapshot(
     timezone: INDICATOR_BUSINESS_TIME_ZONE,
   } as const;
   let definitionsRequest = supabase.from("indicator_definitions")
-    .select("id,code,source_row,process_id,area,direction_objective,direction_metric,quality_objective,name,leader_name,owner_name_snapshot,metric_label,description,periodicity,active")
+    .select("id,code,source_row,process_id,area,direction_objective,direction_metric,quality_objective,name,leader_name,owner_name_snapshot,metric_label,description,periodicity,active,updated_at")
     .eq("organization_id", context.workspaceId)
     .eq("workspace_mode", context.workspaceMode)
     .order("code");
@@ -357,6 +365,7 @@ async function loadRuntimeSnapshot(
     }
     return {
       id: row.code,
+      updatedAt: row.updated_at,
       active: row.active,
       sourceRow: Number(row.source_row || 0),
       processId: row.process_id,

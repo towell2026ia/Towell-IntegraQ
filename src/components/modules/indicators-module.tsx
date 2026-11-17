@@ -45,13 +45,16 @@ import {
 import {
   ALL_INDICATOR_AREAS,
   canManageIndicatorCatalog,
+  canUpdateIndicatorResult,
   getIndicatorCaptureDenialMessage,
   getIndicatorCaptureDenialReason,
   getDefaultIndicatorArea,
   getAccessibleIndicators,
   matchesIndicatorArea,
 } from "@/lib/indicator-access";
-import { isAdministrator, type ActiveSession } from "@/lib/session-data";
+import { isAdministrator, isDemoSession, type ActiveSession } from "@/lib/session-data";
+import { QUALITY_OBJECTIVES } from "@/lib/indicators/quality-objectives";
+import { persistIndicatorObjective } from "@/lib/indicators/indicator-repository";
 import { EvidenceManager } from "@/components/evidence/evidence-manager";
 import type { AttachmentRecord } from "@/lib/attachment-storage";
 import type { IndicatorResultInput } from "@/lib/indicators/indicator-types";
@@ -128,6 +131,19 @@ export function IndicatorsModule({
   const [dashboardQuarter, setDashboardQuarter] = useState<Quarter>("Q2");
   const [pendingQuarter, setPendingQuarter] = useState<Quarter>("Q3");
   const [submission, setSubmission] = useState<SubmissionSelection | null>(null);
+  const [editingObjective, setEditingObjective] = useState<ConfiguredIndicator | null>(null);
+  const [objectiveChoice, setObjectiveChoice] = useState("");
+  const [objectiveError, setObjectiveError] = useState("");
+  const [objectiveSaving, setObjectiveSaving] = useState(false);
+
+  async function saveObjective() {
+    if (!editingObjective?.updatedAt) { setObjectiveError("Recarga el indicador antes de guardar."); return; }
+    if (!objectiveChoice && !window.confirm("¿Quitar el objetivo vinculado a este indicador?")) return;
+    setObjectiveSaving(true); setObjectiveError("");
+    try { await persistIndicatorObjective(editingObjective.id, editingObjective.updatedAt, objectiveChoice); await onRefresh(); setEditingObjective(null); }
+    catch (cause) { setObjectiveError(cause instanceof Error ? cause.message : "No se guardó el objetivo."); }
+    finally { setObjectiveSaving(false); }
+  }
 
   useEffect(() => {
     void onRefresh();
@@ -194,7 +210,8 @@ export function IndicatorsModule({
       ) : null}
 
       {view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={changeYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
-      {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={changeYear} query={query} results={results} year={year} /> : null}
+      {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onEditObjective={(indicator) => { setEditingObjective(indicator); setObjectiveChoice(indicator.qualityObjective); setObjectiveError(""); }} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={changeYear} query={query} results={results} session={session} year={year} /> : null}
+      {editingObjective ? <div className="quality-modal-backdrop" role="presentation"><section className="quality-modal indicator-editor-modal" role="dialog" aria-modal="true" aria-label="Editar objetivo vinculado"><header><div><span>{editingObjective.id}</span><h3>Editar objetivo vinculado</h3></div><button className="icon-button" type="button" disabled={objectiveSaving} onClick={() => setEditingObjective(null)}><X size={17} /></button></header><p>Objetivo actual: {editingObjective.qualityObjective || "Sin vínculo definido"}</p><label><span>Objetivo de Calidad</span><select value={objectiveChoice} disabled={objectiveSaving} onChange={(event) => setObjectiveChoice(event.target.value)}><option value="">Sin objetivo vinculado</option>{QUALITY_OBJECTIVES.map((objective) => <option key={objective} value={objective}>{objective}</option>)}</select></label>{objectiveError ? <p role="alert" className="form-error">{objectiveError}</p> : null}<footer><button className="button button-secondary" type="button" disabled={objectiveSaving} onClick={() => setEditingObjective(null)}>Cancelar</button><button className="button button-primary" type="button" disabled={objectiveSaving || objectiveChoice === editingObjective.qualityObjective} onClick={() => void saveObjective()}>Guardar vínculo</button></footer></section></div> : null}
       {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={changeYear} query={query} quarter={pendingQuarter} results={results} session={session} year={year} /> : null}
       {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager captureDaysAfterClose={captureDaysAfterClose} definitions={definitions} key={`catalog-${captureDaysAfterClose}`} onBack={() => setView("dashboard")} onDefinitionDelete={onDefinitionDelete} onDefinitionSave={onDefinitionSave} onSettingsSave={onSettingsSave} saving={saving} year={year} /> : null}
       {view === "submission" && submission && accessibleDefinitions.some((indicator) => indicator.id === submission.indicatorId) ? (
@@ -261,7 +278,7 @@ function IndicatorDashboard({ area, areas, indicators, onAreaChange, onQueryChan
   );
 }
 
-function IndicatorSheet({ area, areas, indicators, onAreaChange, onOpenSubmission, onQueryChange, onYearChange, query, results, year }: SharedViewProps & { onOpenSubmission: (id: string, year: number, quarter: Quarter) => void }) {
+function IndicatorSheet({ area, areas, indicators, onAreaChange, onEditObjective, onOpenSubmission, onQueryChange, onYearChange, query, results, session, year }: SharedViewProps & { onEditObjective: (indicator: ConfiguredIndicator) => void; onOpenSubmission: (id: string, year: number, quarter: Quarter) => void; session: ActiveSession }) {
   function exportCsv() {
     const header = ["Código", "Área", "Objetivo de calidad", "KPI", "Líder", "Métrica", ...quarters];
     const rows = indicators.map((indicator) => {
@@ -291,7 +308,7 @@ function IndicatorSheet({ area, areas, indicators, onAreaChange, onOpenSubmissio
                 const rule = parseIndicatorMetric(indicator.metric);
                 return (
                   <tr key={indicator.id}>
-                    <td><code>{indicator.id}</code></td><td><strong>{indicator.area}</strong><small>{indicator.processId}</small></td><td>{indicator.qualityObjective || "Sin vínculo definido"}</td><td><strong>{indicator.name}</strong></td><td>{indicator.leader}</td><td><span className="indicator-metric-cell">{indicator.metric}</span></td><td>{indicator.period}</td>
+                    <td><code>{indicator.id}</code></td><td><strong>{indicator.area}</strong><small>{indicator.processId}</small></td><td>{indicator.qualityObjective || "Sin vínculo definido"}{!isDemoSession(session) && canUpdateIndicatorResult(session, indicator) ? <button className="button button-secondary" type="button" onClick={() => onEditObjective(indicator)}>Editar objetivo vinculado</button> : null}</td><td><strong>{indicator.name}</strong></td><td>{indicator.leader}</td><td><span className="indicator-metric-cell">{indicator.metric}</span></td><td>{indicator.period}</td>
                     {quarters.map((quarter) => {
                       const record = getIndicatorRecord(results, indicator.id, year, quarter);
                       const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
@@ -535,7 +552,7 @@ function IndicatorEditor({ captureDaysAfterClose, definitions, indicator, onClos
       <section className="quality-modal indicator-editor-modal" role="dialog" aria-modal="true" aria-labelledby="indicator-editor-title" onMouseDown={(event) => event.stopPropagation()}>
         <header><div><span>{indicator?.id ?? nextId}</span><h3 id="indicator-editor-title">{indicator ? "Editar indicador" : "Nuevo indicador"}</h3></div><button className="icon-button" type="button" title="Cerrar" onClick={onClose}><X size={17} /></button></header>
         <form onSubmit={submit}>
-          <div className="indicator-editor-grid"><label><span>Proceso o área</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>Proceso principal</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Procesos relacionados</span><input defaultValue={indicator ? getIndicatorProcessIds(indicator).join(", ") : ""} name="processIds" placeholder="Ej. P-13, P-15" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>Métrica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. ≥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><textarea defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective" rows={2} /></label><label className="span-2"><span>Descripción</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
+          <div className="indicator-editor-grid"><label><span>Proceso o área</span><input defaultValue={indicator?.area ?? ""} name="area" required /></label><label><span>Proceso principal</span><input defaultValue={indicator?.processId ?? ""} name="processId" required /></label><label className="span-2"><span>Procesos relacionados</span><input defaultValue={indicator ? getIndicatorProcessIds(indicator).join(", ") : ""} name="processIds" placeholder="Ej. P-13, P-15" required /></label><label className="span-2"><span>Nombre del indicador</span><input defaultValue={indicator?.name ?? ""} name="name" required /></label><label><span>Responsable</span><input defaultValue={indicator?.leader ?? ""} name="leader" required /></label><label><span>Métrica</span><input defaultValue={indicator?.metric ?? ""} name="metric" placeholder="Ej. ≥90%" required /></label><label className="span-2"><span>Objetivo de calidad</span><select defaultValue={indicator?.qualityObjective ?? ""} name="qualityObjective"><option value="">Sin vínculo definido</option>{QUALITY_OBJECTIVES.map((objective) => <option key={objective} value={objective}>{objective}</option>)}</select></label><label className="span-2"><span>Descripción</span><textarea defaultValue={indicator?.description ?? ""} name="description" required rows={3} /></label></div>
           <fieldset className="indicator-rules-fieldset"><legend>Reglas de evaluación</legend><div><label className="rule-compliant"><span>Cumple</span><input defaultValue={defaultRules.compliant} name="rule-compliant" placeholder=">=90" required /></label><label className="rule-marginal"><span>Marginal</span><input defaultValue={defaultRules.marginal} name="rule-marginal" placeholder=">=85.5,<90" required /></label><label className="rule-noncompliant"><span>No cumple</span><input defaultValue={defaultRules.noncompliant} name="rule-noncompliant" placeholder="<85.5" required /></label></div><p>Usa operadores &gt;, &gt;=, &lt;, &lt;= o =. Separa condiciones simultáneas con coma y alternativas con punto y coma.</p></fieldset>
           <fieldset className="indicator-schedule-fieldset"><legend>Calendario de captura · {year}</legend><div>{quarters.map((quarter) => { const window = defaultWindows[quarter]; const state = getIndicatorWindowState(window); return <label key={quarter}><span>{quarterLabels[quarter]}</span><small>Periodo evaluado</small><input defaultValue={defaults[quarter]} name={`schedule-${quarter}`} required type="date" /><small>Apertura</small><input defaultValue={formatBusinessDateInput(window.opensAt)} name={`opens-${quarter}`} required type="date" /><small>Cierre</small><input defaultValue={formatBusinessDateInput(window.closesAt)} name={`closes-${quarter}`} required type="date" /><em className={`indicator-window-state ${state}`}>{windowStateLabels[state]}</em></label>; })}</div><p>Edita apertura y cierre para crear una excepción por indicador. La zona horaria de negocio es America/Mexico_City.</p></fieldset>
           <footer><button className="button button-secondary" disabled={saving} type="button" onClick={onClose}>Cancelar</button><button className="button button-primary" disabled={saving} type="submit">{saving ? <LoaderCircle className="spin" size={16} /> : <Save size={16} />} Guardar indicador</button></footer>
