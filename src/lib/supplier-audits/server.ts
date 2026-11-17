@@ -26,6 +26,11 @@ export function auditRpcError(error: { code?: string; message?: string } | null)
     AUDIT_ACTUAL_DATE_AND_REPORT_REQUIRED: "Para marcar realizada se necesitan fecha real e informe PDF verificable.",
     AUDIT_INSPECTOR_PERMISSION_REQUIRED: "La cuenta asignada necesita permiso Proveedores → Editar vigente.",
     AUDIT_CANCELLED: "La auditoría está cancelada. Reprogámala con motivo antes de adjuntar resultados.",
+    AUDIT_CONTACTS_INVALID: "Revisa los contactos: nombre, correo, campos y propósito de notificación.",
+    AUDIT_CONTACTS_DUPLICATE: "Hay identificadores o correos repetidos entre los contactos.",
+    AUDIT_CONTACTS_MISSING: "Faltan contactos previamente registrados. Recarga el expediente y conserva todos antes de guardar.",
+    AUDIT_CONTACTS_DENIED: "No tienes permiso para editar los contactos de este proveedor.",
+    AUDIT_EMAIL_INVALID: "Corrige el correo del contacto indicado.",
   };
   const key = Object.keys(messages).find(k => error.message?.includes(k));
   throw new SupplierAuditError(key ? messages[key] : "La operación no se completó. Verifica permisos, estado, fechas y relaciones del expediente.", error.code === "42501" ? 403 : error.message?.match(/CONFLICT|AUDIT_WITHDRAWN|AUDIT_WITHDRAWAL_TRANSITION/) ? 409 : 400);
@@ -84,7 +89,7 @@ export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWo
     files.push(...await auditPages<SupplierAuditFile>((from, to) => context.admin.from("file_objects").select("id,resource_id,resource_type,original_name,version,is_current,created_at,size_bytes", { count: "exact" }).in("resource_type", ["supplier_audit_report", "supplier_audit_action_plan"]).eq("workspace_id", context.organizationId).in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
   const history = await auditPages<AuditWorkspace["history"][number]>((from, to) => context.admin.from("audit_log").select("id,resource_id,action,created_at,reason,actor_id,user_name_snapshot", { count: "exact" }).eq("organization_id", context.organizationId).eq("resource_type", "supplier_audit_event").order("id").range(from, to));
-  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, withdrawalVersion: context.withdrawalVersion ?? 0, history };
+  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, contactsV2Enabled: process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true", withdrawalVersion: context.withdrawalVersion ?? 0, history };
 }
 export function auditFailure(error: unknown) {
   return Response.json({ error: error instanceof Error ? error.message : "La operación de auditoría no se completó." }, { status: error instanceof SupplierAuditError ? error.status : 500 });

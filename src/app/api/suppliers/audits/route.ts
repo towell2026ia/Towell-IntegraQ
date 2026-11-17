@@ -1,6 +1,7 @@
-import { assertAuditWritable, auditEvent, auditContext, auditFailure, auditRpcError, loadAuditWorkspace, SupplierAuditError } from "@/lib/supplier-audits/server";
+import { assertAuditWritable, auditEvent, auditContext, auditFailure, auditRpcError, auditSuppliers, loadAuditWorkspace, SupplierAuditError } from "@/lib/supplier-audits/server";
 import { validDate, validateSchedule, validateScores } from "@/lib/supplier-audits/model";
 import { canWithdrawAudit, withdrawalInput } from "@/lib/supplier-audits/withdrawal";
+import { validateSupplierContacts } from "@/lib/supplier-audits/contacts";
 export async function GET() {
   try { return Response.json(await loadAuditWorkspace(await auditContext())); } catch (error) { return auditFailure(error); }
 }
@@ -39,8 +40,21 @@ export async function POST(request: Request) {
       assertAuditWritable(await auditEvent(context, body.id));
       result = await context.supabase.rpc("iq_supplier_audit_result", { p_event: body.id, p_revision: body.revision, p_result: input, p_finalize: body.finalize === true, p_reason: reason });
     } else {
-      result = await context.supabase.rpc("iq_supplier_audit_contacts", { p_supplier: body.id, p_contacts: body.payload, p_expected_updated_at: body.updatedAt, p_reason: reason });
+      if (!body.id || !body.updatedAt) throw new SupplierAuditError("Recarga el proveedor antes de guardar contactos.", 409);
+      if (process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true") {
+        let contacts;
+        try { contacts = validateSupplierContacts(body.payload?.contacts); } catch (error) { throw new SupplierAuditError((error as Error).message); }
+        result = await context.supabase.rpc("iq_supplier_audit_contacts_v2", { p_supplier: body.id, p_contacts: { contacts }, p_expected_updated_at: body.updatedAt, p_reason: reason });
+      } else {
+        if (body.payload?.contacts !== undefined) throw new SupplierAuditError("La edición de múltiples contactos aún no está activada. Usa el formulario actual.", 503);
+        const supplier = (await auditSuppliers(context)).find(item => item.id === body.id);
+        if (!supplier) throw new SupplierAuditError("Proveedor fuera del catálogo autorizado.", 403);
+        const existing = supplier.metadata?.supplierQualityContacts as { contacts?: unknown } | null;
+        if (Array.isArray(existing?.contacts) && existing.contacts.length) throw new SupplierAuditError("Este proveedor ya tiene contactos múltiples; activa la RPC V2 antes de editar para conservarlos.", 503);
+        result = await context.supabase.rpc("iq_supplier_audit_contacts", { p_supplier: body.id, p_contacts: body.payload, p_expected_updated_at: body.updatedAt, p_reason: reason });
+      }
     }
+    if (body.command === "contacts" && process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true" && result.error && ["PGRST202", "42883"].includes(result.error.code ?? "")) throw new SupplierAuditError("La edición de múltiples contactos está pendiente de activar en la base de datos. No se guardó ningún cambio.", 503);
     auditRpcError(result.error); return Response.json({ saved: true, id: result.data });
   } catch (error) { return auditFailure(error); }
 }
