@@ -11,11 +11,14 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 vi.mock("@/lib/access-policy", () => ({ canAccessModule: () => true }));
 function client() {
-  return { from(table: string) {
+  return { rpc: async (name: string, args: Record<string, unknown>) => {
+    state.calls.push({ table: "rpc", method: name, args: [args] });
+    return state.responses[`rpc:${name}`]?.shift() ?? { data: { id: (args.p_action as { id: string }).id, folio: "AC-000001", title: "AC-000001" }, error: null };
+  }, from(table: string) {
     state.calls.push({ table, method: "from", args: [] });
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};
-    for (const method of ["select", "eq", "is", "order", "update", "insert", "upsert", "in"]) {
+    for (const method of ["select", "eq", "is", "order", "update", "insert", "upsert", "in", "limit"]) {
       chain[method] = (...args: unknown[]) => {
         if (table === "quality_cases" && String(args[0]).split(",").includes("organization_id")) throw new Error("42703: quality_cases.organization_id does not exist");
         state.calls.push({ table, method, args }); return chain;
@@ -40,7 +43,7 @@ const request = (method: string, body: unknown) => new Request("https://integraq
 });
 const calls = (table: string, method: string) => state.calls.filter(call => call.table === table && call.method === method);
 const customerAction = {
-  id: actionId, folio: "AC-2026-015", source: "customer", relatedPartyId: customerA,
+  id: actionId, folio: "", source: "customer", relatedPartyId: customerA,
   title: "Reclamación", problem: "Desviación documentada", owner: "Responsable",
   dueDate: "2026-11-02", status: "action_plan", severity: "medium", progress: 55,
   a3: { plans: [] },
@@ -106,7 +109,7 @@ describe("Root2Cause portal authorization", () => {
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
     const response = await POST(request("POST", { action: { id: actionId, source: "customer", relatedPartyId: "customer-001" } }));
     expect(response.status).toBe(400);
-    expect(calls("corrective_actions", "insert")).toHaveLength(0);
+    expect(calls("rpc", "iq_root2cause_create_action")).toHaveLength(0);
     expect(calls("corrective_actions", "update")).toHaveLength(0);
   });
 
@@ -140,24 +143,21 @@ describe("Root2Cause portal authorization", () => {
   it("does not publish merely because an administrator selects a real customer", async () => {
     state.responses.profiles = [{ data: { organization_id: organizationId, user_type: "administrator", status: "active", workspace_mode: "production" }, error: null }];
     state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
-    state.responses.corrective_actions = [{ data: null, error: null }, { data: null, error: null }];
-    state.responses.corrective_action_a3 = [{ data: null, error: null }];
-    state.responses.audit_log = [{ data: null, error: null }];
+    state.responses.corrective_actions = [{ data: null, error: null }];
     const response = await POST(request("POST", { action: customerAction, publish: false }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ portalVisible: false });
-    expect(calls("corrective_actions", "insert")[0].args[0]).toMatchObject({
-      source: "customer", external_organization_id: customerA, portal_visible: false,
-    });
-    expect(calls("corrective_actions", "update")).toHaveLength(0);
+    expect(await response.json()).toMatchObject({ portalVisible: false, folio: "AC-000001" });
+    expect(calls("rpc", "iq_root2cause_create_action")).toHaveLength(1);
+    expect(calls("corrective_actions", "insert")).toHaveLength(0);
   });
 
   it("retains an existing claim link when following up after cancellation",async()=>{
     state.responses.profiles=[{data:{organization_id:organizationId,user_type:"administrator",status:"active",workspace_mode:"production"},error:null}];
     state.responses.organizations=[{data:{id:customerA,owning_organization_id:organizationId},error:null}];
     state.responses.quality_cases=[{data:{id:customerB,external_organization_id:customerA,cancelled_at:"2026-11-06"},error:null}];
-    state.responses.corrective_actions=[{data:{id:actionId,source:"customer",external_organization_id:customerA,organization_id:organizationId,quality_case_id:customerB,deleted_at:null},error:null},{data:null,error:null}];
-    expect((await POST(request("POST",{action:{...customerAction,qualityCaseId:customerB},publish:false}))).status).toBe(200);
+    state.responses.corrective_actions=[{data:{id:actionId,folio:"AC-2026-015",source:"customer",external_organization_id:customerA,organization_id:organizationId,quality_case_id:customerB,deleted_at:null},error:null},{data:null,error:null}];
+    state.responses.corrective_action_a3=[{data:null,error:null},{data:null,error:{code:"42703",message:"column workflow_metadata does not exist"}}];
+    expect((await POST(request("POST",{action:{...customerAction,folio:"AC-2026-015",qualityCaseId:customerB},publish:false}))).status).toBe(200);
     expect(calls("quality_cases","is")).toHaveLength(0);
   });
 
@@ -168,18 +168,18 @@ describe("Root2Cause portal authorization", () => {
     ];
     state.responses.organizations = [{ data: { id: customerA, owning_organization_id: organizationId }, error: null }];
     state.responses.corrective_actions = [
-      { data: null, error: null }, { data: null, error: null }, { data: { id: actionId }, error: null },
-      { data: { id: actionId }, error: null },
+      { data: { id: actionId, folio: "AC-2026-015", source: "customer", external_organization_id: customerA, organization_id: organizationId, created_by: actionId, deleted_at: null, quality_case_id: null }, error: null }, { data: { id: actionId }, error: null },
+      { data: { id: actionId }, error: null }, { data: { id: actionId, quality_case_id: null, external_organization_id: customerA, deleted_at: null }, error: null },
     ];
-    state.responses.corrective_action_a3 = [{ data: null, error: null }];
+    state.responses.corrective_action_a3 = [{ data: null, error: null }, { data: null, error: { code: "42703", message: "column workflow_metadata does not exist" } }, { data: null, error: null }];
     state.responses.audit_log = [{ data: null, error: null }, { data: null, error: null }];
-    const published = await POST(request("POST", { action: customerAction, publish: true }));
+    const published = await POST(request("POST", { action: { ...customerAction, folio: "AC-2026-015" }, publish: true }));
     expect(published.status).toBe(200);
     expect(await published.json()).toMatchObject({ portalVisible: true });
-    expect(calls("corrective_actions", "update")[0].args[0]).toEqual({ portal_visible: true });
+    expect(calls("corrective_actions", "update").at(-1)?.args[0]).toEqual({ portal_visible: true });
     const withdrawn = await PATCH(request("PATCH", { id: actionId }));
     expect(withdrawn.status).toBe(200);
-    expect(calls("corrective_actions", "update")[1].args[0]).toEqual({ portal_visible: false });
+    expect(calls("corrective_actions", "update").at(-1)?.args[0]).toEqual({ portal_visible: false });
   });
 
   it("saves an SGC analysis without publishing it to any portal", async () => {
@@ -189,17 +189,15 @@ describe("Root2Cause portal authorization", () => {
     state.responses.corrective_action_a3 = [{ data: null, error: null }];
     state.responses.audit_log = [{ data: null, error: null }];
     const action = {
-      id: actionId, folio: "AC-2026-015", source: "sgc", title: "Hallazgo", problem: "Desviación documentada",
+      id: actionId, folio: "", source: "sgc", title: "Hallazgo", problem: "Desviación documentada",
       owner: "Responsable", dueDate: "2026-11-02", status: "action_plan", severity: "medium", progress: 55,
       a3: { plans: [{ id: customerB, description: "Corregir", owner: "Responsable", dueDate: "2026-11-15", status: "pending" }] },
     };
     const response = await POST(request("POST", { action, publish: false }));
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ portalVisible: false });
-    expect(calls("corrective_actions", "insert")[0].args[0]).toMatchObject({
-      source: "sgc", portal_visible: false, organization_id: organizationId, external_organization_id: null,
-    });
-    expect(calls("corrective_actions", "update")).toHaveLength(0);
+    expect(calls("rpc", "iq_root2cause_create_action")).toHaveLength(1);
+    expect(calls("corrective_actions", "insert")).toHaveLength(0);
   });
 
   it("requires a persisted administrator before any deletion", async () => {

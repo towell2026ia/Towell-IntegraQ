@@ -10,6 +10,7 @@ export default defineConfig([
     ".netlify/**",
     "coverage/**",
     "tmp/**",
+    "outputs/**",
     "public/pdf.worker.min.mjs",
   ]),
 ]);

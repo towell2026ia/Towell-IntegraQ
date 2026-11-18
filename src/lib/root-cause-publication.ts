@@ -28,11 +28,11 @@ export async function publishCorrectiveAction(action: CorrectiveAction): Promise
   await responseBody<{ ok: true }>(response);
 }
 
-export async function saveCorrectiveAction(action: CorrectiveAction): Promise<void> {
+export async function saveCorrectiveAction(action: CorrectiveAction): Promise<{ folio?: string; title?: string }> {
   const response = await fetch("/api/root2cause/published-actions", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, publish: false }),
   });
-  await responseBody<{ ok: true }>(response);
+  return responseBody<{ ok: true; folio?: string; title?: string }>(response);
 }
 
 export async function unpublishCorrectiveAction(id: string): Promise<void> {

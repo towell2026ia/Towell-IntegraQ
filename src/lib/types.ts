@@ -17,6 +17,7 @@ export type CorrectiveActionSeverity = "low" | "medium" | "high" | "critical";
 
 export interface A3ActionPlanItem {
   cause?: string;
+  causeId?: string;
   expectedResult?: string;
   completionEvidence?: string;
   effectivenessMethod?: string;
@@ -32,7 +33,10 @@ export interface A3ActionPlanItem {
 
 export interface A3Analysis {
   evidenceId?: string;
-  reviewedSteps?: number[];
+  descriptiveTitle?: string;
+  brainstormIds?: string[];
+  causeItems?: Array<{ id: string; text: string; category: "workforce" | "machinery" | "method" | "material" | "environment" | "measurement" | null; sourceIdeaId?: string }>;
+  rootCauseCauseId?: string;
   eventType: string;
   severityJustification: string;
   fiveW2H: {
@@ -111,6 +115,7 @@ export interface CorrectiveAction {
   relatedParty?: string;
   relatedPartyId?: string;
   qualityCaseId?: string;
+  externalReference?: string;
   portalVisible?: boolean;
   deletedAt?: string;
   deletedBy?: string;

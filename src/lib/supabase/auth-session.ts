@@ -90,7 +90,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
         .eq("can_view", true),
       supabase
         .from("user_module_action_permissions")
-        .select("module_id, action")
+        .select("module_id, action, source")
         .eq("user_id", claims.sub),
       supabase
         .from("user_permission_overrides")
@@ -132,6 +132,7 @@ export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
       ? [{
           moduleId,
           action: row.action as ModulePermissionAction,
+          source: row.source as "position" | "direct" | "system",
         }]
       : [];
   });

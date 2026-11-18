@@ -16,7 +16,6 @@ import {
   FileCheck2,
   Filter,
   LoaderCircle,
-  Paperclip,
   Plus,
   RefreshCw,
   Search,
@@ -25,13 +24,15 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   A3AnalysisWorkbench,
   type A3Submission,
 } from "@/components/modules/a3-analysis-workbench";
 import { A3ActionReport } from "@/components/modules/a3-action-report";
+import { matchesCorrectiveListScope, type CorrectiveListScope } from "@/lib/corrective-action-list";
+import { RetiredCorrectiveActions } from "@/components/modules/retired-corrective-actions";
 import { AiSuggestionResult } from "@/components/modules/ai-suggestion-result";
 import type { CustomerClaim } from "@/lib/customer-claims";
 
@@ -46,8 +47,10 @@ import {
   toIsoDate,
 } from "@/lib/domain";
 import { canPerformModuleAction } from "@/lib/module-permissions";
+import { canHardDeleteCorrectiveAction } from "@/lib/root2cause/hard-delete";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { publishCorrectiveAction, saveCorrectiveAction, softDeleteDemoCorrectiveAction, softDeleteStoredCorrectiveAction, unpublishCorrectiveAction } from "@/lib/root-cause-publication";
+import { finalizeRootCauseDraft } from "@/lib/root-cause-draft-storage";
 import type {
   AiRootCauseDraft,
   CorrectiveAction,
@@ -64,8 +67,7 @@ interface CorrectiveActionsModuleProps {
   session: ActiveSession;
 }
 
-type CorrectiveWorkspaceView = "lists" | "a3";
-type CorrectiveListScope = "open" | "customer" | "internal" | "system";
+type CorrectiveWorkspaceView = "lists" | "a3" | "retired";
 type CorrectiveRegistryView = "index" | "report";
 
 const statusOrder: CorrectiveActionStatus[] = [
@@ -107,14 +109,28 @@ export function CorrectiveActionsModule({
   const [publicationError, setPublicationError] = useState("");
   const [publishing, setPublishing] = useState(false);
   const [deleteCandidateId, setDeleteCandidateId] = useState("");
+  const [hardDeleteCandidateId, setHardDeleteCandidateId] = useState("");
   const [deleteReason, setDeleteReason] = useState("");
+  const [deleteFolioConfirmation, setDeleteFolioConfirmation] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [hardDeleteContractEnabled, setHardDeleteContractEnabled] = useState(false);
   const canCreate = canPerformModuleAction(
     session,
     "corrective-actions",
     "create",
   );
+  const hasHardDeletePermission = canHardDeleteCorrectiveAction(session);
+  const hardDeleteEnabled = hardDeleteContractEnabled && hasHardDeletePermission && session.workspaceMode !== "demo";
+  useEffect(() => {
+    if (!hasHardDeletePermission || session.workspaceMode === "demo") return;
+    let active = true;
+    void fetch("/api/root2cause/hard-delete-capabilities", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() as Promise<{ enabled?: boolean }> : { enabled: false })
+      .then((result) => { if (active) setHardDeleteContractEnabled(result.enabled === true); })
+      .catch(() => { if (active) setHardDeleteContractEnabled(false); });
+    return () => { active = false; };
+  }, [hasHardDeletePermission, session.workspaceMode]);
 
   const rootCauseActions = useMemo(
     () => actions.filter(
@@ -136,19 +152,14 @@ export function CorrectiveActionsModule({
         action.status === statusFilter ||
         (statusFilter === "overdue" &&
           isCorrectiveActionOverdue(action, today));
-      const matchesScope =
-        (listScope === "open" && action.status !== "closed") ||
-        (listScope === "customer" && action.source === "customer") ||
-        (listScope === "internal" && action.source === "internal") ||
-        (listScope === "system" && (action.source === "audit" || action.source === "sgc"));
+      const matchesScope = matchesCorrectiveListScope(action, listScope);
       return matchesQuery && matchesStatus && matchesScope;
     });
   }, [listScope, query, rootCauseActions, statusFilter, today]);
 
   const selected =
     filteredActions.find((action) => action.id === selectedId) ??
-    filteredActions[0] ??
-    rootCauseActions[0];
+    filteredActions[0];
   const canEditSelected = selected
     ? canEditCorrectiveAction(session, selected)
     : false;
@@ -227,17 +238,15 @@ export function CorrectiveActionsModule({
   };
 
   const completeA3Analysis = async (values: A3Submission) => {
-    const year = today.slice(0, 4);
-    const nextNumber =
-      Math.max(
-        0,
-        ...actions.filter(action => action.folio.startsWith(`AC-${year}-`)).map((action) => Number(action.folio.split("-").at(-1)) || 0),
-      ) + 1;
+    const nextNumber = Math.max(0, ...actions.map(action => Number(action.folio.match(/^AC-(\d{6})$/)?.[1] ?? 0))) + 1;
+    const finalized = session.workspaceMode !== "demo" ? await finalizeRootCauseDraft(values.draftId, values.draftRevision) : null;
     const action: CorrectiveAction = {
       ...values,
+      // Evidence links use the plan ID selected in the workbench.
       a3: values.a3,
-      id: crypto.randomUUID(),
-      folio: `AC-${year}-${String(nextNumber).padStart(3, "0")}`,
+      id: finalized?.id ?? values.draftId,
+      folio: finalized?.folio ?? `AC-${String(nextNumber).padStart(6, "0")}`,
+      title: finalized?.title ?? `AC-${String(nextNumber).padStart(6, "0")}`,
       createdAt: today,
       status: "action_plan",
       progress: 55,
@@ -250,8 +259,8 @@ export function CorrectiveActionsModule({
       portalVisible: false,
     };
 
-    if (session.workspaceMode !== "demo") await saveCorrectiveAction(action);
-    onActionsChange([action, ...actions]);
+    const persisted = action;
+    onActionsChange([persisted, ...actions]);
     setSelectedId(action.id);
     setListScope(
       action.source === "customer"
@@ -285,6 +294,44 @@ export function CorrectiveActionsModule({
   };
 
   const deleteCandidate = actions.find(action => action.id === deleteCandidateId);
+  const hardDeleteCandidate = actions.find(action => action.id === hardDeleteCandidateId);
+  const requestHardDelete = (action: CorrectiveAction) => {
+    if (!hardDeleteEnabled || !hasHardDeletePermission || session.workspaceMode === "demo") return;
+    setHardDeleteCandidateId(action.id);
+    setDeleteReason("");
+    setDeleteFolioConfirmation("");
+    setDeleteError("");
+  };
+  const confirmHardDelete = async () => {
+    if (!hardDeleteCandidate || !hardDeleteEnabled || !hasHardDeletePermission ||
+      session.workspaceMode === "demo" || !deleteReason.trim() ||
+      deleteFolioConfirmation !== hardDeleteCandidate.folio) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(`/api/root2cause/actions/${encodeURIComponent(hardDeleteCandidate.id)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          folio: hardDeleteCandidate.folio,
+          reason: deleteReason.trim(),
+          folioConfirmation: deleteFolioConfirmation,
+        }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(result.error || "No fue posible confirmar la eliminación.");
+      onActionsChange(actions.filter((action) => action.id !== hardDeleteCandidate.id));
+      setHardDeleteCandidateId("");
+      setDeleteReason("");
+      setDeleteFolioConfirmation("");
+      setSelectedId("");
+      setRegistryView("index");
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "No fue posible eliminar la acción correctiva.");
+    } finally {
+      setDeleting(false);
+    }
+  };
   const confirmDelete = async () => {
     if (!deleteCandidate || !isAdministrator(session) || session.workspaceMode === "demo" || !deleteReason.trim()) return;
     setDeleting(true); setDeleteError("");
@@ -302,6 +349,7 @@ export function CorrectiveActionsModule({
   };
 
   const selectListScope = (scope: CorrectiveListScope) => {
+    setStatusFilter("all");
     setListScope(scope);
     setRegistryView("index");
   };
@@ -352,11 +400,15 @@ export function CorrectiveActionsModule({
       <div className="quality-view-tabs corrective-main-tabs" aria-label="Vistas de Root2Cause">
         <button className={workspaceView === "lists" ? "active" : ""} type="button" onClick={() => {if(confirmLeaving())setWorkspaceView("lists");}}><BookOpen size={15} /> Listados de acciones</button>
         {canCreate ? <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button> : null}
+        {isAdministrator(session) && session.workspaceMode !== "demo" ? <button className={workspaceView === "retired" ? "active" : ""} type="button" onClick={() => { if (confirmLeaving()) setWorkspaceView("retired"); }}>Registros retirados</button> : null}
       </div>
 
+      {workspaceView === "retired" && isAdministrator(session) && session.workspaceMode !== "demo" ? <RetiredCorrectiveActions onActionsChange={onActionsChange} /> : null}
       {workspaceView === "lists" ? (
         <>
           <section className="corrective-list-menu" aria-label="Listados por origen">
+            <button className={listScope === "all" ? "active" : ""} type="button" onClick={() => selectListScope("all")}>Todas las acciones vigentes</button>
+            <button className={listScope === "closed" ? "active" : ""} type="button" onClick={() => selectListScope("closed")}>Acciones cerradas</button>
             <button className={listScope === "open" ? "active" : ""} type="button" onClick={() => selectListScope("open")}><ClipboardList size={18} /><span><strong>Acciones abiertas</strong><small>{rootCauseActions.filter((action) => action.status !== "closed").length} registros activos</small></span></button>
             <button className={listScope === "customer" ? "active" : ""} type="button" onClick={() => selectListScope("customer")}><ExternalLink size={18} /><span><strong>Externas / clientes</strong><small>{rootCauseActions.filter((action) => action.source === "customer").length} vinculadas al portal</small></span></button>
             <button className={listScope === "internal" ? "active" : ""} type="button" onClick={() => selectListScope("internal")}><UserRound size={18} /><span><strong>Internas</strong><small>{rootCauseActions.filter((action) => action.source === "internal").length} del proceso</small></span></button>
@@ -402,12 +454,13 @@ export function CorrectiveActionsModule({
             {filteredActions.map((action) => {
               const overdue = isCorrectiveActionOverdue(action, today);
               return (
+                <div key={action.id} className="corrective-record-delete-row" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
                 <button
-                  key={action.id}
                   type="button"
                   className={`record-row ${
                     selected?.id === action.id ? "record-row-selected" : ""
                   }`}
+                  style={{ flex: 1 }}
                   onClick={() => {
                     setSelectedId(action.id);
                     setRegistryView("report");
@@ -441,6 +494,8 @@ export function CorrectiveActionsModule({
                     <ChevronRight size={16} />
                   </div>
                 </button>
+                {hardDeleteEnabled && hasHardDeletePermission ? <button className="icon-button danger" type="button" title="Eliminar definitivamente" aria-label={`Eliminar definitivamente ${action.folio}`} onClick={() => requestHardDelete(action)}><Trash2 size={16} /></button> : null}
+                </div>
               );
             })}
             {filteredActions.length === 0 ? <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones en este listado</h3><p>Usa otra pestaña o inicia un análisis A3.</p></div> : null}
@@ -449,9 +504,6 @@ export function CorrectiveActionsModule({
 
         {registryView === "report" && selected ? <article className="corrective-report-view">
           <A3ActionReport action={selected} session={session} onBack={() => setRegistryView("index")}>
-            {canEditSelected ? <button className="button button-secondary" type="button">
-              <Paperclip size={16} /> Adjuntar evidencia
-            </button> : null}
             <button
               className="button button-secondary"
               type="button"
@@ -465,6 +517,7 @@ export function CorrectiveActionsModule({
               <CheckCircle2 size={16} /> Avanzar etapa
             </button>
             {isAdministrator(session) && selected.source === "customer" ? <button className="button button-secondary" type="button" disabled={publishing || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "")} onClick={() => void (selected.portalVisible ? unpublishSelected() : publishSelected())}>{selected.portalVisible ? "Retirar del portal" : "Autorizar publicación"}</button> : null}
+            {hardDeleteEnabled && hasHardDeletePermission ? <button className="button button-secondary danger" type="button" onClick={() => requestHardDelete(selected)} title="Eliminar definitivamente"><Trash2 size={16} /> Eliminar definitivamente</button> : null}
             {isAdministrator(session) && session.workspaceMode !== "demo" && (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.id) || ["ca-001", "ca-002", "ca-003"].includes(selected.id)) ? <button className="button button-secondary" type="button" onClick={() => { setDeleteCandidateId(selected.id); setDeleteReason(""); setDeleteError(""); }}><Trash2 size={16} /> Borrar</button> : null}
           </A3ActionReport>
           {selected.source === "customer" && isAdministrator(session) && !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "") ? <p role="status">Para publicar, vincula primero un cliente real del catálogo.</p> : null}
@@ -529,7 +582,7 @@ export function CorrectiveActionsModule({
         </article> : null}
           </section>
         </>
-      ) : canCreate ? (
+      ) : workspaceView === "a3" && canCreate ? (
         <A3AnalysisWorkbench
           initialClaim={claimSeed}
           onCustomerCatalog={onNavigateCustomers}
@@ -539,6 +592,15 @@ export function CorrectiveActionsModule({
         />
       ) : null}
       {deleteCandidate ? <div className="corrective-delete-backdrop" role="presentation"><section role="dialog" aria-modal="true" aria-label="Confirmar borrado de análisis"><h3>Borrar {deleteCandidate.folio}</h3><p>{deleteCandidate.title}</p><p>{deleteCandidate.problem}</p><p>Relaciones: {deleteCandidate.relatedPartyId ? "cliente vinculado; " : ""}{deleteCandidate.qualityCaseId ? "reclamación vinculada; " : ""}{deleteCandidate.a3?.plans.length ?? 0} acciones y {deleteCandidate.evidenceCount} evidencias. Se conservarán los archivos y el historial.</p><label>Motivo del borrado<input value={deleteReason} onChange={event => setDeleteReason(event.target.value)} required /></label>{deleteError ? <p role="alert">{deleteError}</p> : null}<div><button className="button button-secondary" type="button" onClick={() => setDeleteCandidateId("")}>Cancelar</button><button className="button button-primary" type="button" disabled={!deleteReason.trim() || deleting} onClick={() => void confirmDelete()}>{deleting ? "Guardando…" : "Confirmar borrado lógico"}</button></div></section></div> : null}
+      {hardDeleteCandidate ? <div className="modal-backdrop" role="presentation"><section className="modal modal-compact" role="dialog" aria-modal="true" aria-labelledby="root2cause-hard-delete-title">
+        <h3 id="root2cause-hard-delete-title">Eliminar acción correctiva definitivamente</h3>
+        <dl><div><dt>Código AC</dt><dd>{hardDeleteCandidate.folio}</dd></div><div><dt>Tipo</dt><dd>{hardDeleteCandidate.source === "customer" ? "Externa" : hardDeleteCandidate.source === "audit" || hardDeleteCandidate.source === "sgc" ? "SGC" : "Interna"}</dd></div><div><dt>Cliente o proceso</dt><dd>{hardDeleteCandidate.relatedParty || hardDeleteCandidate.relatedPartyId || hardDeleteCandidate.processId || hardDeleteCandidate.area || "No especificado"}</dd></div></dl>
+        <p className="inline-warning"><AlertTriangle size={16} /> La eliminación es irreversible. El servidor bloqueará expedientes con referencias compartidas o de otros módulos.</p>
+        <label><span>Motivo de eliminación</span><textarea rows={3} maxLength={1000} value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} disabled={deleting} required /></label>
+        <label><span>Escribe exactamente {hardDeleteCandidate.folio} para confirmar</span><input value={deleteFolioConfirmation} onChange={(event) => setDeleteFolioConfirmation(event.target.value)} disabled={deleting} autoComplete="off" /></label>
+        {deleteError ? <p role="alert" className="inline-error"><ShieldAlert size={16} />{deleteError}</p> : null}
+        <div className="modal-actions"><button className="button button-secondary" type="button" disabled={deleting} onClick={() => setHardDeleteCandidateId("")}>Cancelar</button><button className="button button-danger" type="button" disabled={deleting || !deleteReason.trim() || deleteFolioConfirmation !== hardDeleteCandidate.folio || !hardDeleteEnabled || !hasHardDeletePermission} onClick={() => void confirmHardDelete()}>{deleting ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}Eliminar definitivamente</button></div>
+      </section></div> : null}
     </>
   );
 }

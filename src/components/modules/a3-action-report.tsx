@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowLeft, Download, FileText } from "lucide-react";
-import {useState,type ReactNode} from "react";
+import {useEffect,useState,type ReactNode} from "react";
 
 import { A3StepEvidence } from "./a3-step-evidence";
 import { A3ReportEvidence } from "./a3-report-evidence";
@@ -18,8 +18,8 @@ import type {
 const sourceLabels: Record<CorrectiveActionSource, string> = {
   internal: "Interna",
   audit: "Sistema de gestión de calidad",
-  sgc: "Sistema de gestión de calidad",
-  customer: "Externa / cliente",
+  sgc: "SGC",
+  customer: "Externa",
   supplier: "Proveedor",
 };
 
@@ -38,6 +38,7 @@ const ishikawaLabels: Record<keyof A3Analysis["ishikawa"], string> = {
   environment: "Medio ambiente",
   measurement: "Medición",
 };
+type OfficialPdfVersion = { id: string; version: number; sha256: string; sizeBytes: number; createdAt: string; current: boolean };
 
 export function A3ActionReport({
   action,
@@ -51,6 +52,20 @@ export function A3ActionReport({
   children?: ReactNode;
 }) {
   const [preparingEvidence,setPreparingEvidence]=useState(false);
+  const [officialPdfBusy,setOfficialPdfBusy]=useState(false);
+  const [officialPdfMessage,setOfficialPdfMessage]=useState("");
+  const [officialPdfVersions,setOfficialPdfVersions]=useState<OfficialPdfVersion[]>([]);
+  const [selectedPdfId,setSelectedPdfId]=useState("");
+
+  useEffect(() => {
+    if (!session || session.workspaceMode === "demo" || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(action.id)) return;
+    let active = true;
+    void fetch(`/api/root2cause/published-actions/${encodeURIComponent(action.id)}/pdf`, { cache: "no-store" })
+      .then(async response => { const body = await response.json() as { files?: OfficialPdfVersion[]; error?: string }; if (!response.ok) throw new Error(body.error ?? "No se consultaron las versiones PDF."); return body.files ?? []; })
+      .then(files => { if (active) { setOfficialPdfVersions(files); setSelectedPdfId(files.find(file => file.current)?.id ?? files[0]?.id ?? ""); } })
+      .catch(error => { if (active) setOfficialPdfMessage(error instanceof Error ? error.message : "No se consultaron las versiones PDF."); });
+    return () => { active = false; };
+  }, [action.id,session]);
   const analysis = action.a3;
   const fiveW2H = analysis
     ? [
@@ -72,9 +87,42 @@ export function A3ActionReport({
         </button>
         <div>
           {children}
+          {session && session.workspaceMode !== "demo" && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(action.id) ? <button className="button button-secondary" type="button" disabled={officialPdfBusy || preparingEvidence} onClick={() => void (async () => {
+            setOfficialPdfBusy(true); setOfficialPdfMessage("");
+            try {
+              const response = await fetch(`/api/root2cause/published-actions/${encodeURIComponent(action.id)}/pdf`, { method: "POST", cache: "no-store" });
+              const body = await response.json() as { error?: string; signedUrl?: string; version?: number };
+              if (!response.ok || !body.signedUrl) throw new Error(body.error ?? "No se pudo generar el PDF oficial.");
+              const link = document.createElement("a"); link.href = body.signedUrl; link.rel = "noopener"; link.click();
+              const versionsResponse = await fetch(`/api/root2cause/published-actions/${encodeURIComponent(action.id)}/pdf`, { cache: "no-store" });
+              const versionsBody = await versionsResponse.json() as { files?: OfficialPdfVersion[] };
+              if (versionsResponse.ok && versionsBody.files) { setOfficialPdfVersions(versionsBody.files); setSelectedPdfId(versionsBody.files.find(file => file.current)?.id ?? ""); }
+              setOfficialPdfMessage(`PDF oficial V${body.version} generado y descargado.`);
+            } catch (error) { setOfficialPdfMessage(error instanceof Error ? error.message : "No se pudo generar el PDF oficial."); }
+            finally { setOfficialPdfBusy(false); }
+          })()}>{officialPdfBusy ? "Generando PDF…" : "Generar y descargar PDF oficial"}</button> : null}
+          {session && officialPdfVersions.length ? <>
+            <label className="a3-report-version-picker">Versión PDF oficial
+              <select value={selectedPdfId} onChange={event => setSelectedPdfId(event.target.value)}>
+                {officialPdfVersions.map(file => <option key={file.id} value={file.id}>V{file.version}{file.current ? " · vigente" : " · histórica"}</option>)}
+              </select>
+            </label>
+            <button className="button button-secondary" type="button" disabled={!selectedPdfId || officialPdfBusy} onClick={() => void (async () => {
+              setOfficialPdfBusy(true); setOfficialPdfMessage("");
+              try {
+                const response = await fetch(`/api/root2cause/published-actions/${encodeURIComponent(action.id)}/pdf?fileId=${encodeURIComponent(selectedPdfId)}`, { cache: "no-store" });
+                const body = await response.json() as { error?: string; signedUrl?: string; version?: number };
+                if (!response.ok || !body.signedUrl) throw new Error(body.error ?? "No se pudo consultar la versión seleccionada.");
+                const link = document.createElement("a"); link.href = body.signedUrl; link.rel = "noopener"; link.click();
+                setOfficialPdfMessage(`PDF oficial V${body.version} descargado.`);
+              } catch (error) { setOfficialPdfMessage(error instanceof Error ? error.message : "No se pudo consultar la versión seleccionada."); }
+              finally { setOfficialPdfBusy(false); }
+            })()}>Descargar versión seleccionada</button>
+          </> : null}
           <button className="button button-primary" type="button" disabled={preparingEvidence} onClick={() => window.print()}>
             <Download size={16} /> Exportar PDF
           </button>
+          {officialPdfMessage ? <p role="status">{officialPdfMessage}</p> : null}
         </div>
       </div>
 
@@ -109,6 +157,8 @@ export function A3ActionReport({
             <ReportFact label="Fecha de apertura" value={formatDate(action.createdAt)} />
             <ReportFact label="Fecha compromiso" value={formatDate(action.dueDate)} />
             {action.relatedParty ? <ReportFact label="Cliente relacionado" value={action.relatedParty} /> : null}
+            {action.externalReference ? <ReportFact label="Referencia externa del cliente" value={action.externalReference} /> : null}
+            {analysis?.descriptiveTitle ? <ReportFact label="Descripción breve" value={analysis.descriptiveTitle} /> : null}
             <div className="wide"><small>Descripción integral</small><p>{action.problem}</p></div>
           </div>
           {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={0} processId={action.processId} readOnly={action.status==="closed"}/> : null}

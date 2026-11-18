@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { resolveCustomerPortalActor } from "@/lib/customer-portal-server";
 import type { ActiveSession } from "@/lib/session-data";
 import type { CorrectiveAction } from "@/lib/types";
@@ -10,6 +11,8 @@ import type { CorrectiveAction } from "@/lib/types";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const statuses = new Set(["open", "analysis", "action_plan", "implementation", "effectiveness", "closed"]);
 const severities = new Set(["low", "medium", "high", "critical"]);
+const newFolio = /^AC-\d{6}$/;
+const legacyFolio = /^AC-\d{4}-\d{3,}$/;
 
 async function internalScope(session: ActiveSession | null): Promise<{ organizationId: string; administrator: boolean } | null> {
   if (!session?.authUserId || !["Administrador", "Usuario interno"].includes(session.userType) || session.workspaceMode === "demo") return null;
@@ -34,7 +37,7 @@ function validAction(value: unknown): value is CorrectiveAction {
     typeof action.id === "string" && uuid.test(action.id) &&
     (action.source !== "customer" || (typeof action.relatedPartyId === "string" && uuid.test(action.relatedPartyId))) &&
     (!action.qualityCaseId || uuid.test(action.qualityCaseId)) &&
-    ["internal", "audit", "customer", "sgc"].includes(action.source ?? "") && /^AC-\d{4}-\d{3,}$/.test(action.folio ?? "") &&
+    ["internal", "audit", "customer", "sgc"].includes(action.source ?? "") && (!action.folio || newFolio.test(action.folio) || legacyFolio.test(action.folio)) &&
     typeof action.title === "string" && action.title.trim() &&
     typeof action.problem === "string" && action.problem.trim() &&
     typeof action.owner === "string" && action.owner.trim() &&
@@ -44,6 +47,11 @@ function validAction(value: unknown): value is CorrectiveAction {
     action.a3 && Array.isArray(action.a3.plans) &&
     action.a3.plans.every(plan => uuid.test(plan.id) && plan.description.trim() && plan.owner.trim() && /^\d{4}-\d{2}-\d{2}$/.test(plan.dueDate))
   );
+}
+
+function externalReferenceOf(action: CorrectiveAction): string | undefined {
+  const submitted = action as CorrectiveAction & { externalClaimReference?: string };
+  return (submitted.externalClaimReference ?? action.externalReference)?.trim() || undefined;
 }
 
 export async function GET() {
@@ -84,9 +92,19 @@ export async function POST(request: Request) {
   const action = body.action;
   const admin = createAdminClient();
   const current = await admin.from("corrective_actions")
-    .select("id,source,external_organization_id,organization_id,created_by,deleted_at,quality_case_id")
+    .select("id,folio,title,problem,severity,area,owner_name,due_date,status,progress,root_cause,source,external_organization_id,organization_id,created_by,deleted_at,quality_case_id")
     .eq("id", action.id).maybeSingle();
   if (current.error) return NextResponse.json({ error: "No fue posible comprobar el análisis existente." }, { status: 500 });
+  let previousSnapshot: Record<string, unknown> | null = current.data ?? null;
+  if (current.data) {
+    const [previousA3, previousPlans] = await Promise.all([
+      admin.from("corrective_action_a3").select("event_type,severity_justification,five_w_two_h,brainstorm,ishikawa,non_detection_cause,non_detection_whys,root_cause,root_cause_whys,ai_draft").eq("corrective_action_id", action.id).maybeSingle(),
+      admin.from("corrective_action_plans").select("id,description,owner_name,due_date,status").eq("corrective_action_id", action.id),
+    ]);
+    if (previousA3.error || previousPlans.error) return NextResponse.json({ error: "No se pudo conservar la versión previa del análisis. No se modificó." }, { status: 503 });
+    previousSnapshot = { ...current.data, a3: previousA3.data ?? null, plans: previousPlans.data ?? [] };
+  }
+  if (current.data && action.folio && current.data.folio !== action.folio) return NextResponse.json({ error: "El folio existente es inmutable." }, { status: 409 });
   if (current.data?.quality_case_id && current.data.quality_case_id !== action.qualityCaseId) return NextResponse.json({error:"El A3 ya tiene una reclamación vinculada. No se modificó el vínculo histórico."},{status:409});
   let companyId: string | null = null;
   if (action.source === "customer") {
@@ -126,11 +144,51 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Un plan pertenece a otro análisis." }, { status: 409 });
     }
   }
+  if (!current.data || !action.folio) {
+    if (action.folio) return NextResponse.json({ error: "El folio de un análisis nuevo se asigna de forma atómica en servidor." }, { status: 409 });
+    const db = await createClient();
+    const created = await db.rpc("iq_root2cause_create_action", { p_action: {
+      id: action.id, source: action.source, severity: action.severity, title: action.title,
+      problem: action.problem, area: action.area, owner: action.owner, dueDate: action.dueDate,
+      processId: action.processId ?? null, relatedPartyId: companyId, qualityCaseId: action.qualityCaseId ?? null,
+      externalClaimReference: externalReferenceOf(action) ?? null,
+      a3: action.a3, aiDraft: action.aiDraft ?? null,
+    } });
+    if (created.error || !created.data || typeof created.data !== "object" || typeof (created.data as { folio?: unknown }).folio !== "string") {
+      const missingRpc = created.error?.code === "PGRST202" || created.error?.message?.includes("iq_root2cause_create_action");
+      return NextResponse.json({ error: missingRpc
+        ? "El guardado de nuevos análisis requiere instalar la migración Root2Cause del folio consecutivo. No se creó el expediente."
+        : "No fue posible crear el análisis de forma atómica. No se guardó el expediente." }, { status: missingRpc ? 503 : 500 });
+    }
+    const result = created.data as { id: string; folio: string; title: string };
+    if (body.publish) {
+      const published = await admin.from("corrective_actions").update({ portal_visible: true })
+        .eq("id", result.id).eq("organization_id", organizationId).eq("source", "customer")
+        .is("deleted_at", null).select("id").maybeSingle();
+      if (published.error || !published.data) return NextResponse.json({ error: "El análisis se guardó, pero no se confirmó su publicación." }, { status: 500 });
+      await admin.from("audit_log").insert({ actor_id: session.authUserId, organization_id: organizationId,
+        action: "corrective_action.portal_published", resource_type: "corrective_action", resource_id: result.id,
+        metadata: { customer_id: companyId } });
+    }
+    return NextResponse.json({ ok: true, id: result.id, folio: result.folio, title: result.title, portalVisible: Boolean(body.publish) });
+  }
+  const flowColumns = await admin.from("corrective_action_a3").select("workflow_metadata").limit(1);
+  const flowSchemaAvailable = !flowColumns.error;
+  if (flowColumns.error && !["42703", "PGRST204"].includes(flowColumns.error.code ?? "") && !/workflow_metadata.*does not exist/i.test(flowColumns.error.message ?? "")) {
+    return NextResponse.json({ error: "No fue posible verificar el contrato ampliado de Root2Cause." }, { status: 503 });
+  }
+  const hasFlowMetadata = Boolean(externalReferenceOf(action) ||
+    action.a3!.evidenceId || action.a3!.causeItems?.length || action.a3!.plans.some(plan => plan.cause || plan.expectedResult || plan.completionEvidence || plan.effectivenessMethod));
+  if (!flowSchemaAvailable && hasFlowMetadata) {
+    return NextResponse.json({ error: "El expediente requiere la migración ampliada de Root2Cause para conservar su referencia, vínculos y campos verificables. No se modificó." }, { status: 503 });
+  }
   const fields = {
     title: action.title.trim(), problem: action.problem.trim(), severity: action.severity,
     area: action.area || null, owner_name: action.owner.trim(), due_date: action.dueDate,
     status: action.status, progress: action.progress, root_cause: action.rootCause || action.a3!.rootCause || null,
-    quality_case_id: action.source === "customer" ? action.qualityCaseId || null : null, portal_visible: false,
+    quality_case_id: action.source === "customer" ? action.qualityCaseId || null : null,
+    ...(flowSchemaAvailable ? { external_reference: externalReferenceOf(action) ?? null } : {}),
+    portal_visible: false,
   };
   const saved = current.data
     ? await admin.from("corrective_actions").update(fields).eq("id", action.id).eq("organization_id", organizationId).is("deleted_at", null)
@@ -144,13 +202,18 @@ export async function POST(request: Request) {
     brainstorm: a3.brainstorm, ishikawa: a3.ishikawa, non_detection_cause: a3.nonDetectionCause,
     non_detection_whys: a3.nonDetectionWhys, root_cause: a3.rootCause,
     root_cause_whys: a3.rootCauseWhys, ai_draft: action.aiDraft ?? null,
-    updated_by: session.authUserId,
+    ...(flowSchemaAvailable ? { workflow_metadata: { evidenceId: a3.evidenceId,
+      descriptiveTitle: a3.descriptiveTitle, brainstormIds: a3.brainstormIds, causeItems: a3.causeItems,
+      rootCauseCauseId: a3.rootCauseCauseId } } : {}), updated_by: session.authUserId,
   }, { onConflict: "corrective_action_id" });
   if (analysis.error) return NextResponse.json({ error: "Se guardó el expediente sin publicarlo; no fue posible registrar el A3." }, { status: 500 });
   if (a3.plans.length) {
     const plans = await admin.from("corrective_action_plans").upsert(a3.plans.map(plan => ({
       id: plan.id, corrective_action_id: action.id, description: plan.description,
       owner_name: plan.owner, due_date: plan.dueDate, status: plan.status,
+      ...(flowSchemaAvailable ? { cause_text: plan.cause ?? null, cause_reference_id: plan.causeId ?? null,
+        expected_result: plan.expectedResult ?? null, completion_evidence: plan.completionEvidence ?? null,
+        effectiveness_method: plan.effectivenessMethod ?? null } : {}),
     })), { onConflict: "id" });
     if (plans.error) return NextResponse.json({ error: "Se guardó el expediente sin publicarlo; no fue posible registrar los planes." }, { status: 500 });
   }
@@ -160,7 +223,9 @@ export async function POST(request: Request) {
   }
   await admin.from("audit_log").insert({ actor_id: session.authUserId, organization_id: organizationId,
     action: body.publish ? "corrective_action.portal_published" : current.data ? "corrective_action.updated" : "corrective_action.created",
-    resource_type: "corrective_action", resource_id: action.id, metadata: { customer_id: companyId } });
+    resource_type: "corrective_action", resource_id: action.id,
+    previous_value: previousSnapshot,
+    new_value: { ...fields, a3: a3, plans: a3.plans }, metadata: { customer_id: companyId } });
   return NextResponse.json({ ok: true, id: action.id, portalVisible: Boolean(body.publish) });
 }
 

@@ -36,6 +36,7 @@ export type ModulePermissionAction =
 export interface ModuleActionPermission {
   moduleId: WorkspaceModuleId;
   action: ModulePermissionAction;
+  source?: "position" | "direct" | "system";
 }
 
 export interface ProcessDocumentAccess {

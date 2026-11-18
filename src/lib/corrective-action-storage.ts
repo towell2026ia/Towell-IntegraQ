@@ -7,11 +7,17 @@ export async function loadStoredCorrectiveActions(): Promise<CorrectiveAction[]>
   return (body.actions ?? []).map(mapStoredAction);
 }
 
-function mapStoredAction(row: Record<string, unknown>): CorrectiveAction {
+export function mapStoredAction(row: Record<string, unknown>): CorrectiveAction {
   const a3Row = row.corrective_action_a3 as Record<string, unknown> | null;
   const plans = (row.corrective_action_plans ?? []) as Record<string, unknown>[];
+  const metadata = a3Row?.workflow_metadata && typeof a3Row.workflow_metadata === "object" ? a3Row.workflow_metadata as Record<string, unknown> : {};
   const a3: A3Analysis | undefined = a3Row ? {
+    evidenceId: typeof metadata.evidenceId === "string" ? metadata.evidenceId : undefined,
+    rootCauseCauseId: typeof metadata.rootCauseCauseId === "string" ? metadata.rootCauseCauseId : undefined,
     eventType: String(a3Row.event_type ?? ""), severityJustification: String(a3Row.severity_justification ?? ""),
+    descriptiveTitle: typeof metadata.descriptiveTitle === "string" ? metadata.descriptiveTitle : undefined,
+    brainstormIds: Array.isArray(metadata.brainstormIds) ? metadata.brainstormIds as string[] : undefined,
+    causeItems: Array.isArray(metadata.causeItems) ? metadata.causeItems as NonNullable<A3Analysis["causeItems"]> : undefined,
     fiveW2H: (a3Row.five_w_two_h ?? {}) as A3Analysis["fiveW2H"],
     brainstorm: (a3Row.brainstorm ?? []) as string[], ishikawa: (a3Row.ishikawa ?? {}) as A3Analysis["ishikawa"],
     nonDetectionCause: String(a3Row.non_detection_cause ?? ""),
@@ -19,6 +25,11 @@ function mapStoredAction(row: Record<string, unknown>): CorrectiveAction {
     rootCauseWhys: (a3Row.root_cause_whys ?? []) as string[],
     plans: plans.map(plan => ({ id: String(plan.id), description: String(plan.description),
       owner: String(plan.owner_name ?? ""), dueDate: String(plan.due_date),
+      cause: typeof plan.cause_text === "string" ? plan.cause_text : undefined,
+      causeId: typeof plan.cause_reference_id === "string" ? plan.cause_reference_id : undefined,
+      expectedResult: typeof plan.expected_result === "string" ? plan.expected_result : undefined,
+      completionEvidence: typeof plan.completion_evidence === "string" ? plan.completion_evidence : undefined,
+      effectivenessMethod: typeof plan.effectiveness_method === "string" ? plan.effectiveness_method : undefined,
       status: plan.status as A3Analysis["plans"][number]["status"] })),
   } : undefined;
   return {
@@ -33,6 +44,7 @@ function mapStoredAction(row: Record<string, unknown>): CorrectiveAction {
     rootCause: row.root_cause ? String(row.root_cause) : undefined,
     relatedPartyId: row.external_organization_id ? String(row.external_organization_id) : undefined,
     qualityCaseId: row.quality_case_id ? String(row.quality_case_id) : undefined,
+    externalReference: row.external_reference ? String(row.external_reference) : undefined,
     portalVisible: Boolean(row.portal_visible), a3,
     deletedAt: row.deleted_at ? String(row.deleted_at) : undefined,
     deletedBy: row.deleted_by ? String(row.deleted_by) : undefined,
