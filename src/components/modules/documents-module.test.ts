@@ -64,3 +64,21 @@ describe("FIX-03A grouped document visibility", () => {
     expect(html).not.toContain("private-P-18"); expect(html).toContain("private-P-19");
   });
 });
+
+describe("PR recovery in the process dossier", () => {
+  const processFile: ControlledDocument = {
+    id: "pr-mtt", processId: "P-12", documentTypeId: "processes", code: "PR-MTT-01", name: "Mantenimiento", owner: "Área",
+    versions: [{ id: "pr-mtt-version", revision: 4, status: "current", fileName: "PR-MTT-01.pdf", uploadedBy: "Autor", validator: "Validador", modifiedAt: "2026-10-28T12:00:00Z", changeReason: "Original", storageObjectPath: "documents/P-12/PR-MTT-01.pdf" }],
+  };
+  it("shows an existing PR file directly in the authorized process dossier", () => {
+    const maintenanceUser: ActiveSession = { ...user, assignedProcessIds: ["P-12"], documentAccess: [{ processId: "P-12", role: "viewer", inheritedFromPositionId: "DIRECT" }] };
+    const html = renderToStaticMarkup(createElement(DocumentsModule, { session: maintenanceUser, controlledDocuments: [processFile], forms: [], onControlledDocumentsChange: vi.fn() }));
+    expect(html).toContain("Procesos · Documentos PR");
+    expect(html).toContain("PR-MTT-01 · Mantenimiento");
+    expect(html).toContain("Ver archivo</button>");
+  });
+  it("hides the same PR from an unauthorized account", () => {
+    const html = renderToStaticMarkup(createElement(DocumentsModule, { session: user, focusId: processFile.id, controlledDocuments: [processFile], forms: [], onControlledDocumentsChange: vi.fn() }));
+    expect(html).not.toContain("PR-MTT-01 · Mantenimiento");
+  });
+});
