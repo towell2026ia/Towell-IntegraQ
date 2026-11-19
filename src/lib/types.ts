@@ -18,6 +18,9 @@ export type CorrectiveActionSeverity = "low" | "medium" | "high" | "critical";
 export interface A3ActionPlanItem {
   cause?: string;
   causeId?: string;
+  causeCategory?: "workforce" | "machinery" | "method" | "material" | "environment" | "measurement";
+  ownerUserId?: string;
+  sourceSuggestionKey?: string;
   expectedResult?: string;
   completionEvidence?: string;
   effectivenessMethod?: string;

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { A3ProposalReview } from "@/components/modules/a3-proposal-review";
+import { appendBlankActionPlan, ishikawaCategories, isActionPlanReady, removeActionPlan, type RootCauseResponsible } from "@/lib/root2cause/action-plan";
 import { A3StepEvidence } from "@/components/modules/a3-step-evidence";
 import { applyStageSuggestion, stageSnapshot, proposalContext, assertProposalContext, assertProposalSnapshots, type RootCauseProposal, type StageSuggestion } from "@/lib/root2cause/assistant";
 import { processCatalog } from "@/lib/configuration-data";
@@ -197,6 +198,12 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   const [customerError, setCustomerError] = useState("");
   const [saveError, setSaveError] = useState("");
   const [isSaving, setSaving] = useState(false);
+  const [responsibleCatalog, setResponsibleCatalog] = useState<{ processId: string; status: "loading" | "loaded"; users: RootCauseResponsible[]; error: string }>({ processId: "", status: "loading", users: [], error: "" });
+  const responsibleProcessId = draft.processId ?? "";
+  const catalogMatchesProcess = responsibleCatalog.processId === responsibleProcessId;
+  const responsibleUsers = useMemo(() => catalogMatchesProcess ? responsibleCatalog.users : [], [catalogMatchesProcess, responsibleCatalog.users]);
+  const responsibleUsersError = catalogMatchesProcess ? responsibleCatalog.error : "";
+  const loadingResponsibleUsers = !catalogMatchesProcess || responsibleCatalog.status === "loading";
 
   useEffect(() => {
     if (session.workspaceMode === "demo") return;
@@ -206,6 +213,20 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       .catch(cause => { if (active) setCustomerError(cause instanceof Error ? cause.message : "No se pudieron consultar los clientes."); });
     return () => { active = false; };
   }, [session.workspaceMode]);
+
+  useEffect(() => {
+    if (session.workspaceMode === "demo") return;
+    let active = true;
+    const query = draft.processId ? `?processId=${encodeURIComponent(draft.processId)}` : "";
+    void fetch(`/api/root2cause/responsible-users${query}`, { cache: "no-store" })
+      .then(async response => {
+        const payload = await response.json() as { users?: RootCauseResponsible[]; error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "No se pudo consultar el catálogo de responsables.");
+        if (active) setResponsibleCatalog({ processId: draft.processId ?? "", status: "loaded", users: Array.isArray(payload.users) ? payload.users : [], error: "" });
+      })
+      .catch(error => { if (active) setResponsibleCatalog({ processId: draft.processId ?? "", status: "loaded", users: [], error: error instanceof Error ? error.message : "No se pudo consultar el catálogo de responsables." }); });
+    return () => { active = false; };
+  }, [session.workspaceMode, draft.processId]);
 
   const refreshSavedDrafts = async () => {
     if (session.workspaceMode === "demo") return;
@@ -297,7 +318,8 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
 
   useEffect(()=>()=>persistence.dirty(false),[persistence]);
-  const completedSteps = useMemo(() => stepLabels.map((_, index) => isStepComplete(index, draft)), [draft]);
+  const responsibleIds = useMemo(() => new Set(responsibleUsers.map(user => user.id)), [responsibleUsers]);
+  const completedSteps = useMemo(() => stepLabels.map((_, index) => isStepComplete(index, draft, responsibleIds)), [draft, responsibleIds]);
   const canContinue = completedSteps[step];
 
   const setOrigin = (origin: A3Draft["origin"]) => {
@@ -383,7 +405,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
   const completeAnalysis = async () => {
     if (isSaving) return;
-    const missing = getMissingFinalRequirements(draft);
+    const missing = getMissingFinalRequirements(draft, responsibleIds);
     if (missing.length) { setSaveError(`No se puede finalizar. Faltan: ${missing.join("; ")}.`); return; }
     const source = getCorrectiveSource(draft.origin);
     setSaving(true); setSaveError("");
@@ -449,7 +471,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
         {step === 4 ? <IshikawaStage value={draft.ishikawa} items={draft.causeItems} inputs={causeInputs} setInputs={setCauseInputs} addCause={addCause} updateCause={updateCause} /> : null}
         {step === 5 ? <CausesStage draft={draft} setDraft={setDraft} /> : null}
         {step === 6 ? <WhysStage draft={draft} setDraft={setDraft} /> : null}
-        {step === 7 ? <PlansStage draft={draft} setDraft={setDraft} updatePlan={updatePlan} /> : null}
+        {step === 7 ? <PlansStage draft={draft} setDraft={setDraft} updatePlan={updatePlan} responsibleUsers={responsibleUsers} loadingResponsibleUsers={loadingResponsibleUsers} responsibleUsersError={responsibleUsersError} /> : null}
         <A3StepEvidence key={`${draft.evidenceId}:${step}`} evidenceId={draft.evidenceId} step={step} processId={draft.processId} persisted={draftSaved}/>
       </div>
 
@@ -475,7 +497,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
         </div>
       </footer>
-      {getMissingFinalRequirements(draft).length ? <details className="a3-stage-hint"><summary>Faltan estos datos para finalizar ({getMissingFinalRequirements(draft).length})</summary><ul>{getMissingFinalRequirements(draft).map(item => <li key={item}>{item}</li>)}</ul></details> : null}
+      {getMissingFinalRequirements(draft, responsibleIds).length ? <details className="a3-stage-hint"><summary>Faltan estos datos para finalizar ({getMissingFinalRequirements(draft, responsibleIds).length})</summary><ul>{getMissingFinalRequirements(draft, responsibleIds).map(item => <li key={item}>{item}</li>)}</ul></details> : null}
       {saveError ? <p role="alert">{saveError} El borrador local permanece disponible para reintentar.</p> : null}
     </section>
   );
@@ -550,16 +572,17 @@ function WhysEditor({ title, source, values, onChange }: { title: string; source
   return <section><header><strong>{title}</strong><small>{source}</small></header>{values.map((value, index) => <label key={index}><span>¿Por qué {index + 1}?</span><textarea rows={2} value={value} onChange={(event) => onChange(values.map((item, itemIndex) => itemIndex === index ? event.target.value : item))} /></label>)}</section>;
 }
 
-function PlansStage({ draft, setDraft, updatePlan }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; updatePlan: (id: string, changes: Partial<A3Analysis["plans"][number]>) => void }) {
-  const causes = [...new Map([...draft.causeItems.map(item => [item.id, { id: item.id, text: item.text }] as const), ...(draft.rootCause.trim() ? [[draft.rootCauseCauseId ?? "root", { id: draft.rootCauseCauseId ?? "root", text: draft.rootCause }] as const] : [])]).values()];
-  return <StageHeading icon={<ClipboardCheck size={20} />} title="8. Plan de acción" description="Convierte el análisis en acciones responsables y verificables."><div className="a3-analysis-summary"><div><small>Clasificación</small><strong>{draft.origin === "customer" ? "Externa" : draft.origin === "system" ? "SGC" : "Interna"}</strong></div><div><small>Causa raíz</small><strong>{draft.rootCause}</strong></div><div><small>Causas 6M</small><strong>{Object.values(draft.ishikawa).flat().length}</strong></div></div><div className="a3-plan-list">{draft.plans.map((plan, index) => <section key={plan.id}><header><strong>Acción {index + 1}</strong>{draft.plans.length > 1 ? <button type="button" title="Eliminar acción" aria-label="Eliminar acción" onClick={() => setDraft((current) => ({ ...current, plans: current.plans.filter((item) => item.id !== plan.id) }))}><Trash2 size={14} /></button> : null}</header><div><label className="wide"><span>Acción propuesta</span><textarea rows={3} value={plan.description} onChange={(event) => updatePlan(plan.id, { description: event.target.value })} /></label><label><span>Causa que atiende</span><select value={plan.causeId ?? ""} onChange={event=>{const chosen=causes.find(item=>item.id===event.target.value);updatePlan(plan.id,{causeId:chosen?.id,cause:chosen?.text??""});}}><option value="">Seleccionar causa del análisis</option>{causes.map(cause=><option key={cause.id} value={cause.id}>{cause.text}</option>)}</select></label><label><span>Responsable</span><input value={plan.owner} onChange={(event) => updatePlan(plan.id, { owner: event.target.value })} /></label><label><span>Fecha compromiso</span><input type="date" value={plan.dueDate} onChange={(event) => updatePlan(plan.id, { dueDate: event.target.value })} /></label></div>{(["expectedResult","completionEvidence","effectivenessMethod"] as const).map((field,n)=><label className="a3-single-field" key={field}><span>{["Resultado esperado","Evidencia de cumplimiento","Verificación de efectividad"][n]}</span><textarea value={plan[field]??""} onChange={e=>updatePlan(plan.id,{[field]:e.target.value})}/></label>)}<A3StepEvidence evidenceId={draft.evidenceId} step={plan.id} processId={draft.processId}/></section>)}</div><button className="button button-secondary" type="button" onClick={() => setDraft((current) => ({ ...current, plans: [...current.plans, { id: crypto.randomUUID(), description: "", owner: "", dueDate: "", status: "pending" }] }))}><Plus size={15} /> Agregar acción</button></StageHeading>;
+export function PlansStage({ draft, setDraft, updatePlan, responsibleUsers, loadingResponsibleUsers, responsibleUsersError }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; updatePlan: (id: string, changes: Partial<A3Analysis["plans"][number]>) => void; responsibleUsers: RootCauseResponsible[]; loadingResponsibleUsers: boolean; responsibleUsersError: string }) {
+  const causes = draft.causeItems.filter(item => Boolean(item.category));
+  const responsibleIds = new Set(responsibleUsers.map(user => user.id));
+  return <StageHeading icon={<ClipboardCheck size={20} />} title="8. Plan de acción" description="Asigna cada acción a una M del Ishikawa y a una persona del catálogo interno." headingAction={<button className="button button-secondary" type="button" onClick={() => setDraft(current => ({ ...current, plans: appendBlankActionPlan(current.plans, crypto.randomUUID()) }))}><Plus size={15} /> Agregar acción</button>}><div className="a3-analysis-summary"><div><small>Clasificación</small><strong>{draft.origin === "customer" ? "Externa" : draft.origin === "system" ? "SGC" : "Interna"}</strong></div><div><small>Causa raíz</small><strong>{draft.rootCause}</strong></div><div><small>Causas 6M</small><strong>{causes.length}</strong></div></div><div className="a3-plan-list">{draft.plans.map((plan, index) => <section key={plan.id}><header><strong>Acción {index + 1}</strong>{draft.plans.length > 1 ? <button type="button" title="Eliminar acción" aria-label="Eliminar acción" onClick={() => setDraft(current => ({ ...current, plans: removeActionPlan(current.plans, plan.id) }))}><Trash2 size={14} /></button> : null}</header><div><label className="wide"><span>Acción correctiva</span><textarea rows={3} value={plan.description} onChange={event => updatePlan(plan.id, { description: event.target.value })} /></label><label><span>M del Ishikawa</span><select value={plan.causeCategory ?? ""} onChange={event => { const category = event.target.value as IshikawaKey | ""; const linkedCause = causes.find(item => item.id === plan.causeId); updatePlan(plan.id, { causeCategory: category || undefined, ...(linkedCause && linkedCause.category !== category ? { causeId: undefined, cause: undefined } : {}) }); }}><option value="">Seleccionar M</option>{ishikawaCategories.map(category => <option key={category} value={category}>{ishikawaLabels[category]}</option>)}</select></label><label><span>Responsable del catálogo interno</span><select value={plan.ownerUserId ?? ""} disabled={loadingResponsibleUsers} onChange={event => { const selected = responsibleUsers.find(user => user.id === event.target.value); updatePlan(plan.id, { ownerUserId: selected?.id, owner: selected?.fullName ?? "" }); }}><option value="">{loadingResponsibleUsers ? "Consultando usuarios…" : "Seleccionar responsable"}</option>{plan.ownerUserId && !responsibleIds.has(plan.ownerUserId) ? <option value={plan.ownerUserId} disabled>{plan.owner || "Responsable guardado no disponible"}</option> : null}{responsibleUsers.map(user => <option key={user.id} value={user.id}>{user.fullName}</option>)}</select>{plan.owner && !plan.ownerUserId ? <small>Responsable guardado: {plan.owner}. Selecciona una cuenta del catálogo para validar la asignación.</small> : null}</label><label><span>Fecha compromiso</span><input type="date" value={plan.dueDate} onChange={event => updatePlan(plan.id, { dueDate: event.target.value })} /></label></div></section>)}</div>{responsibleUsersError ? <p role="alert">{responsibleUsersError}</p> : null}{!loadingResponsibleUsers && !responsibleUsers.length && !responsibleUsersError ? <p className="a3-stage-hint">No hay usuarios internos autorizados disponibles en el catálogo de esta organización.</p> : null}</StageHeading>;
 }
 
-function StageHeading({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }) {
-  return <section className="a3-stage-content"><header><span>{icon}</span><div><h4>{title}</h4><p>{description}</p></div></header>{children}</section>;
+function StageHeading({ icon, title, description, children, headingAction }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode; headingAction?: React.ReactNode }) {
+  return <section className="a3-stage-content"><header><span>{icon}</span><div><h4>{title}</h4><p>{description}</p></div>{headingAction}</header>{children}</section>;
 }
 
-function isStepComplete(step: number, draft: A3Draft) {
+function isStepComplete(step: number, draft: A3Draft, responsibleIds: ReadonlySet<string> = new Set()) {
   switch (step) {
     case 0: return Boolean(draft.title.trim() && draft.problem.trim().length >= 15 && (draft.area.trim() || draft.processId) && draft.owner.trim() && draft.dueDate && (draft.origin !== "customer" || draft.relatedPartyId) && (draft.origin !== "system" || draft.processId));
     case 1: return Boolean(draft.severity && draft.severityJustification.trim());
@@ -568,7 +591,7 @@ function isStepComplete(step: number, draft: A3Draft) {
     case 4: return draft.causeItems.filter(item => item.category).length >= 3;
     case 5: return Boolean(draft.nonDetectionCause.trim() && draft.rootCause.trim());
     case 6: return draft.nonDetectionWhys.filter((value) => value.trim()).length >= 3 && draft.rootCauseWhys.filter((value) => value.trim()).length >= 3;
-    case 7: return draft.plans.length > 0 && draft.plans.every((plan) => plan.description.trim() && plan.owner.trim() && plan.dueDate);
+    case 7: return draft.plans.length > 0 && draft.plans.every((plan) => isActionPlanReady(plan, responsibleIds));
     default: return false;
   }
 }
@@ -609,7 +632,7 @@ function normalizeDraft(saved: Partial<A3Draft>): A3Draft {
   return { ...base, brainstormIds, causeItems, ishikawa, externalClaimReference: saved.externalClaimReference ?? "", processId: saved.processId ?? "", relatedPartyId: saved.relatedPartyId ?? "", qualityCaseId: saved.qualityCaseId ?? "" };
 }
 
-function getMissingFinalRequirements(draft: A3Draft): string[] {
+function getMissingFinalRequirements(draft: A3Draft, responsibleIds: ReadonlySet<string> = new Set()): string[] {
   const missing: string[] = [];
   if (!draft.title.trim()) missing.push("Título del análisis");
   if (draft.problem.trim().length < 15) missing.push("Descripción del problema (mínimo 15 caracteres)");
@@ -630,12 +653,9 @@ function getMissingFinalRequirements(draft: A3Draft): string[] {
   draft.plans.forEach((plan, index) => {
     const prefix = `Acción ${index + 1}`;
     if (!plan.description.trim()) missing.push(`${prefix}: descripción`);
-    if (!plan.cause?.trim()) missing.push(`${prefix}: causa atendida`);
-    if (!plan.owner.trim()) missing.push(`${prefix}: responsable`);
+    if (!plan.causeCategory) missing.push(`${prefix}: categoría M del Ishikawa`);
+    if (!plan.ownerUserId || !responsibleIds.has(plan.ownerUserId)) missing.push(`${prefix}: responsable del catálogo interno`);
     if (!plan.dueDate) missing.push(`${prefix}: fecha compromiso`);
-    if (!plan.expectedResult?.trim()) missing.push(`${prefix}: resultado esperado`);
-    if (!plan.completionEvidence?.trim()) missing.push(`${prefix}: evidencia de cumplimiento requerida`);
-    if (!plan.effectivenessMethod?.trim()) missing.push(`${prefix}: criterio de efectividad`);
   });
   return missing;
 }

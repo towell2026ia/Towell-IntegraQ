@@ -1,4 +1,5 @@
 import type { A3Analysis, AiDocumentReference } from "@/lib/types";
+import { suggestedActionKey } from "@/lib/root2cause/action-plan";
 export const a3Steps = ["Apertura", "Severidad", "5W2H", "Ideas", "Ishikawa 6M", "Causas", "5 Porqués", "Plan de acción"] as const;
 export const stageFields = [
  ["eventType"], ["severityJustification"],
@@ -48,7 +49,16 @@ export function applyStageSuggestion(analysis:A3Analysis,suggestion:StageSuggest
   const value=suggestion.fields[key];if(value===undefined)continue;const [a,b]=key.split('.');
   if(b)(target[a] as Record<string,unknown>)[b]=value;else target[a]=value;
  }
- if(suggestion.step===7)next.plans=[...next.plans,...suggestion.actions.map(a=>({...a,id:crypto.randomUUID(),owner:"",dueDate:"",status:"pending" as const}))];
+ if(suggestion.step===7){
+  const additions=suggestion.actions.flatMap((action,index)=>{
+   const sourceSuggestionKey=suggestedActionKey(suggestion.step,index,action.description,action.cause);
+   if(next.plans.some(plan=>plan.sourceSuggestionKey===sourceSuggestionKey))return [];
+   const cause=next.causeItems?.find(item=>item.text.trim()===action.cause.trim());
+   return [{...action,id:crypto.randomUUID(),owner:"",dueDate:"",status:"pending" as const,
+    ...(cause?{causeId:cause.id,causeCategory:cause.category??undefined}:{}),sourceSuggestionKey}];
+  });
+  next.plans=[...next.plans,...additions];
+ }
  return next;
 }
 export function relevantExcerpts(textContent:string,query:string,max=6000):string {
