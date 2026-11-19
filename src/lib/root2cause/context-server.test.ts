@@ -2,24 +2,25 @@ import {beforeEach,it,expect,vi} from 'vitest';
 import {createHash} from 'node:crypto';
 import type {ActiveSession} from '@/lib/session-data';
 vi.mock('server-only',()=>({}));
-const m=vi.hoisted(()=>({client:vi.fn(),download:vi.fn(),destroy:vi.fn(),pdf:vi.fn()}));
+const m=vi.hoisted(()=>({client:vi.fn(),download:vi.fn(),destroy:vi.fn(),pdf:vi.fn(),rpc:vi.fn()}));
 vi.mock('@/lib/supabase/server',()=>({createClient:m.client}));
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs',()=>({getDocument:m.pdf}));
 import {retrieveRootCauseDocuments} from './context-server';
 const session={authUserId:'actor',userType:'Usuario interno',assignedProcessIds:['P-08']} as ActiveSession;
-let profiles:unknown[],versions:unknown[],file:Record<string,unknown>,versionError:unknown;
+let profiles:unknown[],versions:unknown[],file:Record<string,unknown>,evidenceFiles:Record<string,unknown>[],versionError:unknown;
 let calls:{table:string;method:string;args:unknown[]}[];
+let evidenceQuery=false;
 const document={id:'doc',code:'P-08-01',title:'Control',process_id:'P-08',active:true,organization_id:'org-a',deleted_at:null as string|null,document_type_id:'procedure'};
 const bytes=new TextEncoder().encode('Medir tensión del tejido y registrar defectos.');
 function from(table:string){
  const q:Record<string,unknown>={};
- for(const method of ['select','eq','not','is','order','limit'])q[method]=(...args:unknown[])=>{calls.push({table,method,args});return q;};
- const result=()=>table==='profiles'?{data:profiles.shift(),error:null}:table==='controlled_document_versions'?{data:versions,error:versionError}:{data:file,error:null};
+ for(const method of ['select','eq','in','not','is','order','limit'])q[method]=(...args:unknown[])=>{calls.push({table,method,args});if(table==='file_objects'&&method==='eq'&&args[0]==='resource_type'&&args[1]==='root2cause_evidence')evidenceQuery=true;return q;};
+ const result=()=>table==='profiles'?{data:profiles.shift(),error:null}:table==='controlled_document_versions'?{data:versions,error:versionError}:evidenceQuery?{data:evidenceFiles,error:null}:{data:file,error:null};
  q.single=async()=>result();q.maybeSingle=async()=>result();
  q.then=(resolve:(value:unknown)=>unknown,reject:(reason:unknown)=>unknown)=>Promise.resolve(result()).then(resolve,reject);
  return q;
 }
-beforeEach(()=>{vi.clearAllMocks();profiles=[{organization_id:'org-a',status:'active'}];document.organization_id='org-a';document.active=true;document.deleted_at=null;versions=[{id:'version',revision:'V1',file_id:'file',document}];versionError=null;file={id:'file',bucket_id:'integraq-private',object_path:'private/path',mime_type:'text/plain',size_bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};calls=[];m.client.mockResolvedValue({from,storage:{from:()=>({download:m.download})}});m.download.mockResolvedValue({data:new Blob([bytes]),error:null});});
+beforeEach(()=>{vi.clearAllMocks();profiles=[{organization_id:'org-a',status:'active'}];document.organization_id='org-a';document.active=true;document.deleted_at=null;versions=[{id:'version',revision:'V1',file_id:'file',document}];versionError=null;file={id:'file',bucket_id:'integraq-private',object_path:'private/path',mime_type:'text/plain',size_bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};evidenceFiles=[];evidenceQuery=false;calls=[];m.rpc.mockResolvedValue({data:true,error:null});m.client.mockResolvedValue({from,rpc:m.rpc,storage:{from:()=>({download:m.download})}});m.download.mockResolvedValue({data:new Blob([bytes]),error:null});});
 it('rejects an external user before consulting data',async()=>{await expect(retrieveRootCauseDocuments({...session,userType:'Proveedor'},'P-08','tejido')).rejects.toThrow();expect(m.client).not.toHaveBeenCalled();});
 it('rejects an unassigned process before consulting data',async()=>{await expect(retrieveRootCauseDocuments(session,'P-09','tejido')).rejects.toThrow();expect(m.client).not.toHaveBeenCalled();});
 it('rejects an inactive internal actor',async()=>{profiles[0]={organization_id:'org-a',status:'inactive'};await expect(retrieveRootCauseDocuments(session,'P-08','tejido')).rejects.toThrow(/Organización/);expect(m.download).not.toHaveBeenCalled();});
@@ -34,3 +35,5 @@ it('extracts PDF through the installed loading-task API and releases it',async()
 
 it('rejects a same-creator document assigned to another organization',async()=>{document.organization_id='org-b';expect((await retrieveRootCauseDocuments(session,'P-08','tejido')).documents).toEqual([]);expect(m.download).not.toHaveBeenCalled();});
 it('rejects withdrawn documents even if a version was formerly current',async()=>{document.deleted_at='2026-01-01';expect((await retrieveRootCauseDocuments(session,'P-08','tejido')).documents).toEqual([]);expect(m.download).not.toHaveBeenCalled();});
+it('retrieves only persisted, process-scoped textual evidence authorized by the evidence RPC',async()=>{versions=[];const evidenceId='11111111-1111-4111-8111-111111111111',key=`${evidenceId}_step_0`;evidenceFiles=[{id:'evidence-file',bucket_id:'integraq-private',object_path:`actor/attachments/corrective-actions/root2cause_evidence/${key}/note.txt`,original_name:'nota.txt',mime_type:'text/plain',size_bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),uploaded_by:'actor',process_id:'P-08',workspace_id:'org-a',resource_key:key,version:1}];const result=await retrieveRootCauseDocuments(session,'P-08','tensión',{evidenceId,planIds:[]});expect(result.documents).toEqual([expect.objectContaining({id:'evidence-file',type:'root2cause_evidence',excerpt:expect.stringContaining('Medir tensión')})]);expect(m.rpc).toHaveBeenCalledWith('iq_root2cause_evidence_access',{p_key:key,p_process:'P-08',p_write:false,p_uploader:'actor'});});
+it('does not download evidence when server-side evidence authorization denies it',async()=>{versions=[];m.rpc.mockResolvedValue({data:false,error:null});const evidenceId='11111111-1111-4111-8111-111111111111';evidenceFiles=[{id:'foreign',bucket_id:'integraq-private',object_path:'foreign/path',original_name:'secret.txt',mime_type:'text/plain',size_bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),uploaded_by:'actor',process_id:'P-08',workspace_id:'org-a',resource_key:`${evidenceId}_step_0`,version:1}];const result=await retrieveRootCauseDocuments(session,'P-08','tensión',{evidenceId});expect(result.documents).toEqual([]);expect(m.download).not.toHaveBeenCalled();});

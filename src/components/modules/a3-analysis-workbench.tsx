@@ -192,6 +192,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   const [proposal, setProposal] = useState<RootCauseProposal>();
   const requestSnapshots = useRef<string[]>([]);
   const requestContext = useRef("");
+  const aiRequestInFlight = useRef(false);
   const [customers, setCustomers] = useState<RootCauseCustomer[]>([]);
   const [customerError, setCustomerError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -346,13 +347,15 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   const requestAiSuggestions = async (mode:"full"|"step"="step") => {
+    if (aiRequestInFlight.current) return;
+    aiRequestInFlight.current = true;
     setAiLoading(true);setAiError("");setProposal(undefined);
     requestContext.current=proposalContext(draft.problem,draft.processId);
     const analysis=toA3Analysis(draft);requestSnapshots.current=stepLabels.map((_,i)=>stageSnapshot(analysis,i));
     try {
-      const response=await fetch("/api/ai/root-cause/assist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,problem:draft.problem,analysis})});
+      const response=await fetch("/api/ai/root-cause/assist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,area:draft.area,problem:draft.problem,analysis,origin:draft.origin,...(draft.origin==="customer"&&draft.relatedPartyId?{relatedPartyId:draft.relatedPartyId}:{})})});
       const payload=await response.json();if(!response.ok)throw new Error(payload.error??"No fue posible consultar la IA.");setProposal(payload);
-    }catch(error){setAiError(error instanceof Error?error.message:"No fue posible consultar la IA.");}finally{setAiLoading(false);}
+    }catch(error){setAiError(error instanceof Error?error.message:"No fue posible consultar la IA.");}finally{aiRequestInFlight.current=false;setAiLoading(false);}
   };
   const acceptSuggestion=(suggestion:StageSuggestion)=>{
     if(!window.confirm("¿Incorporar esta propuesta revisada como borrador de la etapa? No confirma la causa ni aprueba acciones."))return false;
