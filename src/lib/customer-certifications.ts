@@ -31,9 +31,9 @@ export function certificationStatus(record: Pick<Certification, "valid_from" | "
 export function certificationCanPublish(record: Pick<Certification, "active" | "valid_from" | "valid_until">, today: string) {
   return record.active && record.valid_from <= today && record.valid_until >= today;
 }
-export function certificationVisibleToCustomer(record: Pick<Certification, "active" | "valid_from" | "valid_until" | "customer_visible" | "workspace_id" | "external_organization_id">, workspaceId: string, customerId: string, today: string) {
-  return record.workspace_id === workspaceId && record.customer_visible === true && certificationCanPublish(record, today) &&
-    (!record.external_organization_id || record.external_organization_id === customerId);
+export function certificationVisibleToCustomer(record: Pick<Certification, "active" | "valid_from" | "valid_until" | "customer_visible" | "workspace_id" | "external_organization_id" | "published_at" | "published_by">, workspaceId: string, customerId: string, today: string) {
+  return record.workspace_id === workspaceId && record.customer_visible === true && !!record.published_at && !!record.published_by && certificationCanPublish(record, today) &&
+    record.external_organization_id === customerId;
 }
 function validDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;

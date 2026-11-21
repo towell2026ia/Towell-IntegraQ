@@ -26,7 +26,11 @@ export async function POST(request: Request) {
     if (input.command === "save") {
       try { validateCertification(input); } catch(e) { throw new CertificationError((e as Error).message); }
     }
-    if (input.command !== "save" || input.revision != null) await authorizedCertification(actor, String(input.id));
+    let currentCertification;
+    if (input.command !== "save" || input.revision != null) currentCertification = await authorizedCertification(actor, String(input.id));
+    if (input.command === "publish" && !currentCertification?.external_organization_id) {
+      throw new CertificationError("Asigna un cliente destinatario antes de publicar la certificación.");
+    }
     if (input.command === "retire" && !String(input.reason ?? "").trim()) throw new CertificationError("Indica el motivo de retiro.");
     const saved = await actor.admin.rpc("iq_certification_command",{actor_id:actor.id,workspace_id:actor.workspaceId,command:input.command,payload:input});
     if (saved.error) throw new CertificationError(saved.error.message.includes("CONCURRENT") ? "El expediente cambió. Recarga antes de guardar." : "No se confirmó el cambio. Verifica responsable, cliente, fechas y archivos vigentes.",saved.error.code==="42501"?403:409);

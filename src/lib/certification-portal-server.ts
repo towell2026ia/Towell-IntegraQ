@@ -6,7 +6,7 @@ import { certificationPages, CertificationError } from "@/lib/customer-certifica
 export async function publishedCertificationFiles(actor: CustomerPortalActor) {
   const db=createAdminClient();
   const today=certificationToday();
-  const rows=await certificationPages<Certification>((f,t)=>db.from("certifications").select("id,name,workspace_id,external_organization_id,active,customer_visible,valid_from,valid_until")
+  const rows=await certificationPages<Certification>((f,t)=>db.from("certifications").select("id,name,workspace_id,external_organization_id,active,customer_visible,valid_from,valid_until,published_at,published_by")
     .eq("workspace_id",actor.workspaceId).eq("active",true).eq("customer_visible",true).order("id").range(f,t));
   const allowed=rows.filter(r=>actor.kind==="administrator"?r.workspace_id===actor.workspaceId&&r.customer_visible&&certificationCanPublish(r,today):!!actor.companyId&&certificationVisibleToCustomer(r,actor.workspaceId,actor.companyId,today));
   const files: Array<CertificationFile & {bucket_id:string;object_path:string;workspace_id:string;certification_name:string}> = [];

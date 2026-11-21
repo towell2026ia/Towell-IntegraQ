@@ -16,7 +16,7 @@ const request=(body:object)=>new Request("https://test/api/customers/certificati
 const body={command:"save",id,name:"Certificación de prueba aislada",type:"Sistema",issuer:"Emisor",responsibleId:customerA,validFrom:"2026-01-01",validUntil:"2026-12-31",customerId:customerA};
 beforeEach(()=>{
  state.session={authUserId:"actor",userType:"Administrador",workspaceMode:"production"};state.permission=true;state.commands=[];state.uploads=[];state.signed=[];state.rpcError=null;
- state.rows={profiles:[{id:"actor",user_type:"administrator",status:"active",workspace_mode:"production",organization_id:org,full_name:"Administrador"}],organizations:[{id:org,kind:"internal",active:true},{id:customerA,kind:"customer",active:true,owning_organization_id:org},{id:customerB,kind:"customer",active:true,owning_organization_id:other}],certifications:[{id,workspace_id:org,external_organization_id:customerA,active:true,customer_visible:true,valid_from:"2020-01-01",valid_until:"2099-12-31",revision:1}],file_objects:[{id:fileId,resource_id:id,workspace_id:org,resource_type:"customer_certification_document",audience:"internal",deleted_at:null,is_current:true,bucket_id:"integraq-private",object_path:`customer-certifications/${org}/${id}/file/original.pdf`,original_name:"original.pdf"}]};
+ state.rows={profiles:[{id:"actor",user_type:"administrator",status:"active",workspace_mode:"production",organization_id:org,full_name:"Administrador"}],organizations:[{id:org,kind:"internal",active:true},{id:customerA,kind:"customer",active:true,owning_organization_id:org},{id:customerB,kind:"customer",active:true,owning_organization_id:other}],certifications:[{id,workspace_id:org,external_organization_id:customerA,active:true,customer_visible:true,published_at:"2026-01-01T00:00:00Z",published_by:"actor",valid_from:"2020-01-01",valid_until:"2099-12-31",revision:1}],file_objects:[{id:fileId,resource_id:id,workspace_id:org,resource_type:"customer_certification_document",audience:"internal",deleted_at:null,is_current:true,bucket_id:"integraq-private",object_path:`customer-certifications/${org}/${id}/file/original.pdf`,original_name:"original.pdf"}]};
 });
 describe("certification server authorization and persistence contract",()=>{
  it("allows active administrators and scopes reads to their organization",async()=>{state.rows.certifications.push({id:other,workspace_id:other});const response=await GET();expect(response.status).toBe(200);const catalog=await response.json();expect(catalog.certifications).toHaveLength(1);expect(catalog.customers.map((c:{id:string})=>c.id)).toEqual([customerA]);expect((await POST(request(body))).status).toBe(200);expect(state.commands[0]).toMatchObject({actor_id:"actor",workspace_id:org,command:"save"});});
@@ -28,7 +28,31 @@ describe("certification server authorization and persistence contract",()=>{
  it("requires a retirement reason and reports transaction failures instead of false success",async()=>{expect((await POST(request({command:"retire",id,revision:1}))).status).toBe(400);state.rpcError={code:"P0001",message:"CERTIFICATION_CONCURRENT_EDIT"};expect((await POST(request({command:"retire",id,revision:1,reason:"Duplicado verificado"}))).status).toBe(409);});
  it("uploads unchanged originals privately and delegates atomic version/audit registration",async()=>{const form=new FormData();form.set("file",new File(["%PDF-1.7\noriginal"],"certificado.pdf"));form.set("revision","1");form.set("replaceId",fileId);expect((await upload(new Request("https://test",{method:"POST",body:form}),context)).status).toBe(200);expect(state.uploads[0]).toMatch(new RegExp(`^customer-certifications/${org}/${id}/`));expect(state.commands[0]).toMatchObject({command:"file",payload:{id,revision:1,replaceId:fileId,mime:"application/pdf"}});});
  it("permits internal historical version reads but never another record's files",async()=>{state.rows.file_objects[0].is_current=false;expect((await download(new Request("https://test"),context)).status).toBe(200);expect(state.signed[0]).toEqual([state.rows.file_objects[0].object_path,60,{download:"original.pdf"}]);state.rows.file_objects[0].resource_id=other;expect((await download(new Request("https://test"),context)).status).toBe(404);expect(state.signed).toHaveLength(1);});
- it("shares general published files but isolates client A from B and excludes old versions",async()=>{const actor={kind:"customer" as const,userId:"external",workspaceId:org,companyId:customerA};expect(await publishedCertificationFiles(actor)).toHaveLength(1);expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(0);state.rows.certifications[0].external_organization_id=null;expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(1);state.rows.file_objects[0].is_current=false;expect(await publishedCertificationFiles(actor)).toHaveLength(0);});
+ it("shares only explicitly scoped published files and excludes old versions",async()=>{const actor={kind:"customer" as const,userId:"external",workspaceId:org,companyId:customerA};expect(await publishedCertificationFiles(actor)).toHaveLength(1);expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(0);state.rows.certifications[0].external_organization_id=null;expect(await publishedCertificationFiles(actor)).toHaveLength(0);expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(0);state.rows.file_objects[0].is_current=false;state.rows.certifications[0].external_organization_id=customerA;expect(await publishedCertificationFiles(actor)).toHaveLength(0);});
+ it("rejects publishing a certification without an explicit customer recipient",async()=>{state.rows.certifications[0].external_organization_id=null;const response=await POST(request({command:"publish",id,revision:1}));expect(response.status).toBe(400);expect(await response.json()).toMatchObject({error:"Asigna un cliente destinatario antes de publicar la certificación."});expect(state.commands).toHaveLength(0);});
  it("excludes private, retired and expired certifications from the portal",async()=>{const actor={kind:"customer" as const,userId:"external",workspaceId:org,companyId:customerA};for(const change of[{customer_visible:false},{active:false},{valid_until:"2020-01-02"}]){const original={...state.rows.certifications[0]};Object.assign(state.rows.certifications[0],change);expect(await publishedCertificationFiles(actor)).toHaveLength(0);state.rows.certifications[0]=original;}});
  it("denies suppliers at the portal file route before issuing a URL",async()=>{state.session={...state.session,userType:"Proveedor",externalParty:{kind:"supplier",companyId:customerA}};state.rows.profiles[0].user_type="supplier";expect((await portalFile(new Request("https://test"),{params:Promise.resolve({fileId})})).status).toBe(403);expect(state.signed).toHaveLength(0);});
+});
+
+it("T-CLI-03-01 / T-CLI-03-02: list and signed file follow recipient, withdrawal and expiry", async () => {
+  const setCustomerSession = (customer: string) => {
+    state.session = {authUserId:"actor", userType:"Cliente", workspaceMode:"production", externalParty:{kind:"customer",companyId:customer,companyName:"Cliente"}};
+    Object.assign(state.rows.profiles[0], {user_type:"customer",external_party_kind:"customer",external_party_id:customer});
+  };
+  state.rows.organizations[2].owning_organization_id=org;
+  const verify = async (companyId:string, visible:boolean) => {
+    setCustomerSession(companyId);
+    const actor={kind:"customer" as const,companyId,workspaceId:org,userId:"actor"};
+    expect(await publishedCertificationFiles(actor)).toHaveLength(visible?1:0);
+    state.signed=[];
+    const response=await portalFile(new Request("https://test/file?disposition=download"),{params:Promise.resolve({fileId})});
+    expect(response.status).toBe(visible?302:404);
+    expect(state.signed).toHaveLength(visible?1:0);
+  };
+  await verify(customerA,true);
+  await verify(customerB,false);
+  state.rows.certifications[0].customer_visible=false;
+  await verify(customerA,false);
+  Object.assign(state.rows.certifications[0],{customer_visible:true,valid_until:"2020-01-02"});
+  await verify(customerA,false);
 });

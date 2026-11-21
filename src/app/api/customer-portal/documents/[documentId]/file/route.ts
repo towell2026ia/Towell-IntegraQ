@@ -1,35 +1,37 @@
 import { NextResponse } from "next/server";
-
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { customerPortalDate, resolveCustomerPortalActor } from "@/lib/customer-portal-server";
-
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+import { resolveCustomerPortalActor } from "@/lib/customer-portal-server";
+import { matchesPortalPublication, portalFileFields } from "@/lib/customer-portal-publication";
+import { certificationUuid } from "@/lib/customer-certifications";
 
 export async function GET(request: Request, { params }: { params: Promise<{ documentId: string }> }) {
-  const session = await getAuthenticatedSession();
-  const actor = await resolveCustomerPortalActor(session);
-  if (!actor) return NextResponse.json({ error: "Acceso al Portal de Clientes no autorizado." }, { status: 403 });
+  const actor = await resolveCustomerPortalActor(await getAuthenticatedSession());
+  const headers = { "Cache-Control": "private, no-store" };
+  if (!actor) return NextResponse.json({ error: "Acceso al Portal de Clientes no autorizado." }, { status: 403, headers });
+  const unavailable = () => NextResponse.json({ error: "Documento no disponible." }, { status: 404, headers });
   const { documentId } = await params;
-  if (!uuid.test(documentId)) return NextResponse.json({ error: "Documento no disponible." }, { status: 404 });
-
-  const admin = createAdminClient();
-  const result = await admin.from("file_objects")
-    .select("id,bucket_id,object_path,original_name,reference_type,validity_status,valid_from,valid_until,is_current,deleted_at,resource_type,workspace_id")
-    .eq("id", documentId).eq("workspace_id", actor.workspaceId)
-    .eq("resource_type", "general_information_document").eq("is_current", true).is("deleted_at", null).maybeSingle();
-  const document = result.data;
-  const today = customerPortalDate();
-  const customerCanRead = actor.kind === "customer" && document?.reference_type === "external" &&
-    document.validity_status === "current" && (!document.valid_from || document.valid_from <= today) &&
-    (!document.valid_until || document.valid_until >= today);
-  if (result.error || !document || (actor.kind === "customer" && !customerCanRead)) {
-    return NextResponse.json({ error: "Documento no disponible." }, { status: 404 });
-  }
-  const download = new URL(request.url).searchParams.get("disposition") === "download";
-  const signed = await admin.storage.from(document.bucket_id || "integraq-private").createSignedUrl(
-    document.object_path, 60, download ? { download: document.original_name } : { download: false },
-  );
-  if (signed.error) return NextResponse.json({ error: "No fue posible abrir el archivo autorizado." }, { status: 500 });
-  return NextResponse.redirect(signed.data.signedUrl, 302);
+  const query = new URL(request.url).searchParams;
+  const administratorPreview = actor.kind === "administrator" && query.get("admin") === "1";
+  const customer = administratorPreview ? query.get("customerId") : actor.companyId;
+  if (!customer || !certificationUuid.test(customer) || !certificationUuid.test(documentId)) return unavailable();
+  const db = createAdminClient();
+  let lookup = db.from("customer_portal_document_publications").select("id,file_id,customer_id,workspace_id,status")
+    .eq("id", documentId).eq("workspace_id", actor.workspaceId).eq("customer_id", customer);
+  if (!administratorPreview) lookup = lookup.eq("status", "published");
+  const publication = await lookup.maybeSingle();
+  const row = publication.data;
+  if (publication.error || !row?.file_id || row.id !== documentId) return unavailable();
+  const fileResult = await db.from("file_objects").select(portalFileFields)
+    .eq("id", row.file_id).eq("workspace_id", actor.workspaceId).eq("external_organization_id", customer)
+    .eq("resource_type", "customer_portal_document").eq("bucket_id", "integraq-private").is("deleted_at", null).maybeSingle();
+  const file = fileResult.data;
+  if (fileResult.error || !file || !matchesPortalPublication(row, file, actor.workspaceId, customer, administratorPreview)) return unavailable();
+  const download = query.get("disposition") === "download";
+  const audit = await db.from("customer_portal_document_events").insert({ publication_id: documentId, workspace_id: actor.workspaceId,
+    customer_id: customer, actor_id: actor.userId, action: "accessed", after_value: { fileId: file.id, disposition: download ? "download" : "view" } });
+  if (audit.error) return NextResponse.json({ error: "No fue posible registrar la consulta del documento." }, { status: 500, headers });
+  const signed = await db.storage.from("integraq-private").createSignedUrl(file.object_path, 60, download ? { download: file.original_name } : { download: false });
+  if (signed.error || !signed.data) return NextResponse.json({ error: "No fue posible abrir el archivo autorizado." }, { status: 500, headers });
+  return NextResponse.redirect(signed.data.signedUrl, { status: 302, headers });
 }

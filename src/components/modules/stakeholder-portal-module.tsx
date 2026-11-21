@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
@@ -34,6 +34,71 @@ import portalStyles from "@/components/modules/stakeholder-portal.module.css";
 
 type PortalKind = "customer" | "supplier";
 
+type CustomerPublication = { id: string; customer_id: string; display_name: string; description: string | null; version: number; status: "draft" | "published" | "withdrawn" | "superseded"; file_id: string; original_name?: string; size_bytes?: number; revision: number; withdrawal_reason?: string | null; created_at: string; published_at?: string | null; withdrawn_at?: string | null; created_by_name?: string; published_by_name?: string; withdrawn_by_name?: string };
+
+function CustomerPortalAdmin() {
+  const [customers, setCustomers] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [customerId, setCustomerId] = useState("");
+  const [versionParent, setVersionParent] = useState<CustomerPublication | null>(null);
+  const [publications, setPublications] = useState<CustomerPublication[]>([]);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async (selected = "") => {
+    const response = await fetch(`/api/customer-portal/admin/documents${selected ? `?customerId=${encodeURIComponent(selected)}` : ""}`, { cache: "no-store" });
+    const body = await response.json() as { customers?: typeof customers; publications?: CustomerPublication[]; error?: string };
+    if (!response.ok) throw new Error(body.error || "No fue posible consultar publicaciones.");
+    setCustomers(body.customers ?? []); setPublications(body.publications ?? []);
+  }, []);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/customer-portal/admin/documents", { cache: "no-store" }).then(response => response.json()).then((body: { customers?: typeof customers; error?: string }) => {
+      if (!active) return; if (!body.customers) throw new Error(body.error || "No fue posible cargar clientes."); setCustomers(body.customers);
+    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "No fue posible cargar clientes."); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    if (!customerId) return;
+    let active = true;
+    void fetch(`/api/customer-portal/admin/documents?customerId=${encodeURIComponent(customerId)}`, { cache: "no-store" }).then(response => response.json()).then((body: { publications?: CustomerPublication[]; error?: string }) => {
+      if (!active) return; if (!body.publications) throw new Error(body.error || "No fue posible cargar publicaciones."); setPublications(body.publications);
+    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "No fue posible cargar publicaciones."); });
+    return () => { active = false; };
+  }, [customerId]);
+  const upload = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); data.set("customerId", customerId); if (versionParent) data.set("previousPublicationId", versionParent.id);
+    setBusy(true); setError(""); setMessage("");
+    try { const response = await fetch("/api/customer-portal/admin/documents", { method: "POST", body: data }); const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "No fue posible cargar el documento."); form.reset(); setVersionParent(null); await refresh(customerId); setMessage("Documento cargado en privado como borrador. Aún no es visible para el cliente.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible cargar el documento."); } finally { setBusy(false); }
+  };
+  const transition = async (item: CustomerPublication, action: "publish" | "withdraw") => {
+    const reason = action === "withdraw" ? window.prompt("Motivo obligatorio del retiro:")?.trim() : undefined;
+    if (action === "withdraw" && !reason) return;
+    if (action === "publish" && !window.confirm(`¿Publicar «${item.display_name}» exclusivamente para este cliente?`)) return;
+    setBusy(true); setError("");
+    try { const response = await fetch("/api/customer-portal/admin/documents", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: item.id, action, reason, revision: item.revision }) }); const body = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(body.error || "No fue posible cambiar la publicación."); await refresh(customerId); setMessage(action === "publish" ? "Publicado para el cliente seleccionado." : "Publicación retirada; el original se conserva.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible cambiar la publicación."); } finally { setBusy(false); }
+  };
+  return <>
+    <section className="portal-record-list"><header><div><h3>Publicar documentos para un cliente</h3><p>Cada archivo permanece privado como borrador hasta que el administrador lo publique expresamente.</p></div><FileText size={19}/></header>
+      <label>Cliente destinatario<select required disabled={busy} value={customerId} onChange={event => { setCustomerId(event.target.value); setPublications([]); setError(""); setVersionParent(null); setMessage(""); }}><option value="">Seleccionar cliente</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.code} · {customer.name}</option>)}</select></label>
+      {customerId ? <><form className={portalStyles.documentUpload} onSubmit={event => void upload(event)}>
+        {versionParent ? <p>Se preparará la versión {versionParent.version + 1} de «{versionParent.display_name}»; la versión publicada anterior permanece disponible hasta publicar la nueva.</p> : null}
+        <label><span>Nombre visible</span><input name="name" defaultValue={versionParent?.display_name ?? ""} required maxLength={200}/></label><label><span>Descripción</span><textarea name="description" defaultValue={versionParent?.description ?? ""} maxLength={1000}/></label>
+        <label><span>PDF original</span><input name="file" type="file" accept="application/pdf,.pdf" required/></label>
+        <button className="button button-primary" type="submit" disabled={busy}>{busy ? "Procesando…" : "Cargar privado como borrador"}</button>
+      </form>
+      <h4>Publicaciones e historial</h4>{publications.map(item => <article key={item.id}><div><code>Versión {item.version} · {item.status}</code><h4>{item.display_name}</h4>{item.description ? <p>{item.description}</p> : null}<small>{item.original_name ?? item.file_id} · {item.size_bytes ? formatFileSize(item.size_bytes) : ""}<br/>Cargado {formatTimestamp(item.created_at)} · {item.created_by_name ?? "Administrador"}{item.published_at ? <><br/>Publicado {formatTimestamp(item.published_at)} · {item.published_by_name ?? "Administrador"}</> : null}{item.withdrawn_at ? <><br/>Retirado {formatTimestamp(item.withdrawn_at)} · {item.withdrawn_by_name ?? "Administrador"}</> : null}{item.withdrawal_reason ? ` · Motivo: ${item.withdrawal_reason}` : ""}</small></div><div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}`} target="_blank" rel="noreferrer">Vista previa</a><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}&disposition=download`}>Descargar</a>{item.status === "draft" ? <button className="button button-primary" disabled={busy} onClick={() => void transition(item,"publish")}>Publicar para este cliente</button> : item.status === "published" ? <><button className="button button-ghost" disabled={busy} onClick={() => void transition(item,"withdraw")}>Retirar publicación</button><button className="button button-ghost" type="button" disabled={busy} onClick={() => setVersionParent(item)}>Cargar nueva versión</button></> : null}</div></article>)}{publications.length===0 ? <PortalEmpty message="Este cliente aún no tiene documentos cargados."/> : null}</> : null}
+      {message ? <p role="status">{message}</p> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}
+    </section></>;
+}
+
+function formatTimestamp(value: string) {
+  return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Mexico_City" }).format(new Date(value));
+}
+
 export function StakeholderPortalModule({
   kind,
   session,
@@ -48,7 +113,7 @@ export function StakeholderPortalModule({
   const company = resolvePortalCompany(session, kind);
   if (!company || (kind === "customer" && (session.userType !== "Cliente" || session.externalParty?.kind !== "customer"))) return <PortalAccessDenied />;
   return kind === "customer" ? (
-    <CustomerPortal company={company} />
+    <CustomerPortal key={session.authUserId + ":" + company.companyId} company={company} />
   ) : (
     <SupplierPortal company={company} actorId={session.authUserId ?? ""} />
   );
@@ -66,88 +131,52 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
   const [selectedActionId, setSelectedActionId] = useState("");
   const [actions, setActions] = useState<PublishedCorrectiveAction[]>([]);
   const [documents, setDocuments] = useState<CustomerPortalDocument[]>([]);
-  const [folders, setFolders] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [uploadError, setUploadError] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [replaceDocumentId, setReplaceDocumentId] = useState("");
-  const [selectedFolderId, setSelectedFolderId] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [actionsLoading, setActionsLoading] = useState(true);
+  const [actionsError, setActionsError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [actionRetry, setActionRetry] = useState(0);
   useEffect(() => {
     let active = true;
-    const loadDocuments = fetch("/api/customer-portal/documents", { cache: "no-store" }).then(async response => {
-      const body = await response.json() as { documents?: CustomerPortalDocument[]; folders?: Array<{ id: string; name: string }>; error?: string };
-      if (!response.ok) throw new Error(body.error || "No fue posible consultar los documentos.");
-      return body;
-    });
-    const loadActions = isAdministrator ? Promise.resolve([] as PublishedCorrectiveAction[]) : loadPublishedCorrectiveActions();
-    void Promise.all([loadDocuments, loadActions]).then(([documentResult, actionResult]) => {
-      if (active) { setDocuments(documentResult.documents ?? []); setFolders(documentResult.folders ?? []); setActions(actionResult); setError(""); }
+    void fetch("/api/customer-portal/documents", { cache: "no-store" }).then(async response => {
+      const body = await response.json() as { documents?: CustomerPortalDocument[]; sectionErrors?: { documents?: string; certifications?: string }; error?: string };
+      if (!response.ok || !Array.isArray(body.documents)) throw new Error(body.error || "No se pudieron consultar documentos y certificaciones.");
+      if (active) {
+        setDocuments(body.documents);
+        setError([body.sectionErrors?.documents, body.sectionErrors?.certifications].filter(Boolean).join(" "));
+      }
     }).catch(cause => {
-      if (active) { setDocuments([]); setActions([]); setError(cause instanceof Error ? cause.message : "No fue posible consultar la información autorizada."); }
+      if (active) { setDocuments([]); setError(cause instanceof Error ? cause.message : "Documentos y certificaciones no disponibles."); }
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [isAdministrator, retry]);
-
-  const handleDocumentUpload = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!isAdministrator) return;
-    const formElement = event.currentTarget;
-    const file = (formElement.elements.namedItem("documentFile") as HTMLInputElement | null)?.files?.[0];
-    const folderId = selectedFolderId;
-    const name = displayName.trim();
-    if (!(file instanceof File) || !folderId) { setUploadError("Selecciona una carpeta y un archivo."); return; }
-    setUploading(true); setUploadError("");
-    const body = new FormData();
-    body.append("files", file);
-    body.append("manifest", JSON.stringify([{ folderId, name: name || file.name, referenceType: "external", validityStatus: "current" }]));
-    if (replaceDocumentId) body.append("replaceDocumentId", replaceDocumentId);
-    try {
-      const response = await fetch("/api/information-general", { method: "POST", body });
-      const result = await response.json() as { successCount?: number; results?: Array<{ ok?: boolean; error?: string }>; error?: string };
-      if (!response.ok || !result.successCount) throw new Error(result.error || result.results?.[0]?.error || "No fue posible publicar el documento.");
-      formElement.reset(); setReplaceDocumentId(""); setSelectedFolderId(""); setDisplayName(""); setLoading(true); setRetry(value => value + 1);
-    } catch (cause) { setUploadError(cause instanceof Error ? cause.message : "No fue posible publicar el documento."); }
-    finally { setUploading(false); }
-  };
-
-  const changePublication = async (document: CustomerPortalDocument, publish: boolean) => {
-    if (!publish && !window.confirm(`Retirar «${document.name}» de la biblioteca de clientes? El archivo y su historial se conservarán.`)) return;
-    const response = await fetch("/api/information-general", { method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ entity: "document", action: "update", id: document.id,
-        referenceType: "external", validityStatus: publish ? "current" : "not_current" }) });
-    const result = await response.json() as { error?: string };
-    if (!response.ok) { setUploadError(result.error || "No fue posible actualizar la publicación."); return; }
-    setLoading(true); setRetry(value => value + 1);
-  };
-
+  }, [retry]);
+  useEffect(() => {
+    if (isAdministrator) return;
+    let active = true;
+    void loadPublishedCorrectiveActions().then(rows => {
+      if (active) { setActions(rows); setActionsError(""); }
+    }).catch(() => {
+      if (active) { setActions([]); setActionsError("Mis análisis A3: no se pudieron consultar los análisis autorizados."); }
+    }).finally(() => { if (active) setActionsLoading(false); });
+    return () => { active = false; };
+  }, [isAdministrator, actionRetry]);
   const selectedAction = actions.find((action) => action.id === selectedActionId);
   return (
     <>
-      <PortalHeading title="Portal del cliente" account={isAdministrator ? "Biblioteca para todos los clientes" : company?.companyName ?? "Cliente"} description="Documentos vigentes y análisis A3 autorizados para esta empresa." />
+      <PortalHeading title="Portal del cliente" account={isAdministrator ? "Administración por cliente" : company?.companyName ?? "Cliente"} description="Documentos, certificaciones y análisis A3 autorizados." />
       <div className="quality-view-tabs portal-tabs" style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }} aria-label="Secciones del Portal de Clientes">
         <button className={view === "documents" ? "active" : ""} type="button" onClick={() => setView("documents")}>Documentos</button>
         <button className={view === "actions" ? "active" : ""} type="button" onClick={() => setView("actions")}>Mis análisis A3</button>
       </div>
       {view === "documents" ? <section className="portal-record-list">
-        <header><div><h3>Documentos vigentes</h3><p>{isAdministrator ? "Administra la publicación para todas las cuentas de clientes." : "Consulta y descarga documentos publicados y vigentes."}</p></div><FileText size={19} /></header>
-        {isAdministrator ? <form className={portalStyles.documentUpload} onSubmit={(event) => void handleDocumentUpload(event)}>
-          <label><span>Carpeta</span><select name="folderId" required value={selectedFolderId} onChange={event => setSelectedFolderId(event.target.value)}><option value="" disabled>Seleccionar carpeta existente</option>{folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select></label>
-          <label><span>Nombre del documento</span><input name="displayName" value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Nombre visible para clientes" /></label>
-          <label><span>Archivo {replaceDocumentId ? "de reemplazo" : "para publicar"}</span><input key={replaceDocumentId || "new-document"} name="documentFile" type="file" required accept=".pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.gif,.txt" /></label>
-          {replaceDocumentId ? <button className="button button-secondary" type="button" onClick={() => { setReplaceDocumentId(""); setSelectedFolderId(""); setDisplayName(""); }}>Cancelar reemplazo</button> : null}
-          <button className="button button-primary" disabled={uploading || !folders.length} type="submit">{uploading ? "Guardando…" : replaceDocumentId ? "Sustituir y publicar versión" : "Cargar y publicar"}</button>
-          {!folders.length ? <small>Se requiere una carpeta documental existente en Información General.</small> : null}
-          {uploadError ? <div className="form-error" role="alert">{uploadError}</div> : null}
-        </form> : null}
+        {isAdministrator ? <CustomerPortalAdmin /> : null}
+        <header><div><h3>{isAdministrator ? "Certificaciones publicadas" : "Documentos y certificaciones"}</h3></div><FileText size={19} /></header>
         {loading ? <PortalEmpty message="Consultando documentos autorizados…" /> : null}
         {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
-        {!loading && !error ? documents.map(document => <article key={document.id}>
+        {!loading ? documents.map(document => <article key={document.id}>
           <div><code>Versión {document.version}</code><h4>{document.name}</h4>{document.description ? <p>{document.description}</p> : null}<small>{document.originalName} · {formatFileSize(document.sizeBytes)}</small></div>
           <div className={portalStyles.documentLinks}><a className="button button-secondary" href={document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`${document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`}?disposition=download`}>Descargar</a>
-            {isAdministrator && document.managedInCertifications ? <small>Publicación y versiones: Gestión de Clientes → Certificaciones.</small> : isAdministrator ? document.referenceType === "external" && document.validityStatus === "current" ? <><button className="button button-ghost" type="button" onClick={() => { setReplaceDocumentId(document.id); setSelectedFolderId(document.folderId); setDisplayName(document.name); }}>Sustituir</button><button className="button button-ghost" type="button" onClick={() => void changePublication(document, false)}>Retirar publicación</button></> : <button className="button button-ghost" type="button" onClick={() => void changePublication(document, true)}>Publicar para clientes</button> : null}
           </div>
         </article>) : null}
         {!loading && !error && documents.length === 0 ? <PortalEmpty message={isAdministrator ? "No hay documentos vigentes en el catálogo." : "No hay documentos publicados y vigentes para clientes."} /> : null}
@@ -157,8 +186,8 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
           <section className="portal-record-list"><button className="button button-secondary" type="button" onClick={() => setSelectedActionId("")}>Volver</button><article><div><code>{selectedAction.folio}</code><h4>{selectedAction.title}</h4></div><dl><div><dt>Avance</dt><dd>{selectedAction.progress}%</dd></div><div><dt>Vencimiento</dt><dd>{formatDate(selectedAction.dueDate)}</dd></div></dl><span className="quality-state warning">{selectedAction.status}</span></article></section>
         ) : <section className="portal-record-list">
           <header><div><h3>Mis análisis A3</h3><p>Únicamente análisis autorizados para esta cuenta; este portal permite consulta.</p></div><ClipboardCheck size={19} /></header>
-          {loading ? <PortalEmpty message="Consultando acciones autorizadas…" /> : null}
-          {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
+          {actionsLoading ? <PortalEmpty message="Consultando acciones autorizadas…" /> : null}
+          {actionsError ? <div role="alert">{actionsError} <button type="button" onClick={() => { setActionsLoading(true); setActionRetry(value => value + 1); }}>Reintentar</button></div> : null}
           {actions.map((action) => (
             <article key={action.id}>
               <div><code>{action.folio}</code><h4>{action.title}</h4><button className="button button-secondary portal-report-link" type="button" onClick={() => setSelectedActionId(action.id)}><FileText size={15} /> Ver información compartida</button></div>
@@ -166,7 +195,7 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
               <span className="quality-state warning">{action.status}</span>
             </article>
           ))}
-          {!loading && !error && actions.length === 0 ? <PortalEmpty message="No hay análisis A3 publicados para esta empresa." /> : null}
+          {!actionsLoading && !actionsError && actions.length === 0 ? <PortalEmpty message="No hay análisis A3 publicados para esta empresa." /> : null}
         </section>
       ) : null}
     </>
