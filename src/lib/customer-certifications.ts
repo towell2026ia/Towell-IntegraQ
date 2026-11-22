@@ -16,7 +16,7 @@ export type CertificationCatalog = {
   customers: { id: string; code: string; name: string; active: boolean }[];
   responsibleUsers: { id: string; full_name: string }[];
   history: { id: string; resource_id: string; action: string; actor_id: string; created_at: string; reason: string | null }[];
-  administrator: boolean; today: string;
+  assignmentAvailable?: boolean; administrator: boolean; today: string;
 };
 export function certificationToday(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);

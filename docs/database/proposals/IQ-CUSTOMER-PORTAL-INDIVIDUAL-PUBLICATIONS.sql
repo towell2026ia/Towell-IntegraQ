@@ -143,6 +143,7 @@ begin
  if not found then raise exception 'CUSTOMER_PORTAL_PUBLICATION_NOT_FOUND'; end if;
  if item.revision is distinct from p_expected_revision then raise exception 'CUSTOMER_PORTAL_REVISION_CONFLICT'; end if;
  if p_action='publish' and item.status='draft' then
+   if not exists(select 1 from public.organizations where id=item.customer_id and kind='customer' and active and owning_organization_id=item.workspace_id) then raise exception 'CUSTOMER_PORTAL_CUSTOMER_SCOPE'; end if;
    for old_item in select * from public.customer_portal_document_publications where workspace_id=item.workspace_id and customer_id=item.customer_id and document_key=item.document_key and status='published' and id<>item.id for update loop
      old_before:=to_jsonb(old_item);
      update public.customer_portal_document_publications set status='superseded',revision=revision+1 where id=old_item.id returning * into old_item;
@@ -185,5 +186,53 @@ drop trigger if exists iq_u01_certification_recipient on public.certifications;
 create trigger iq_u01_certification_recipient
   before insert or update of customer_visible, external_organization_id, workspace_id, published_at, published_by
   on public.certifications for each row execute function public.iq_u01_certification_recipient_guard();
+
+-- Assign the first recipient only on an explicit save of an existing private draft.
+-- The existing save RPC checks the administrator, ownership, revision and fields.
+create or replace function public.iq_u01_save_certification_recipient(
+  p_actor_id uuid, p_workspace_id uuid, p_payload jsonb
+) returns jsonb language plpgsql security invoker set search_path = '' as $assign$
+declare
+  target uuid := (p_payload->>'customerId')::uuid;
+  cert_id uuid := (p_payload->>'id')::uuid;
+  original public.certifications%rowtype;
+  saved public.certifications%rowtype;
+begin
+  if current_user <> 'service_role' then raise exception using errcode='42501', message='SERVICE_COMMAND_ONLY'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(cert_id::text,0));
+  select * into original from public.certifications where id=cert_id and workspace_id=p_workspace_id for update;
+  if not found then raise exception 'CERTIFICATION_NOT_FOUND'; end if;
+  if original.revision is distinct from (p_payload->>'revision')::integer then raise exception 'CERTIFICATION_CONCURRENT_EDIT'; end if;
+  if not original.active or original.customer_visible or original.external_organization_id is not null then
+    raise exception 'CERTIFICATION_CUSTOMER_IMMUTABLE';
+  end if;
+  perform 1 from public.organizations where id=target and kind='customer' and active
+    and owning_organization_id=p_workspace_id for share;
+  if not found then raise exception using errcode='42501', message='CUSTOMER_SCOPE_DENIED'; end if;
+  perform public.iq_certification_command(p_actor_id,p_workspace_id,'save',p_payload - 'customerId');
+  update public.certifications set external_organization_id=target where id=cert_id returning * into saved;
+  insert into public.audit_log(actor_id,organization_id,module,action,resource_type,resource_id,previous_value,new_value)
+    values(p_actor_id,p_workspace_id,'customers','certification.recipient_assigned','customer_certification',cert_id,
+           jsonb_build_object('external_organization_id',original.external_organization_id),
+           jsonb_build_object('external_organization_id',target));
+  return jsonb_build_object('certification',to_jsonb(saved),'fileId',null);
+end;
+$assign$;
+revoke all on function public.iq_u01_save_certification_recipient(uuid,uuid,jsonb) from public,anon,authenticated;
+grant execute on function public.iq_u01_save_certification_recipient(uuid,uuid,jsonb) to service_role;
+
+-- Versioned read-only probe, installed atomically with the contract.
+create or replace function public.iq_u01_publication_ready_v2()
+returns boolean language sql stable security invoker set search_path='' as $ready$
+  select current_user = 'service_role'
+    and to_regclass('public.customer_portal_document_publications') is not null
+    and to_regclass('public.customer_portal_document_events') is not null
+    and has_function_privilege(current_user,'public.iq_customer_portal_document_record(uuid,uuid,uuid,text,text,text,text,bigint,text,text,uuid)','execute')
+    and has_function_privilege(current_user,'public.iq_customer_portal_document_transition(uuid,uuid,uuid,text,text,integer)','execute')
+    and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.certifications'::regclass
+                and tgname='iq_u01_certification_recipient' and tgenabled in ('O','A'));
+$ready$;
+revoke all on function public.iq_u01_publication_ready_v2() from public,anon,authenticated;
+grant execute on function public.iq_u01_publication_ready_v2() to service_role;
 
 commit;

@@ -5,6 +5,8 @@ import { resolveCustomerPortalActor } from "@/lib/customer-portal-server";
 import { matchesPortalPublication, portalFileFields } from "@/lib/customer-portal-publication";
 import { certificationUuid } from "@/lib/customer-certifications";
 
+import { PublicationUnavailable, requireIndividualPublication } from "@/lib/customer-portal-contract-server";
+
 export async function GET(request: Request, { params }: { params: Promise<{ documentId: string }> }) {
   const actor = await resolveCustomerPortalActor(await getAuthenticatedSession());
   const headers = { "Cache-Control": "private, no-store" };
@@ -15,6 +17,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ docu
   const administratorPreview = actor.kind === "administrator" && query.get("admin") === "1";
   const customer = administratorPreview ? query.get("customerId") : actor.companyId;
   if (!customer || !certificationUuid.test(customer) || !certificationUuid.test(documentId)) return unavailable();
+  try {
+    await requireIndividualPublication();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof PublicationUnavailable ? error.message : "No fue posible verificar el acceso documental." }, { status: 503, headers });
+  }
   const db = createAdminClient();
   let lookup = db.from("customer_portal_document_publications").select("id,file_id,customer_id,workspace_id,status")
     .eq("id", documentId).eq("workspace_id", actor.workspaceId).eq("customer_id", customer);

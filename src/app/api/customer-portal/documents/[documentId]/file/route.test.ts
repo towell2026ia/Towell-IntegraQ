@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
+  rpc: async () => ({data:true,error:null}),
   from(table: string) {
     state.calls.push({ table, method: "from", args: [] });
     const chain: Record<string, unknown> = {};

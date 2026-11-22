@@ -5,8 +5,11 @@ import { resolveCustomerPortalActor, type CustomerPortalActor } from "@/lib/cust
 import { publishedCertificationFiles } from "@/lib/certification-portal-server";
 import { matchesPortalPublication, portalFileFields } from "@/lib/customer-portal-publication";
 
+import { PublicationUnavailable, requireIndividualPublication } from "@/lib/customer-portal-contract-server";
+
 async function customerDocuments(actor: CustomerPortalActor) {
   if (actor.kind !== "customer" || !actor.companyId) return [];
+  await requireIndividualPublication();
   const customer = actor.companyId;
   const admin = createAdminClient();
   const documents: Array<{id:string; name:string; originalName:string; mimeType:string; sizeBytes:number;
@@ -51,7 +54,7 @@ export async function GET() {
     fileHref: `/api/customer-portal/certifications/${file.id}`, managedInCertifications: true,
   })) : [];
   return NextResponse.json({ documents: [...documents, ...certificates], sectionErrors: {
-    documents: publications.status === "rejected" ? "Documentos: no se pudo verificar la publicación por destinatario." : null,
+    documents: publications.status === "rejected" ? (publications.reason instanceof PublicationUnavailable ? publications.reason.message : "Documentos: no se pudo verificar la publicación por destinatario.") : null,
     certifications: certifications.status === "rejected" ? "Certificaciones: no se pudieron verificar las certificaciones autorizadas." : null,
   } }, { headers });
 }

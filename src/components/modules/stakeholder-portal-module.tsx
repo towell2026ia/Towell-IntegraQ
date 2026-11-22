@@ -16,7 +16,7 @@ import {
   ShieldCheck,
   UserRoundCheck,
 } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
@@ -44,53 +44,62 @@ function CustomerPortalAdmin() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const refresh = useCallback(async (selected = "") => {
-    const response = await fetch(`/api/customer-portal/admin/documents${selected ? `?customerId=${encodeURIComponent(selected)}` : ""}`, { cache: "no-store" });
-    const body = await response.json() as { customers?: typeof customers; publications?: CustomerPublication[]; error?: string };
-    if (!response.ok) throw new Error(body.error || "No fue posible consultar publicaciones.");
-    setCustomers(body.customers ?? []); setPublications(body.publications ?? []);
-  }, []);
+  const [loadedCustomer, setLoadedCustomer] = useState<string | null>(null);
+  const [revision, setRevision] = useState(0);
+  const reload = () => { setLoadedCustomer(null); setRevision(value => value + 1); };
+  const recipient = customers.find(customer => customer.id === customerId);
   useEffect(() => {
-    let active = true;
-    void fetch("/api/customer-portal/admin/documents", { cache: "no-store" }).then(response => response.json()).then((body: { customers?: typeof customers; error?: string }) => {
-      if (!active) return; if (!body.customers) throw new Error(body.error || "No fue posible cargar clientes."); setCustomers(body.customers);
-    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "No fue posible cargar clientes."); });
-    return () => { active = false; };
-  }, []);
-  useEffect(() => {
-    if (!customerId) return;
-    let active = true;
-    void fetch(`/api/customer-portal/admin/documents?customerId=${encodeURIComponent(customerId)}`, { cache: "no-store" }).then(response => response.json()).then((body: { publications?: CustomerPublication[]; error?: string }) => {
-      if (!active) return; if (!body.publications) throw new Error(body.error || "No fue posible cargar publicaciones."); setPublications(body.publications);
-    }).catch(cause => { if (active) setError(cause instanceof Error ? cause.message : "No fue posible cargar publicaciones."); });
-    return () => { active = false; };
-  }, [customerId]);
+    const controller = new AbortController();
+    async function load() {
+      const suffix = customerId ? `?customerId=${encodeURIComponent(customerId)}` : "";
+      const response = await fetch(`/api/customer-portal/admin/documents${suffix}`, { cache: "no-store", signal: controller.signal });
+      const body = await response.json();
+      if (!response.ok || body.available !== true || !Array.isArray(body.customers) || !Array.isArray(body.publications)) {
+        throw new Error(body.error || "No fue posible consultar las publicaciones.");
+      }
+      if (controller.signal.aborted) return;
+      setCustomers(body.customers);
+      setPublications(body.publications.filter((item: CustomerPublication) => item.customer_id === customerId));
+      setLoadedCustomer(customerId);
+      setError("");
+    }
+    void load().catch(cause => {
+      if (controller.signal.aborted) return;
+      setLoadedCustomer(null);
+      setPublications([]);
+      setError(cause instanceof Error ? cause.message : "No fue posible consultar las publicaciones.");
+    });
+    return () => controller.abort();
+  }, [customerId, revision]);
   const upload = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); const form = event.currentTarget; const data = new FormData(form); data.set("customerId", customerId); if (versionParent) data.set("previousPublicationId", versionParent.id);
+    event.preventDefault(); if (!recipient || loadedCustomer !== customerId) return; const form = event.currentTarget; const data = new FormData(form); data.set("customerId", customerId); if (versionParent) data.set("previousPublicationId", versionParent.id);
     setBusy(true); setError(""); setMessage("");
     try { const response = await fetch("/api/customer-portal/admin/documents", { method: "POST", body: data }); const body = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(body.error || "No fue posible cargar el documento."); form.reset(); setVersionParent(null); await refresh(customerId); setMessage("Documento cargado en privado como borrador. Aún no es visible para el cliente.");
+      if (!response.ok) { if ([403,503].includes(response.status)) reload(); throw new Error(body.error || "No fue posible cargar el documento."); } form.reset(); setVersionParent(null); reload(); setMessage("Documento cargado en privado como borrador. Aún no es visible para el cliente.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible cargar el documento."); } finally { setBusy(false); }
   };
   const transition = async (item: CustomerPublication, action: "publish" | "withdraw") => {
+    if (!recipient || loadedCustomer !== item.customer_id || item.customer_id !== customerId) return;
     const reason = action === "withdraw" ? window.prompt("Motivo obligatorio del retiro:")?.trim() : undefined;
     if (action === "withdraw" && !reason) return;
-    if (action === "publish" && !window.confirm(`¿Publicar «${item.display_name}» exclusivamente para este cliente?`)) return;
+    if (action === "publish" && !window.confirm(`¿Publicar «${item.display_name}» para ${recipient.name}?`)) return;
     setBusy(true); setError("");
     try { const response = await fetch("/api/customer-portal/admin/documents", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: item.id, action, reason, revision: item.revision }) }); const body = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(body.error || "No fue posible cambiar la publicación."); await refresh(customerId); setMessage(action === "publish" ? "Publicado para el cliente seleccionado." : "Publicación retirada; el original se conserva.");
+      if (!response.ok) { if ([403,503].includes(response.status)) reload(); throw new Error(body.error || "No fue posible cambiar la publicación."); } reload(); setMessage(action === "publish" ? `Publicado para ${recipient.name}.` : "Publicación retirada; el original se conserva.");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "No fue posible cambiar la publicación."); } finally { setBusy(false); }
   };
   return <>
     <section className="portal-record-list"><header><div><h3>Publicar documentos para un cliente</h3><p>Cada archivo permanece privado como borrador hasta que el administrador lo publique expresamente.</p></div><FileText size={19}/></header>
-      <label>Cliente destinatario<select required disabled={busy} value={customerId} onChange={event => { setCustomerId(event.target.value); setPublications([]); setError(""); setVersionParent(null); setMessage(""); }}><option value="">Seleccionar cliente</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.code} · {customer.name}</option>)}</select></label>
-      {customerId ? <><form className={portalStyles.documentUpload} onSubmit={event => void upload(event)}>
+      {loadedCustomer === customerId ? <label>Cliente destinatario<select required disabled={busy} value={customerId} onChange={event => { setLoadedCustomer(null); setCustomerId(event.target.value); setPublications([]); setError(""); setVersionParent(null); setMessage(""); }}><option value="">Seleccionar cliente</option>{customers.map(customer => <option key={customer.id} value={customer.id}>{customer.code} · {customer.name}</option>)}</select></label> : null}
+      {loadedCustomer === "" ? <p>Selecciona un cliente destinatario antes de publicar</p> : null}
+      {loadedCustomer === null && error ? <button type="button" onClick={reload}>Reintentar consulta</button> : null}
+      {recipient && loadedCustomer === customerId ? <><form className={portalStyles.documentUpload} onSubmit={event => void upload(event)}>
         {versionParent ? <p>Se preparará la versión {versionParent.version + 1} de «{versionParent.display_name}»; la versión publicada anterior permanece disponible hasta publicar la nueva.</p> : null}
         <label><span>Nombre visible</span><input name="name" defaultValue={versionParent?.display_name ?? ""} required maxLength={200}/></label><label><span>Descripción</span><textarea name="description" defaultValue={versionParent?.description ?? ""} maxLength={1000}/></label>
         <label><span>PDF original</span><input name="file" type="file" accept="application/pdf,.pdf" required/></label>
         <button className="button button-primary" type="submit" disabled={busy}>{busy ? "Procesando…" : "Cargar privado como borrador"}</button>
       </form>
-      <h4>Publicaciones e historial</h4>{publications.map(item => <article key={item.id}><div><code>Versión {item.version} · {item.status}</code><h4>{item.display_name}</h4>{item.description ? <p>{item.description}</p> : null}<small>{item.original_name ?? item.file_id} · {item.size_bytes ? formatFileSize(item.size_bytes) : ""}<br/>Cargado {formatTimestamp(item.created_at)} · {item.created_by_name ?? "Administrador"}{item.published_at ? <><br/>Publicado {formatTimestamp(item.published_at)} · {item.published_by_name ?? "Administrador"}</> : null}{item.withdrawn_at ? <><br/>Retirado {formatTimestamp(item.withdrawn_at)} · {item.withdrawn_by_name ?? "Administrador"}</> : null}{item.withdrawal_reason ? ` · Motivo: ${item.withdrawal_reason}` : ""}</small></div><div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}`} target="_blank" rel="noreferrer">Vista previa</a><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}&disposition=download`}>Descargar</a>{item.status === "draft" ? <button className="button button-primary" disabled={busy} onClick={() => void transition(item,"publish")}>Publicar para este cliente</button> : item.status === "published" ? <><button className="button button-ghost" disabled={busy} onClick={() => void transition(item,"withdraw")}>Retirar publicación</button><button className="button button-ghost" type="button" disabled={busy} onClick={() => setVersionParent(item)}>Cargar nueva versión</button></> : null}</div></article>)}{publications.length===0 ? <PortalEmpty message="Este cliente aún no tiene documentos cargados."/> : null}</> : null}
+      <h4>Publicaciones e historial</h4>{publications.map(item => <article key={item.id}><div><code>Versión {item.version} · {item.status === "published" ? `Publicado para ${recipient.name}` : item.status === "draft" ? "Privado / borrador" : item.status === "withdrawn" ? "Retirado" : "Sustituido"}</code><h4>{item.display_name}</h4>{item.description ? <p>{item.description}</p> : null}<small>{item.original_name ?? item.file_id} · {item.size_bytes ? formatFileSize(item.size_bytes) : ""}<br/>Cargado {formatTimestamp(item.created_at)} · {item.created_by_name ?? "Administrador"}{item.published_at ? <><br/>Publicado {formatTimestamp(item.published_at)} · {item.published_by_name ?? "Administrador"}</> : null}{item.withdrawn_at ? <><br/>Retirado {formatTimestamp(item.withdrawn_at)} · {item.withdrawn_by_name ?? "Administrador"}</> : null}{item.withdrawal_reason ? ` · Motivo: ${item.withdrawal_reason}` : ""}</small></div><div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}`} target="_blank" rel="noreferrer">Vista previa</a><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&customerId=${encodeURIComponent(customerId)}&disposition=download`}>Descargar</a>{item.status === "draft" ? <button className="button button-primary" disabled={busy} onClick={() => void transition(item,"publish")}>Publicar para {recipient.name}</button> : item.status === "published" ? <><button className="button button-ghost" disabled={busy} onClick={() => void transition(item,"withdraw")}>Retirar publicación</button><button className="button button-ghost" type="button" disabled={busy} onClick={() => setVersionParent(item)}>Cargar nueva versión</button></> : null}</div></article>)}{publications.length===0 ? <PortalEmpty message="Este cliente aún no tiene documentos cargados."/> : null}</> : null}
       {message ? <p role="status">{message}</p> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}
     </section></>;
 }

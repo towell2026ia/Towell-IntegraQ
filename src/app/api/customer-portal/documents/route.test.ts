@@ -12,7 +12,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 vi.mock("@/lib/certification-portal-server", () => ({ publishedCertificationFiles: state.certificates }));
 function client() {
-  return { from(table: string) {
+  return { rpc: async () => ({data:true,error:null}), from(table: string) {
     state.calls.push({ table, method: "from", args: [] });
     const next = () => state.responses[table]?.shift() ?? { data: null, error: null };
     const chain: Record<string, unknown> = {};

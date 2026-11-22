@@ -4,7 +4,7 @@ function query(table:string){let rows=state.rows[table]??[];const chain:Record<s
 vi.mock("server-only",()=>({}));
 vi.mock("@/lib/supabase/auth-session",()=>({getAuthenticatedSession:async()=>state.session}));
 vi.mock("@/lib/supabase/server",()=>({createClient:async()=>({rpc:async()=>({data:state.permission,error:null})})}));
-vi.mock("@/lib/supabase/admin",()=>({createAdminClient:()=>({from:query,rpc:async(_name:string,args:Record<string,unknown>)=>{state.commands.push(args);return {data:{certification:state.rows.certifications[0]},error:state.rpcError};},storage:{from:()=>({upload:async(path:string)=>{state.uploads.push(path);return {error:null};},createSignedUrl:async(...args:unknown[])=>{state.signed.push(args);return {data:{signedUrl:"https://storage.test/signed-short-lived"},error:null};}})}})}));
+vi.mock("@/lib/supabase/admin",()=>({createAdminClient:()=>({from:query,rpc:async(_name:string,args:Record<string,unknown>)=>{if(_name==="iq_u01_publication_ready_v2")return {data:true,error:null};state.commands.push(args);return {data:{certification:state.rows.certifications[0]},error:state.rpcError};},storage:{from:()=>({upload:async(path:string)=>{state.uploads.push(path);return {error:null};},createSignedUrl:async(...args:unknown[])=>{state.signed.push(args);return {data:{signedUrl:"https://storage.test/signed-short-lived"},error:null};}})}})}));
 import {GET,POST} from "./route";
 import {POST as upload} from "./[certificationId]/files/route";
 import {GET as download} from "./[certificationId]/files/[fileId]/route";
@@ -29,7 +29,7 @@ describe("certification server authorization and persistence contract",()=>{
  it("uploads unchanged originals privately and delegates atomic version/audit registration",async()=>{const form=new FormData();form.set("file",new File(["%PDF-1.7\noriginal"],"certificado.pdf"));form.set("revision","1");form.set("replaceId",fileId);expect((await upload(new Request("https://test",{method:"POST",body:form}),context)).status).toBe(200);expect(state.uploads[0]).toMatch(new RegExp(`^customer-certifications/${org}/${id}/`));expect(state.commands[0]).toMatchObject({command:"file",payload:{id,revision:1,replaceId:fileId,mime:"application/pdf"}});});
  it("permits internal historical version reads but never another record's files",async()=>{state.rows.file_objects[0].is_current=false;expect((await download(new Request("https://test"),context)).status).toBe(200);expect(state.signed[0]).toEqual([state.rows.file_objects[0].object_path,60,{download:"original.pdf"}]);state.rows.file_objects[0].resource_id=other;expect((await download(new Request("https://test"),context)).status).toBe(404);expect(state.signed).toHaveLength(1);});
  it("shares only explicitly scoped published files and excludes old versions",async()=>{const actor={kind:"customer" as const,userId:"external",workspaceId:org,companyId:customerA};expect(await publishedCertificationFiles(actor)).toHaveLength(1);expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(0);state.rows.certifications[0].external_organization_id=null;expect(await publishedCertificationFiles(actor)).toHaveLength(0);expect(await publishedCertificationFiles({...actor,companyId:customerB})).toHaveLength(0);state.rows.file_objects[0].is_current=false;state.rows.certifications[0].external_organization_id=customerA;expect(await publishedCertificationFiles(actor)).toHaveLength(0);});
- it("rejects publishing a certification without an explicit customer recipient",async()=>{state.rows.certifications[0].external_organization_id=null;const response=await POST(request({command:"publish",id,revision:1}));expect(response.status).toBe(400);expect(await response.json()).toMatchObject({error:"Asigna un cliente destinatario antes de publicar la certificación."});expect(state.commands).toHaveLength(0);});
+ it("rejects publishing a certification without an explicit customer recipient",async()=>{state.rows.certifications[0].external_organization_id=null;const response=await POST(request({command:"publish",id,revision:1}));expect(response.status).toBe(400);expect(await response.json()).toMatchObject({error:"Selecciona un cliente destinatario antes de publicar"});expect(state.commands).toHaveLength(0);});
  it("excludes private, retired and expired certifications from the portal",async()=>{const actor={kind:"customer" as const,userId:"external",workspaceId:org,companyId:customerA};for(const change of[{customer_visible:false},{active:false},{valid_until:"2020-01-02"}]){const original={...state.rows.certifications[0]};Object.assign(state.rows.certifications[0],change);expect(await publishedCertificationFiles(actor)).toHaveLength(0);state.rows.certifications[0]=original;}});
  it("denies suppliers at the portal file route before issuing a URL",async()=>{state.session={...state.session,userType:"Proveedor",externalParty:{kind:"supplier",companyId:customerA}};state.rows.profiles[0].user_type="supplier";expect((await portalFile(new Request("https://test"),{params:Promise.resolve({fileId})})).status).toBe(403);expect(state.signed).toHaveLength(0);});
 });
@@ -55,4 +55,23 @@ it("T-CLI-03-01 / T-CLI-03-02: list and signed file follow recipient, withdrawal
   await verify(customerA,false);
   Object.assign(state.rows.certifications[0],{customer_visible:true,valid_until:"2020-01-02"});
   await verify(customerA,false);
+});
+
+it("U01-TRANS-05 rejects a stale global publish even if the browser supplies a customer",async()=>{
+  const certification=state.rows.certifications[0];
+  Object.assign(certification,{external_organization_id:null,customer_visible:false});
+  const before=structuredClone(state.rows);
+  const response=await POST(request({command:"publish",id,revision:1,customerId:customerA}));
+  expect(response.status).toBe(400);
+  expect((await response.json()).error).toBe("Selecciona un cliente destinatario antes de publicar");
+  expect(state.commands).toHaveLength(0);
+  expect(state.rows).toEqual(before);
+});
+it("U01-TRANS-02 saves a recipient through the restricted command and checks the stored company on publish",async()=>{
+  Object.assign(state.rows.certifications[0],{external_organization_id:null,customer_visible:false});
+  expect((await POST(request({...body,revision:1}))).status).toBe(200);
+  expect(state.commands[0]).toMatchObject({p_actor_id:"actor",p_workspace_id:org,p_payload:{id,customerId:customerA,revision:1}});
+  state.rows.certifications[0].external_organization_id=customerB;
+  expect((await POST(request({command:"publish",id,revision:2,customerId:customerA}))).status).toBe(403);
+  expect(state.commands).toHaveLength(1);
 });

@@ -1,9 +1,10 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { PATCH, POST } from "./route";
+import { GET, PATCH, POST } from "./route";
 
 const client = vi.hoisted(() => ({
-  actor: vi.fn(), customer: vi.fn(), upload: vi.fn(), rpc: vi.fn(), remove: vi.fn(),
+  probe: vi.fn(), actor: vi.fn(), customer: vi.fn(), upload: vi.fn(), rpc: vi.fn(), remove: vi.fn(),
 }));
+vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => ({}) }));
 vi.mock("@/lib/customer-portal-server", () => ({ resolveCustomerPortalActor: client.actor }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
@@ -11,7 +12,7 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
     const query = { select: () => query, eq: () => query, maybeSingle: client.customer };
     return query;
   },
-  storage: { from: () => ({ upload: client.upload, remove: client.remove }) }, rpc: client.rpc,
+  storage: { from: () => ({ upload: client.upload, remove: client.remove }) }, rpc: (name: string, args: unknown) => name === "iq_u01_publication_ready_v2" ? client.probe() : client.rpc(name,args),
 }) }));
 function uploadRequest(customer: string) {
   const form = new FormData();
@@ -22,6 +23,7 @@ function uploadRequest(customer: string) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  client.probe.mockResolvedValue({data:true,error:null});
   client.actor.mockResolvedValue({ kind:"administrator", userId:"actor", workspaceId:"workspace" });
   client.customer.mockResolvedValue({ data:{id:"cliente"}, error:null });
   client.upload.mockResolvedValue({ error:null });
@@ -49,6 +51,17 @@ it.each(["publish","withdraw"])("passes the API command %s to the transition RPC
 });
 it("preserves an existing object after a conflicting upload",async()=>{
   client.upload.mockResolvedValue({error:{message:"exists"}});
-  expect((await POST(uploadRequest("cliente"))).status).toBe(400);
+  expect((await POST(uploadRequest("cliente"))).status).toBe(500);
   expect(client.remove).not.toHaveBeenCalled();
+});
+
+it("U01-TRANS-03 blocks catalog, upload and stale transitions before installation", async () => {
+  client.probe.mockResolvedValue({data:null,error:{code:"PGRST202"}});
+  const responses = [await GET(new Request("https://test/documents")), await POST(uploadRequest("cliente")), await PATCH(new Request("https://test/documents",{method:"PATCH"}))];
+  for (const response of responses) {
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({error:"Publicación individual temporalmente no disponible"});
+  }
+  expect(client.rpc).not.toHaveBeenCalled();
+  expect(client.upload).not.toHaveBeenCalled();
 });

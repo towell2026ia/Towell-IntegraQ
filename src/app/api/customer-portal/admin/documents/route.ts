@@ -4,6 +4,8 @@ import { resolveCustomerPortalActor } from "@/lib/customer-portal-server";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
 
+import { requireIndividualPublication, PublicationUnavailable } from "@/lib/customer-portal-contract-server";
+
 export const maxDuration = 60;
 const maxBytes = 25 * 1024 * 1024;
 
@@ -12,6 +14,7 @@ class AdministratorRequired extends Error {}
 async function requirePortalAdministrator() {
   const actor = await resolveCustomerPortalActor(await getAuthenticatedSession());
   if (actor?.kind !== "administrator") throw new AdministratorRequired();
+  await requireIndividualPublication();
   return { id: actor.userId, workspaceId: actor.workspaceId };
 }
 
@@ -23,7 +26,7 @@ export async function GET(request: Request) {
     const customers = await db.from("organizations").select("id,name,code")
       .eq("owning_organization_id", actor.workspaceId).eq("kind", "customer").eq("active", true).order("name");
     if (customers.error) throw customers.error;
-    if (!customerId) return NextResponse.json({ customers: customers.data ?? [], publications: [] }, { headers: { "Cache-Control": "private, no-store" } });
+    if (!customerId) return NextResponse.json({ available: true, customers: customers.data ?? [], publications: [] }, { headers: { "Cache-Control": "private, no-store" } });
     if (!customers.data?.some(customer => customer.id === customerId)) return NextResponse.json({ error: "Cliente no pertenece a esta organización." }, { status: 404 });
     const result = await db.from("customer_portal_document_publications")
       .select("id,customer_id,display_name,description,version,status,file_id,created_at,published_at,withdrawn_at,withdrawal_reason,created_by,published_by,withdrawn_by,revision")
@@ -38,14 +41,14 @@ export async function GET(request: Request) {
     const actorIds = [...new Set(publicationRows.flatMap(row => [row.created_by, row.published_by, row.withdrawn_by].filter((id): id is string => typeof id === "string")))];
     const actorRows = actorIds.length ? await db.from("profiles").select("id,full_name").in("id", actorIds) : { data: [], error: null };
     if (actorRows.error) throw actorRows.error;
-    return NextResponse.json({ customers: customers.data ?? [], publications: publicationRows.map(row => ({ ...row,
+    return NextResponse.json({ available: true, customers: customers.data ?? [], publications: publicationRows.map(row => ({ ...row,
       original_name: files.data?.find(file => file.id === row.file_id)?.original_name,
       size_bytes: files.data?.find(file => file.id === row.file_id)?.size_bytes,
       created_by_name: actorRows.data?.find(profile => profile.id === row.created_by)?.full_name,
       published_by_name: actorRows.data?.find(profile => profile.id === row.published_by)?.full_name,
       withdrawn_by_name: actorRows.data?.find(profile => profile.id === row.withdrawn_by)?.full_name })) }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
-    return NextResponse.json({ error: safeMessage(error) }, { status: 403 });
+    return failure(error);
   }
 }
 
@@ -90,7 +93,7 @@ export async function POST(request: Request) {
       const cleanup = await createAdminClient().storage.from("integraq-private").remove([uploadedPath]);
       if (cleanup.error) console.error("Customer portal upload cleanup required", { path: uploadedPath, reason: cleanup.error.message });
     }
-    return NextResponse.json({ error: safeMessage(error) }, { status: error instanceof AdministratorRequired ? 403 : 400 });
+    return failure(error);
   }
 }
 
@@ -109,12 +112,29 @@ export async function PATCH(request: Request) {
     if (result.error) throw result.error;
     return NextResponse.json({ publication: result.data }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) {
-    return NextResponse.json({ error: safeMessage(error) }, { status: error instanceof AdministratorRequired ? 403 : 400 });
+    return failure(error);
   }
 }
 
-function safeMessage(error: unknown) {
-  if (error instanceof AdministratorRequired) return "Acción exclusiva para administradores del portal.";
-  const message = error instanceof Error ? error.message : "No fue posible completar la operación.";
-  return /CUSTOMER_PORTAL_|permission|not found/i.test(message) ? message : "No fue posible completar la operación del portal.";
+function failure(error: unknown) {
+  let status = 500;
+  let message = "No fue posible completar la operación del portal.";
+  if (error instanceof PublicationUnavailable) {
+    status = 503;
+    message = error.message;
+  } else if (error instanceof AdministratorRequired) {
+    status = 403;
+    message = "Acción exclusiva para administradores del portal.";
+  } else if (typeof error === "object" && error && "message" in error) {
+    switch (error.message) {
+      case "CUSTOMER_PORTAL_REVISION_CONFLICT": status = 409; message = "La publicación cambió. Recarga antes de continuar."; break;
+      case "CUSTOMER_PORTAL_PUBLICATION_NOT_FOUND": status = 404; message = "Publicación no disponible."; break;
+      case "CUSTOMER_PORTAL_ADMIN_REQUIRED":
+      case "CUSTOMER_PORTAL_CUSTOMER_SCOPE": status = 403; message = "Acceso al destinatario denegado."; break;
+      case "CUSTOMER_PORTAL_TRANSITION_INVALID":
+      case "CUSTOMER_PORTAL_VERSION_PARENT_INVALID":
+      case "CUSTOMER_PORTAL_FILE_INVALID": status = 400; message = "Revisa el estado, archivo y versión de la publicación."; break;
+    }
+  }
+  return NextResponse.json({ error: message }, { status, headers: { "Cache-Control": "private, no-store" } });
 }
