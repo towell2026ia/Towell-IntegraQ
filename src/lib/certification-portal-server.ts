@@ -3,7 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { CustomerPortalActor } from "@/lib/customer-portal-server";
 import { certificationToday, certificationVisibleToCustomer, certificationCanPublish, type Certification, type CertificationFile } from "@/lib/customer-certifications";
 import { certificationPages, CertificationError } from "@/lib/customer-certifications-server";
-export async function publishedCertificationFiles(actor: CustomerPortalActor) {
+type Reader = Pick<CustomerPortalActor, "kind" | "workspaceId" | "companyId">;
+export async function publishedCertificationFiles(actor: Reader) {
   const db=createAdminClient();
   const today=certificationToday();
   const rows=await certificationPages<Certification>((f,t)=>db.from("certifications").select("id,name,workspace_id,external_organization_id,active,customer_visible,valid_from,valid_until,published_at,published_by")
@@ -21,7 +22,7 @@ export async function publishedCertificationFiles(actor: CustomerPortalActor) {
   }
   return files;
 }
-export async function publishedCertificationFile(actor:CustomerPortalActor,id:string) {
+export async function publishedCertificationFile(actor:Reader,id:string) {
   const file=(await publishedCertificationFiles(actor)).find(f=>f.id===id);
   if (!file) throw new CertificationError("Documento no disponible.",404);
   return file;

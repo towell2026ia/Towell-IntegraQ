@@ -5,6 +5,7 @@ const state = vi.hoisted(() => ({
   session: null as ActiveSession | null,
   responses: {} as Record<string, Array<{ data: unknown; error: unknown }>>,
   calls: [] as Array<{ table: string; method: string; args: unknown[] }>,
+  linkCompany: null as string | null,
   signedPath: "",
   expiresAt: 0,
   signature: {} as {ttl?:number; options?: unknown},
@@ -13,7 +14,10 @@ const state = vi.hoisted(() => ({
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
-  rpc: async () => ({data:true,error:null}),
+  rpc: (name: string) => name === "iq_customer_portal_access" ? {maybeSingle: async () => ({
+    data: state.linkCompany && {grant_id: documentId, workspace_id: organizationId, customer_id: state.linkCompany, company_name: "Fixture"},
+    error: null,
+  })} : Promise.resolve({data:true,error:null}),
   from(table: string) {
     state.calls.push({ table, method: "from", args: [] });
     const chain: Record<string, unknown> = {};
@@ -26,6 +30,7 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
 }) }));
 
 import { GET } from "./route";
+import { GET as linkFile } from "@/app/api/portal/cliente/documents/[documentId]/file/route";
 
 const customerId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const organizationId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -48,6 +53,36 @@ beforeEach(() => {
   };
   asCustomer();
   state.calls = [];
+});
+
+describe("U01 file access by individual link", () => {
+  const request = () => new Request("https://integraq.test/api/portal/cliente/documents/file", {
+    headers: {Authorization: "Bearer " + "x".repeat(43)},
+  });
+  const params = {params: Promise.resolve({documentId})};
+  it("T-SEG-02-03 checks the grant and records a link actor before signing", async () => {
+    state.session = null;
+    state.linkCompany = customerId;
+    const response = await linkFile(request(), params);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({url: "https://storage.example/signed"});
+    expect(state.calls).toContainEqual(expect.objectContaining({table: "customer_portal_document_events", method:"insert",
+      args: [expect.objectContaining({actor_id:null, portal_link_id:documentId})]}));
+  });
+  it("T-SEG-02-02 denies a different company and never consults internal profiles", async () => {
+    state.linkCompany = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    expect((await linkFile(request(), params)).status).toBe(404);
+    expect(state.signedPath).toBe("");
+    expect(state.calls.some(call => call.table === "profiles")).toBe(false);
+  });
+  it("T-SEG-02-04 refuses withdrawn content, and rechecks a revoked link even with an internal session", async () => {
+    state.linkCompany = customerId;
+    state.responses.customer_portal_document_publications[0].data = {...publication, status:"withdrawn"};
+    expect((await linkFile(request(), params)).status).toBe(404);
+    state.linkCompany = null;
+    expect((await linkFile(request(), params)).status).toBe(403);
+    expect(state.signedPath).toBe("");
+  });
 });
 
 describe("customer portal private file authorization", () => {

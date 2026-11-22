@@ -12,7 +12,9 @@ const scheduler=fs.readFileSync(path.join(path.dirname(domLocal.resolve("schedul
 const compile = file => ts.transpileModule(fs.readFileSync(path.join(root,file),"utf8"),{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}
 }).outputText;
-const modules = {"react":modFile("react","react.production.js"),"react/jsx-runtime":modFile("react","react-jsx-runtime.production.js"),
+const modules = {
+ entry:compile("src/app/portal/cliente/page.tsx"),access:compile("src/components/modules/customer-access-panel.tsx"),
+ "@/lib/customer-portal-link-client":compile("src/lib/customer-portal-link-client.ts"),"react":modFile("react","react.production.js"),"react/jsx-runtime":modFile("react","react-jsx-runtime.production.js"),
  "react-dom":modFile("react-dom","react-dom.production.js"), "react-dom/client":modFile("react-dom","react-dom-client.production.js"),scheduler,stakeholder:compile("src/components/modules/stakeholder-portal-module.tsx"),
  cert:compile("src/components/modules/customer-certifications-panel.tsx"),
  "@/lib/customer-certifications":compile("src/lib/customer-certifications.ts")};
@@ -53,11 +55,16 @@ const modules = {"react":modFile("react","react.production.js"),"react/jsx-runti
    return r.abort();
  });
  await page.goto("https://integraq.test/");
- const mount=()=>page.evaluate(modules=>{
+ const mount=(target=page)=>target.evaluate(modules=>{
   const cache={},company={companyId:"cliente",companyName:"Empresa de prueba"};
   window.a3Loads=0;
   const resolve=name=>{
     if(name==="@/components/workspace-continuity")return {useContinuityState:(_key,value)=>resolve("react").useState(value),useFormDraft:()=>({clear:()=>{}})};
+    if(name==="@/components/modules/stakeholder-portal-module")return resolve("stakeholder");
+    if(name==="qrcode")return {default:{toCanvas:async(canvas,url,options)=>{
+      const image=new Image(); image.src=await window.encodeFixtureQR(url,options); await image.decode();
+      canvas.width=image.width; canvas.height=image.height; canvas.getContext("2d").drawImage(image,0,0);
+    }}};
     if(cache[name])return cache[name].exports;
     if(name==="@/lib/portal-access")return {resolvePortalCompany:()=>company};
     if(name==="@/lib/root-cause-publication")return {loadPublishedCorrectiveActions:async()=>{window.a3Loads++;return [{id:"a3",folio:"A3-LOCAL",title:"A3 autorizado",status:"Activo",progress:20,dueDate:"2026-12-01"}]}};
@@ -68,6 +75,11 @@ const modules = {"react":modFile("react","react.production.js"),"react/jsx-runti
     return mod.exports;
   };
   const React=resolve("react"),Dom=resolve("react-dom/client");
+  if(location.pathname==="/portal/cliente" || location.pathname==="/admin-fixture") {
+    const component=location.pathname==="/portal/cliente"?resolve("entry").default:resolve("access").CustomerAccessPanel;
+    Dom.createRoot(document.querySelector("#root")).render(React.createElement(component,{customerId:"fixture-a",name:"Empresa A"}));
+    return;
+  }
   if(location.hash==="#cert") {
     Dom.createRoot(document.querySelector("#root")).render(React.createElement(resolve("cert").CustomerCertificationsPanel));
     return;
@@ -123,5 +135,56 @@ const modules = {"react":modFile("react","react.production.js"),"react/jsx-runti
  console.log("PASS U01-TRANS-04: documento confirmado para Empresa A, retiro y referencia al original conservada.");
  assert.deepEqual(errors,[]);
  console.log("PASS UI: certification retained with document error; authorized A3 survives document-only retry; one A3 request; no page errors");
+ // All traffic stays in Playwright's fixture. Only locally generated fixture keys are used.
+ const origin="https://integraq.test", keys={A:"a".repeat(43),B:"b".repeat(43)};
+ let qrTarget,issued=false,revoked=false;
+ await page.exposeFunction("encodeFixtureQR",async(url,options)=>{
+   qrTarget=url; return local("qrcode").toDataURL(url,options);
+ });
+ const traffic=async route=>{
+   const req=route.request(),url=new URL(req.url());
+   if(url.origin!==origin) return route.abort();
+   if(["/admin-fixture","/portal/cliente"].includes(url.pathname))
+     return route.fulfill({contentType:"text/html",body:'<div id="root"></div>'});
+   if(url.pathname==="/api/customer-portal/admin/access"){
+     const {action,customerId}=req.postDataJSON(); assert.equal(customerId,"fixture-a");
+     if(action==="issue") issued=true;
+     if(action==="revoke") revoked=true;
+     return route.fulfill({json:issued&&!revoked?{active:true,id:"fixture-grant",key:keys.A}:{active:false}});
+   }
+   if(!url.pathname.startsWith("/api/portal/cliente/")) return route.abort();
+   assert.equal(req.headers().cookie,undefined);
+   assert.ok(!url.href.includes(keys.A) && !url.href.includes(keys.B));
+   const auth=req.headers().authorization;
+   const company=auth==="Bearer "+keys.A&&!revoked?"A":auth==="Bearer "+keys.B?"B":null;
+   if(!company)return route.fulfill({status:403,json:{error:"Enlace no disponible."}});
+   const data=url.pathname.endsWith("/entry")?{companyId:company,companyName:"Empresa "+company}:
+     url.pathname.endsWith("/actions")?{actions:[]}:{documents:[{id:"local",name:"Manual "+company,originalName:"fixture.pdf",version:1,sizeBytes:12}],sectionErrors:{}};
+   return route.fulfill({json:data});
+ };
+ await page.route("**/*",traffic);
+ await page.goto(origin+"/admin-fixture"); await mount();
+ await page.getByRole("button",{name:"Obtener enlace y QR"}).click();
+ await page.getByRole("button",{name:"Emitir enlace y QR"}).click();
+ await page.waitForFunction(()=>document.querySelector("canvas")?.width===240);
+ assert.equal(qrTarget,origin+"/portal/cliente#"+keys.A);
+ const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
+ await mobile.route("**/*",traffic);
+ await mobile.goto(qrTarget); await mount(mobile);
+ await mobile.getByText("Manual A",{exact:true}).waitFor();
+ assert.equal(new URL(mobile.url()).hash,"");
+ const second=await browser.newPage();
+ await second.route("**/*",traffic); await second.goto(origin+"/portal/cliente#"+keys.B); await mount(second);
+ await second.getByText("Manual B",{exact:true}).waitFor();
+ assert.equal(await second.getByText("Manual A",{exact:true}).count(),0);
+ await page.getByRole("button",{name:"Revocar acceso"}).click();
+ await page.getByText("Este cliente no tiene enlace activo.").waitFor();
+ await mobile.getByRole("button",{name:"Actualizar contenido"}).click();
+ await mobile.getByRole("alert").waitFor();
+ assert.equal(await mobile.getByText("Manual A",{exact:true}).count(),0);
+ await mobile.goto(origin+"/portal/cliente"); await mobile.reload(); await mount(mobile);
+ await mobile.getByText("Enlace no disponible.",{exact:true}).waitFor();
+ await mobile.close(); await second.close();
+ console.log("PASS T-SEG-01-01/03 y T-SEG-02-04 UI: emisión explícita, destino QR de A, contextos sin cookies, enlace B, revocación y entrada vacía.");
  }finally{await browser.close()}
 })().catch(e=>{console.error(e.message);process.exitCode=1});

@@ -86,5 +86,38 @@ for (const [id,count] of [[internal,1],[external,0]]) {
  assert.equal((await db.query("select count(*)::int n from storage.objects where name=$1",[key])).rows[0].n,0);
  await assert.rejects(db.query('select * from customer_portal_document_publications'),/permission denied/i);
 }
+await db.exec("reset role; alter table organizations add column name text default 'Fixture'");
+await db.exec(fs.readFileSync("docs/database/proposals/IQ-CUSTOMER-PORTAL-LINKS.sql","utf8"));
+const other = 'bbbbbbbb-aaaa-4aaa-8aaa-bbbbbbbbbbbb';
+await db.query("insert into organizations(id,kind,active,owning_organization_id) values ($1,'customer',true,$2)", [other,workspace]);
+await db.exec("set role service_role");
+async function issue(company, digest) {
+  return (await db.query("insert into customer_portal_links(workspace_id,customer_id,nonce,key_digest,created_by) values ($1,$2,'fixture',$3,$4) returning id",
+    [workspace,company,digest,actor])).rows[0].id;
+}
+const digestA='a'.repeat(64), digestB='b'.repeat(64);
+const grantA=await issue(customer,digestA);
+await issue(other,digestB);
+await assert.rejects(issue(customer,'c'.repeat(64)),/unique/i);
+const check=async(digest,bucket=4)=>(await db.query("select customer_id from iq_customer_portal_access($1,$2)",[digest,bucket])).rows;
+assert.deepEqual(await check(digestA),[{customer_id:customer}]);
+assert.deepEqual(await check(digestB),[{customer_id:other}]);
+for(let i=0;i<20;i++) assert.deepEqual(await check(null,5),[]);
+assert.deepEqual(await check(digestA,5),[]);
+assert.deepEqual(await check('c'.repeat(64)),[]);
+await db.query("update customer_portal_links set revoked_at=now(),revoked_by=$1 where id=$2",[actor,grantA]);
+assert.deepEqual(await check(digestA),[]);
+assert.deepEqual(await check(digestB),[{customer_id:other}]);
+await issue(customer,'c'.repeat(64));
+assert.deepEqual(await check(digestA),[]);
+assert.deepEqual(await check('c'.repeat(64)),[{customer_id:customer}]);
+await db.query("update organizations set active=false where id=$1",[customer]);
+assert.deepEqual(await check('c'.repeat(64)),[]);
+for (const role of ["anon","authenticated"]) {
+  await db.exec("set role "+role);
+  await assert.rejects(check(digestB), /permission denied/i);
+  await assert.rejects(db.query("select * from customer_portal_links"), /permission denied/i);
+}
+console.log("PASS enlaces en memoria: empresas A/B, intentos, revocación, reemplazo, empresa desactivada y privilegios");
 await db.close(); console.log('PASS U01-TRANS-02/04/05 SQL in-memory: proposal installed; draft, publish, revision conflict, withdraw, audit order, retained original, certificate guard, storage and metadata RLS');
 })().catch(e=>{console.error(e.message);process.exitCode=1});

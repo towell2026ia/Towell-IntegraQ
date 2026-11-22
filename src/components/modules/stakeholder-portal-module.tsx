@@ -1,4 +1,5 @@
 "use client";
+import { readCustomerLink } from "@/lib/customer-portal-link-client";
 import { reportStateLabel } from "@/lib/rncp/flow";
 import { PhotoAttachmentPicker } from "@/components/images/photo-attachment-picker";
 import { rncpIdFromSearch } from "@/lib/rncp/link";
@@ -135,7 +136,7 @@ type CustomerPortalDocument = {
   fileHref?: string; managedInCertifications?: boolean;
 };
 
-function CustomerPortal({ company, isAdministrator = false }: { company?: PortalCompany; isAdministrator?: boolean }) {
+export function CustomerPortal({ company, isAdministrator = false, accessKey }: { company?: PortalCompany; isAdministrator?: boolean; accessKey?: string }) {
   const [view, setView] = useState<"documents" | "actions">("documents");
   const [selectedActionId, setSelectedActionId] = useState("");
   const [actions, setActions] = useState<PublishedCorrectiveAction[]>([]);
@@ -148,7 +149,7 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
   const [actionRetry, setActionRetry] = useState(0);
   useEffect(() => {
     let active = true;
-    void fetch("/api/customer-portal/documents", { cache: "no-store" }).then(async response => {
+    void (accessKey ? readCustomerLink("/documents", accessKey) : fetch("/api/customer-portal/documents", { cache: "no-store" })).then(async response => {
       const body = await response.json() as { documents?: CustomerPortalDocument[]; sectionErrors?: { documents?: string; certifications?: string }; error?: string };
       if (!response.ok || !Array.isArray(body.documents)) throw new Error(body.error || "No se pudieron consultar documentos y certificaciones.");
       if (active) {
@@ -159,17 +160,39 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
       if (active) { setDocuments([]); setError(cause instanceof Error ? cause.message : "Documentos y certificaciones no disponibles."); }
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [retry]);
+  }, [retry, accessKey]);
   useEffect(() => {
     if (isAdministrator) return;
     let active = true;
-    void loadPublishedCorrectiveActions().then(rows => {
+    const result: Promise<PublishedCorrectiveAction[]> = accessKey ? readCustomerLink("/actions", accessKey).then(async response => {
+      if (!response.ok) throw new Error();
+      return (await response.json()).actions;
+    }) : loadPublishedCorrectiveActions();
+    void result.then(rows => {
       if (active) { setActions(rows); setActionsError(""); }
     }).catch(() => {
       if (active) { setActions([]); setActionsError("Mis análisis A3: no se pudieron consultar los análisis autorizados."); }
     }).finally(() => { if (active) setActionsLoading(false); });
     return () => { active = false; };
-  }, [isAdministrator, actionRetry]);
+  }, [isAdministrator, actionRetry, accessKey]);
+  async function openFile(item: CustomerPortalDocument, download: boolean) {
+    if (!accessKey) return;
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) { setError("Permite abrir una pestaña para consultar el archivo."); return; }
+    tab.opener = null;
+    try {
+      const id = encodeURIComponent(item.id);
+      const path = item.managedInCertifications ? "/certifications/" + id : "/documents/" + id + "/file";
+      const response = await readCustomerLink(path + (download ? "?disposition=download" : ""), accessKey);
+      if (!response.ok) throw new Error();
+      const { url } = await response.json();
+      if (typeof url !== "string" || new URL(url).protocol !== "https:") throw new Error();
+      tab.location.replace(url);
+    } catch {
+      tab.close();
+      setError("El servidor no autorizó la apertura del archivo o el archivo no está disponible.");
+    }
+  }
   const selectedAction = actions.find((action) => action.id === selectedActionId);
   return (
     <>
@@ -178,6 +201,7 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
         <button className={view === "documents" ? "active" : ""} type="button" onClick={() => setView("documents")}>Documentos</button>
         <button className={view === "actions" ? "active" : ""} type="button" onClick={() => setView("actions")}>Mis análisis A3</button>
       </div>
+      {accessKey && <button type="button" onClick={() => { setRetry(n => n + 1); setActionRetry(n => n + 1); }}>Actualizar contenido</button>}
       {view === "documents" ? <section className="portal-record-list">
         {isAdministrator ? <CustomerPortalAdmin /> : null}
         <header><div><h3>{isAdministrator ? "Certificaciones publicadas" : "Documentos y certificaciones"}</h3></div><FileText size={19} /></header>
@@ -185,7 +209,7 @@ function CustomerPortal({ company, isAdministrator = false }: { company?: Portal
         {error ? <div role="alert">{error} <button type="button" onClick={() => { setLoading(true); setRetry(value => value + 1); }}>Reintentar</button></div> : null}
         {!loading ? documents.map(document => <article key={document.id}>
           <div><code>Versión {document.version}</code><h4>{document.name}</h4>{document.description ? <p>{document.description}</p> : null}<small>{document.originalName} · {formatFileSize(document.sizeBytes)}</small></div>
-          <div className={portalStyles.documentLinks}><a className="button button-secondary" href={document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`${document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`}?disposition=download`}>Descargar</a>
+          <div className={portalStyles.documentLinks}>{accessKey ? <><button type="button" className="button button-secondary" onClick={() => void openFile(document, false)}>Ver documento</button><button type="button" className="button button-secondary" onClick={() => void openFile(document, true)}>Descargar</button></> : <><a className="button button-secondary" href={document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`} target="_blank" rel="noreferrer">Ver documento</a><a className="button button-secondary" href={`${document.fileHref ?? `/api/customer-portal/documents/${document.id}/file`}?disposition=download`}>Descargar</a></>}
           </div>
         </article>) : null}
         {!loading && !error && documents.length === 0 ? <PortalEmpty message={isAdministrator ? "No hay documentos vigentes en el catálogo." : "No hay documentos publicados y vigentes para clientes."} /> : null}

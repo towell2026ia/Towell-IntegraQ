@@ -24,6 +24,7 @@ import { CustomerClaimsPanel, useClaimsCatalog } from "@/components/modules/cust
 import { claimMetrics, type CustomerClaim } from "@/lib/customer-claims";
 import { useContinuityState, useFormDraft } from "@/components/workspace-continuity";
 import { confirmLeaving } from "@/lib/workspace-continuity";
+import { CustomerAccessPanel } from "@/components/modules/customer-access-panel";
 import { CustomerCertificationsPanel } from "@/components/modules/customer-certifications-panel";
 
 type CustomerView = "customers" | "cases" | "certifications";
@@ -193,13 +194,13 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
               <div><small>Sin A3</small><strong>{claimsDirectory.data?selectedMetrics.withoutA3:"—"}</strong></div>
             </div>
             {!demoMode?<CustomerClaimsPanel key={selected.id} directory={claimsDirectory} session={session} onCustomerCatalog={()=>setView("customers")} customerId={selected.id} onCreateA3={onCreateA3} onOpenA3={onOpenA3}/>:null}
-            <section className="party-detail-section">
-              <div className="section-title-row"><h4>Acceso del cliente</h4><span className="quality-state success">Cuenta aislada</span></div>
+            {administrator && !demoMode ? <CustomerAccessPanel key={selected.id} customerId={selected.id} name={selected.name}/> : <section className="party-detail-section">
+              <div className="section-title-row"><h4>Acceso del cliente</h4><span className="quality-state success">Acceso individual</span></div>
               <div className="account-scope-list">
                 <div><ShieldCheck size={17} /><span><strong>Solo información propia</strong><small>Ningún cliente puede consultar expedientes de otra cuenta.</small></span></div>
                 <div><ClipboardCheck size={17} /><span><strong>Acciones desde Root2Cause</strong><small>Se muestran reclamos, acciones correctivas y planes vinculados.</small></span></div>
               </div>
-            </section>
+            </section>}
           </div> : <div className="party-detail-panel"><p>{demoMode ? "No hay clientes en el catálogo." : "No hay clientes activos registrados en Supabase."}</p></div>}
         </section>
       ) : null}

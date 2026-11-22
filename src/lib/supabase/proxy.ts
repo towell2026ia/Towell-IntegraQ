@@ -5,6 +5,7 @@ import { assertRecoverySupabaseUrl } from "./recovery-guard";
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request });
+  if (request.nextUrl.pathname === "/portal/cliente" || request.nextUrl.pathname.startsWith("/api/portal/cliente/")) return response;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 
