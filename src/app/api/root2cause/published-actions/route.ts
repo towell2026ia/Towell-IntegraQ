@@ -1,3 +1,4 @@
+import { validatePortalEvidenceSelection } from "@/lib/customer-portal-a3-detail";
 import { publishedActions } from "@/lib/customer-portal-actions-reader";
 import { NextResponse } from "next/server";
 
@@ -65,17 +66,26 @@ export async function POST(request: Request) {
   const scope = await internalScope(session);
   if (!scope?.administrator || !session) return NextResponse.json({ error: "Sólo un administrador activo puede crear o modificar análisis." }, { status: 403 });
   const { organizationId } = scope;
-  const body = await request.json() as { action?: unknown; publish?: boolean };
+  const body = await request.json() as { action?: unknown; publish?: boolean; portalEvidenceIds?: unknown };
   if (!validAction(body.action)) return NextResponse.json({ error: "El análisis está incompleto o no tiene un cliente real." }, { status: 400 });
   if (body.publish && (!scope.administrator || body.action.source !== "customer")) {
     return NextResponse.json({ error: "Sólo un administrador puede publicar análisis externos." }, { status: 403 });
   }
+  const evidenceIds = body.portalEvidenceIds ?? [];
+  if (!Array.isArray(evidenceIds) || evidenceIds.some(id => typeof id !== "string" || !uuid.test(id)) || (!body.publish && evidenceIds.length))
+    return NextResponse.json({error:"Selección de evidencias inválida."},{status:400});
   const action = body.action;
   const admin = createAdminClient();
   const current = await admin.from("corrective_actions")
     .select("id,folio,title,problem,severity,area,owner_name,due_date,status,progress,root_cause,source,external_organization_id,organization_id,created_by,deleted_at,quality_case_id")
     .eq("id", action.id).maybeSingle();
   if (current.error) return NextResponse.json({ error: "No fue posible comprobar el análisis existente." }, { status: 500 });
+  if (evidenceIds.length) {
+    if (!action.a3?.evidenceId || !action.relatedPartyId || current.data?.source !== "customer" ||
+        current.data.organization_id !== organizationId || current.data.external_organization_id !== action.relatedPartyId ||
+        !(await validatePortalEvidenceSelection(admin,organizationId,action.relatedPartyId,action.id,action.a3.evidenceId,evidenceIds)))
+      return NextResponse.json({error:"No se verificó el expediente asociado a las evidencias seleccionadas."},{status:409});
+  }
   let previousSnapshot: Record<string, unknown> | null = current.data ?? null;
   if (current.data) {
     const [previousA3, previousPlans] = await Promise.all([
@@ -126,6 +136,7 @@ export async function POST(request: Request) {
     }
   }
   if (!current.data || !action.folio) {
+    if (evidenceIds.length) return NextResponse.json({error:"Guarda el expediente antes de incluir evidencias."},{status:409});
     if (action.folio) return NextResponse.json({ error: "El folio de un análisis nuevo se asigna de forma atómica en servidor." }, { status: 409 });
     const db = await createClient();
     const created = await db.rpc("iq_root2cause_create_action", { p_action: {
@@ -159,7 +170,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No fue posible verificar el contrato ampliado de Root2Cause." }, { status: 503 });
   }
   const hasFlowMetadata = Boolean(externalReferenceOf(action) ||
-    action.a3!.evidenceId || action.a3!.causeItems?.length || action.a3!.plans.some(plan => plan.cause || plan.expectedResult || plan.completionEvidence || plan.effectivenessMethod));
+    evidenceIds.length || action.a3!.evidenceId || action.a3!.causeItems?.length || action.a3!.plans.some(plan => plan.cause || plan.expectedResult || plan.completionEvidence || plan.effectivenessMethod));
   if (!flowSchemaAvailable && hasFlowMetadata) {
     return NextResponse.json({ error: "El expediente requiere la migración ampliada de Root2Cause para conservar su referencia, vínculos y campos verificables. No se modificó." }, { status: 503 });
   }
@@ -184,6 +195,7 @@ export async function POST(request: Request) {
     non_detection_whys: a3.nonDetectionWhys, root_cause: a3.rootCause,
     root_cause_whys: a3.rootCauseWhys, ai_draft: action.aiDraft ?? null,
     ...(flowSchemaAvailable ? { workflow_metadata: { evidenceId: a3.evidenceId,
+      ...(body.publish && evidenceIds.length ? {portalEvidence:{actionId:action.id,customerId:companyId,ids:[...new Set(evidenceIds)]}} : {}),
       descriptiveTitle: a3.descriptiveTitle, brainstormIds: a3.brainstormIds, causeItems: a3.causeItems,
       rootCauseCauseId: a3.rootCauseCauseId } } : {}), updated_by: session.authUserId,
   }, { onConflict: "corrective_action_id" });

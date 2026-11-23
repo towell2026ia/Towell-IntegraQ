@@ -1,4 +1,5 @@
 "use client";
+import { A3PortalPublication } from "./a3-portal-publication";
 import { useContinuityState } from "@/components/workspace-continuity";
 import { confirmLeaving } from "@/lib/workspace-continuity";
 
@@ -273,11 +274,11 @@ export function CorrectiveActionsModule({
     setRegistryView("report");
   };
 
-  const publishSelected = async () => {
+  const publishSelected = async (files: string[] = []) => {
     if (!selected || !isAdministrator(session) || selected.source !== "customer") return;
     setPublishing(true); setPublicationError("");
     try {
-      await publishCorrectiveAction(selected);
+      await publishCorrectiveAction(selected,files);
       onActionsChange(actions.map(action => action.id === selected.id ? { ...action, portalVisible: true } : action));
     } catch (error) { setPublicationError(error instanceof Error ? error.message : "No fue posible publicar el análisis."); }
     finally { setPublishing(false); }
@@ -516,7 +517,11 @@ export function CorrectiveActionsModule({
             >
               <CheckCircle2 size={16} /> Avanzar etapa
             </button>
-            {isAdministrator(session) && selected.source === "customer" ? <button className="button button-secondary" type="button" disabled={publishing || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "")} onClick={() => void (selected.portalVisible ? unpublishSelected() : publishSelected())}>{selected.portalVisible ? "Retirar del portal" : "Autorizar publicación"}</button> : null}
+            {isAdministrator(session) && selected.source === "customer" && session.workspaceMode !== "demo" ?
+              <A3PortalPublication key={selected.id + ":" + selected.portalVisible} action={selected} busy={publishing}
+                onPublish={ids=>void publishSelected(ids)} onWithdraw={()=>void unpublishSelected()}/> :
+              isAdministrator(session) && selected.source === "customer" ? <button className="button button-secondary" type="button" disabled={publishing || !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.relatedPartyId ?? "")} onClick={() => void (selected.portalVisible ? unpublishSelected() : publishSelected())}>{selected.portalVisible ? "Retirar del portal" : "Autorizar publicación"}</button> : null }
+
             {hardDeleteEnabled && hasHardDeletePermission ? <button className="button button-secondary danger" type="button" onClick={() => requestHardDelete(selected)} title="Eliminar definitivamente"><Trash2 size={16} /> Eliminar definitivamente</button> : null}
             {isAdministrator(session) && session.workspaceMode !== "demo" && (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(selected.id) || ["ca-001", "ca-002", "ca-003"].includes(selected.id)) ? <button className="button button-secondary" type="button" onClick={() => { setDeleteCandidateId(selected.id); setDeleteReason(""); setDeleteError(""); }}><Trash2 size={16} /> Borrar</button> : null}
           </A3ActionReport>

@@ -29,7 +29,7 @@ import { CustomerCertificationsPanel } from "@/components/modules/customer-certi
 
 type CustomerView = "customers" | "cases" | "certifications";
 
-export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void }) {
+export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3, onOpenDocuments }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void; onOpenDocuments: (id:string) => void }) {
   const [view, setView] = useContinuityState<CustomerView>("customers:tab","customers");
   const [demoCustomers, setDemoCustomers] = useState(customerQualityCatalog);
   const [query, setQuery] = useContinuityState("customers:query","");
@@ -185,7 +185,7 @@ export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3 }: { a
               <span className="detail-eyebrow"><Users size={14} /> {selected.code}</span>
               <h3>{selected.name}</h3>
               <p>Expediente interno y contenido autorizado para su portal.</p>
-              {administrator && !demoMode ? <div className="customer-detail-actions"><button className="button button-secondary" type="button" onClick={() => setEditOpen(true)}><Pencil size={15} /> Editar cliente</button><button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button></div> : null}
+              {administrator && !demoMode ? <div className="customer-detail-actions"><button className="button button-secondary" type="button" onClick={() => onOpenDocuments(selected.id)}>Administrar documentos</button><button className="button button-secondary" type="button" onClick={() => setEditOpen(true)}><Pencil size={15} /> Editar cliente</button><button className="button button-secondary" type="button" onClick={() => void deactivateCustomer()}>Desactivar cliente</button></div> : null}
             </header>
             <div className="party-detail-facts">
               <div><small>Reclamos totales</small><strong>{claimsDirectory.data?selectedMetrics.received:"—"}</strong></div>

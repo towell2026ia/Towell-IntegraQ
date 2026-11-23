@@ -16,6 +16,7 @@ const modules = {
  entry:compile("src/app/portal/cliente/page.tsx"),access:compile("src/components/modules/customer-access-panel.tsx"),
  "@/lib/customer-portal-link-client":compile("src/lib/customer-portal-link-client.ts"),"react":modFile("react","react.production.js"),"react/jsx-runtime":modFile("react","react-jsx-runtime.production.js"),
  "react-dom":modFile("react-dom","react-dom.production.js"), "react-dom/client":modFile("react-dom","react-dom-client.production.js"),scheduler,stakeholder:compile("src/components/modules/stakeholder-portal-module.tsx"),
+ "./customer-a3-detail":compile("src/components/modules/customer-a3-detail.tsx"),
  cert:compile("src/components/modules/customer-certifications-panel.tsx"),
  "@/lib/customer-certifications":compile("src/lib/customer-certifications.ts")};
 (async()=>{
@@ -27,6 +28,7 @@ const modules = {
  const commands=[];
  let installed=false;
  const publication={id:"manual",file_id:"original",customer_id:"cliente",display_name:"Manual QA",status:"draft",revision:1,version:1,created_at:"2026-01-01",original_name:"manual.pdf"};
+ const sharedPublication={...publication,id:"general",customer_id:null,display_name:"Manual general"};
  const documentActions=[];
  let data={documents:[{id:"cert",name:"Certificación autorizada",originalName:"cert.pdf",version:1,sizeBytes:12,fileHref:"/cert"}],sectionErrors:{documents:"Documentos: contrato no disponible",certifications:null}};
  await page.route("**/*",r=>{
@@ -48,7 +50,9 @@ const modules = {
        publication.status=change.action==="publish"?"published":"withdrawn"; publication.revision++;
        return r.fulfill({json:{publication}});
      }
-     return r.fulfill({json:{available:true,customers:[{id:"cliente",code:"A",name:"Empresa A"}],publications:r.request().url().endsWith("?customerId=cliente")?[publication]:[]}});
+     const params=new URL(r.request().url()).searchParams;
+     const publications=params.get("scope")==="general"?[sharedPublication]:params.get("customerId")==="cliente"?[publication]:[];
+     return r.fulfill({json:{available:true,customers:[{id:"cliente",code:"A",name:"Empresa A"},{id:"cliente-b",code:"COD-B",name:"Segunda empresa"}],publications}});
    }
  if(r.request().url()==="https://integraq.test/") return r.fulfill({contentType:"text/html",body:'<div id="root"></div>'});
    if(r.request().url()==="https://integraq.test/api/customer-portal/documents") return r.fulfill({json:data});
@@ -133,6 +137,21 @@ const modules = {
  await page.getByText(/Versión 1 · Retirado/).waitFor();
  assert.deepEqual(documentActions,["publish","withdraw"]); assert.equal(publication.file_id,"original");
  console.log("PASS U01-TRANS-04: documento confirmado para Empresa A, retiro y referencia al original conservada.");
+ const recipient=page.getByLabel("Cliente destinatario"), search=page.getByRole("searchbox");
+ await search.fill("cod-b");
+ assert.equal(await recipient.locator("option").count(),2);
+ assert.equal(await page.getByText("Manual QA",{exact:true}).count(),0);
+ await recipient.selectOption("cliente-b");
+ await page.getByText("Este cliente aún no tiene documentos cargados.").waitFor();
+ await search.fill("Empresa A");
+ assert.match(await recipient.innerText(),/Empresa A/);assert.doesNotMatch(await recipient.innerText(),/COD-B/);
+ await page.getByRole("button",{name:"Generales para clientes",exact:true}).click();
+ await page.getByRole("button",{name:"Publicar para todos los clientes",exact:true}).waitFor();
+ assert.equal(await recipient.count(),0);assert.equal(await search.count(),0);
+ await page.getByRole("button",{name:"Por cliente",exact:true}).click();
+ await page.getByText("Selecciona un cliente destinatario antes de publicar",{exact:true}).waitFor();
+ assert.deepEqual(documentActions,["publish","withdraw"]);assert.equal(publication.customer_id,"cliente");
+ console.log("PASS selector: búsqueda por código y nombre, cambio de empresa, alcance general explícito y cero cambios de destinatario.");
  assert.deepEqual(errors,[]);
  console.log("PASS UI: certification retained with document error; authorized A3 survives document-only retry; one A3 request; no page errors");
  // All traffic stays in Playwright's fixture. Only locally generated fixture keys are used.
@@ -159,7 +178,9 @@ const modules = {
    const company=auth==="Bearer "+keys.A&&!revoked?"A":auth==="Bearer "+keys.B?"B":null;
    if(!company)return route.fulfill({status:403,json:{error:"Enlace no disponible."}});
    const data=url.pathname.endsWith("/entry")?{companyId:company,companyName:"Empresa "+company}:
-     url.pathname.endsWith("/actions")?{actions:[]}:{documents:[{id:"local",name:"Manual "+company,originalName:"fixture.pdf",version:1,sizeBytes:12}],sectionErrors:{}};
+     url.pathname.endsWith("/actions")?{actions:company==="A"?[{id:"a3-local",folio:"A3-A",title:"Expediente A",status:"Publicado",progress:30,dueDate:"2026-12-01"}]:[]}:
+     url.pathname.endsWith("/actions/a3-local") && company==="A"?{folio:"A3-A",title:"Expediente A",problem:"Problema autorizado",plans:[{id:"plan",description:"Plan para A",status:"Pendiente"}],
+       evidence:[{id:"adjunto",name:"Evidencia autorizada.pdf"}],characterization:[],causeAnalysis:[],detectionAnalysis:[]} :{documents:[{id:"local",name:"Manual "+company,originalName:"fixture.pdf",version:1,sizeBytes:12}],sectionErrors:{}};
    return route.fulfill({json:data});
  };
  await page.route("**/*",traffic);
@@ -169,14 +190,23 @@ const modules = {
  await page.waitForFunction(()=>document.querySelector("canvas")?.width===240);
  assert.equal(qrTarget,origin+"/portal/cliente#"+keys.A);
  const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true});
- await mobile.route("**/*",traffic);
+ await mobile.route("**/*",traffic);mobile.setDefaultTimeout(6500);mobile.on("pageerror",e=>console.error(e.message));
  await mobile.goto(qrTarget); await mount(mobile);
  await mobile.getByText("Manual A",{exact:true}).waitFor();
  assert.equal(new URL(mobile.url()).hash,"");
  const second=await browser.newPage();
- await second.route("**/*",traffic); await second.goto(origin+"/portal/cliente#"+keys.B); await mount(second);
+ second.setDefaultTimeout(6500);await second.route("**/*",traffic); await second.goto(origin+"/portal/cliente#"+keys.B); await mount(second);
  await second.getByText("Manual B",{exact:true}).waitFor();
  assert.equal(await second.getByText("Manual A",{exact:true}).count(),0);
+ await mobile.getByRole("button",{name:"Mis análisis A3"}).click();
+ await mobile.getByRole("button",{name:"Ver información compartida"}).click();
+ await mobile.getByText("Plan para A",{exact:true}).waitFor();
+ await mobile.getByRole("button",{name:"Evidencia autorizada.pdf"}).waitFor();
+ assert.equal(await mobile.locator("input,textarea,select").count(),0);
+ await second.getByRole("button",{name:"Mis análisis A3"}).click();
+ assert.equal(await second.getByText("Expediente A",{exact:true}).count(),0);
+ await mobile.getByRole("button",{name:"Volver a Mis análisis A3"}).click();
+ await mobile.getByRole("button",{name:"Documentos",exact:true}).click();
  await page.getByRole("button",{name:"Revocar acceso"}).click();
  await page.getByText("Este cliente no tiene enlace activo.").waitFor();
  await mobile.getByRole("button",{name:"Actualizar contenido"}).click();

@@ -21,9 +21,9 @@ export async function loadPublishedCorrectiveActions(): Promise<PublishedCorrect
   return body.actions;
 }
 
-export async function publishCorrectiveAction(action: CorrectiveAction): Promise<void> {
+export async function publishCorrectiveAction(action: CorrectiveAction, portalEvidenceIds: string[] = []): Promise<void> {
   const response = await fetch("/api/root2cause/published-actions", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, publish: true }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, publish: true, portalEvidenceIds }),
   });
   await responseBody<{ ok: true }>(response);
 }

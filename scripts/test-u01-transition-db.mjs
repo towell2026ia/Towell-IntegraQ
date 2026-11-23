@@ -119,5 +119,53 @@ for (const role of ["anon","authenticated"]) {
   await assert.rejects(db.query("select * from customer_portal_links"), /permission denied/i);
 }
 console.log("PASS enlaces en memoria: empresas A/B, intentos, revocación, reemplazo, empresa desactivada y privilegios");
+await db.exec("reset role");
+await db.exec(fs.readFileSync("docs/database/proposals/IQ-CUSTOMER-PORTAL-GENERAL-DOCUMENTS.sql","utf8"));
+assert.deepEqual((await db.query("select publication_scope,customer_id,file_id from customer_portal_document_publications where id=$1",[pub.id])).rows,
+  [{publication_scope:"individual",customer_id:customer,file_id:pub.file_id}]);
+await db.exec("set role service_role");
+const generalPath="customer-portal/"+workspace+"/general/00000000-0000-4000-8000-000000000001.pdf";
+async function recordShared(scope,dest) {
+  return (await db.query("select iq_customer_portal_document_record_scoped($1,$2,$3,$4,$5,'publicable.pdf','Manual',null,12,$6,'application/pdf',null) as doc",
+    [scope,actor,workspace,dest,generalPath,"a".repeat(64)])).rows[0].doc;
+}
+await assert.rejects(recordShared(null,null),/CUSTOMER_SCOPE/);
+await assert.rejects(recordShared("individual",null),/CUSTOMER_SCOPE/);
+await assert.rejects(recordShared("general",other),/CUSTOMER_SCOPE/);
+const shared=await recordShared("general",null);
+assert.equal(shared.status,"draft"); assert.equal(shared.publication_scope,"general");
+const command=(scope,op,revision)=>db.query("select iq_customer_portal_document_transition_scoped($1,$2,$3,$4,$5,'QA',$6) as doc",
+  [scope,actor,workspace,shared.id,op,revision]);
+await assert.rejects(command("individual","publish",1),/NOT_FOUND/);
+await command("general","publish",1);
+assert.equal((await db.query("select count(*)::int n from file_objects where id=$1 and external_organization_id is null and resource_id=$2",[shared.file_id,shared.id])).rows[0].n,1);
+await command("general","withdraw",2);
+assert.equal((await db.query("select file_id from customer_portal_document_publications where id=$1 and status='withdrawn'",[shared.id])).rows[0].file_id,shared.file_id);
+assert.deepEqual((await db.query("select action from customer_portal_document_events where publication_id=$1 order by id",[shared.id])).rows.map(r=>r.action),["draft_created","published","withdrawn"]);
+console.log("PASS SQL documental: migración sobre datos individuales, alcance explícito, borrador, publicación, retiro y archivo único.");
+// Reuse the existing A3 creation function against an isolated minimal schema.
+await db.exec(`reset role; create type corrective_action_source as enum ('internal','customer','sgc');
+create type corrective_action_severity as enum ('medium');
+create type action_item_status as enum ('pending');
+create function has_module_permission(text,text) returns boolean language sql as $$ select true $$;
+create function has_process_access(text) returns boolean language sql as $$ select true $$;
+create table quality_cases(id uuid,kind text,external_organization_id uuid);
+create table corrective_actions(id uuid primary key,folio text,title text,problem text,source corrective_action_source,
+ severity corrective_action_severity,process_id text,area text,owner_name text,quality_case_id uuid,external_organization_id uuid,
+ due_date date,status text,progress int,root_cause text,portal_visible boolean,organization_id uuid,created_by uuid);
+create table corrective_action_a3(corrective_action_id uuid primary key,event_type text,severity_justification text,five_w_two_h jsonb,
+ brainstorm jsonb,ishikawa jsonb,non_detection_cause text,non_detection_whys jsonb,root_cause text,root_cause_whys jsonb,ai_draft jsonb,updated_by uuid);
+create table corrective_action_plans(id uuid primary key,corrective_action_id uuid,description text,owner_name text,due_date date,status action_item_status);
+alter table audit_log alter column resource_id type text;`);
+await db.exec(fs.readFileSync("docs/database/proposals/IQ-ROOT2CAUSE-20-FLOW.sql","utf8"));
+await db.query("select set_config('test.user_id',$1,false)",[actor]);
+const caseId="00000000-0000-4000-8000-000000000081", planId="00000000-0000-4000-8000-000000000082";
+const caseInput={id:caseId,source:"customer",relatedPartyId:other,severity:"medium",area:"Prueba",owner:"QA",dueDate:"2026-12-01",
+ problem:"Caso local reproducible de prueba",a3:{plans:[{id:planId,description:"Verificar",owner:"QA",dueDate:"2026-12-01",cause:"Causa",
+ expectedResult:"Resultado",completionEvidence:"Registro",effectivenessMethod:"Revisión"}]}};
+await db.query("select iq_root2cause_create_action($1::jsonb)",[JSON.stringify(caseInput)]);
+const storedCase=await db.query("select a.external_organization_id,a.portal_visible,p.id plan from corrective_actions a join corrective_action_plans p on p.corrective_action_id=a.id where a.id=$1",[caseId]);
+assert.deepEqual(storedCase.rows,[{external_organization_id:other,portal_visible:false,plan:planId}]);
+console.log("PASS SQL A3: creación y relectura del expediente y su plan, UUID de cliente conservado, borrador privado.");
 await db.close(); console.log('PASS U01-TRANS-02/04/05 SQL in-memory: proposal installed; draft, publish, revision conflict, withdraw, audit order, retained original, certificate guard, storage and metadata RLS');
 })().catch(e=>{console.error(e.message);process.exitCode=1});
