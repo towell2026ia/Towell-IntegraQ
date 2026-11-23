@@ -28,6 +28,7 @@ describe("Root2Cause P0-04 action plan", () => {
   it("T04.2 appends an immediately editable blank action and exposes the add control by the heading", () => {
     const added = appendBlankActionPlan([manualPlan], "b30c4932-faf4-4d14-b90d-3cbe093f28ad");
     expect(added).toHaveLength(2);
+    expect(appendBlankActionPlan(added, added[1].id)).toBe(added);
     expect(added[1]).toMatchObject({ description: "", owner: "", dueDate: "", status: "pending" });
     const html = renderToStaticMarkup(createElement(PlansStage, {
       draft: { origin: "internal", rootCause: "Causa raíz", causeItems: [{ id: "cause-existing", text: "Causa del Ishikawa", category: "method" }], ishikawa: { workforce: [], machinery: [], method: ["Causa del Ishikawa"], material: [], environment: [], measurement: [] }, plans: [manualPlan] } as never,

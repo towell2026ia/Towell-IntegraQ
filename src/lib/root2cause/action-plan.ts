@@ -12,7 +12,7 @@ export function removeActionPlan(plans: A3ActionPlanItem[], id: string): A3Actio
 }
 
 export function appendBlankActionPlan(plans: A3ActionPlanItem[], id: string): A3ActionPlanItem[] {
-  return [...plans, createBlankActionPlan(id)];
+  return plans.some(plan => plan.id === id) ? plans : [...plans, createBlankActionPlan(id)];
 }
 
 export function isActionPlanReady(plan: A3ActionPlanItem, responsibleIds: ReadonlySet<string>): boolean {

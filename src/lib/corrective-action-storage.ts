@@ -25,6 +25,8 @@ export function mapStoredAction(row: Record<string, unknown>): CorrectiveAction 
     rootCauseWhys: (a3Row.root_cause_whys ?? []) as string[],
     plans: plans.map(plan => ({ id: String(plan.id), description: String(plan.description),
       owner: String(plan.owner_name ?? ""), dueDate: String(plan.due_date),
+      ownerUserId: typeof plan.owner_id === "string" ? plan.owner_id : undefined,
+      causeCategory: plan.cause_category as A3Analysis["plans"][number]["causeCategory"] ?? undefined,
       cause: typeof plan.cause_text === "string" ? plan.cause_text : undefined,
       causeId: typeof plan.cause_reference_id === "string" ? plan.cause_reference_id : undefined,
       expectedResult: typeof plan.expected_result === "string" ? plan.expected_result : undefined,

@@ -71,6 +71,19 @@ export async function POST(request: Request) {
       .eq("id", body.id).eq("organization_id", current.organizationId).maybeSingle();
     const isRetryableFinalization = stored.data?.status === "finalized" && stored.data.finalized_action_id === body.id;
     if (stored.error || !stored.data || (stored.data.status !== "draft" && !isRetryableFinalization) || !canSeeDraft(current.session, stored.data as Record<string, unknown>)) return NextResponse.json({ error: "No se pudo comprobar el borrador autorizado." }, { status: 404, headers: noStore });
+    const finalize = async () => {
+      const finalized = await db.rpc("iq_root2cause_finalize_plan", { p_draft_id: body.id, p_expected_revision: body.expectedRevision });
+      if (finalized.error) {
+        const missing = finalized.error?.code === "PGRST202" || /iq_root2cause_finalize_plan/i.test(finalized.error?.message ?? "");
+        const conflict = /CONCURRENT|REVISION/i.test(finalized.error?.message ?? "");
+        return NextResponse.json({ error: missing ? "Finalizar análisis requiere instalar el SQL de persistencia Root2Cause; el borrador se conservó." : conflict ? "El borrador cambió en otra sesión. Recárgalo antes de finalizar." : "No se finalizó el borrador; su contenido permanece guardado." }, { status: missing ? 503 : conflict ? 409 : 422, headers: noStore });
+      }
+      if (finalized.data?.id !== body.id || typeof finalized.data?.folio !== "string" || !/^AC-(?:\d{4}-)?\d+$/.test(finalized.data.folio)) {
+        return NextResponse.json({ error: "El servidor no confirmó la identidad y el folio AC. Reintenta desde el mismo borrador." }, { status: 502, headers: noStore });
+      }
+      return NextResponse.json(finalized.data, { headers: noStore });
+    };
+    if (isRetryableFinalization) return finalize();
     type FinalizePlan = { id?: unknown; ownerUserId?: unknown; causeId?: unknown; causeCategory?: unknown; cause?: unknown };
     type FinalizeCause = { id?: unknown; text?: unknown; category?: unknown };
     const storedPayload = stored.data.payload as { draft?: { plans?: FinalizePlan[]; causeItems?: FinalizeCause[] } } | null;
@@ -105,23 +118,7 @@ export async function POST(request: Request) {
       const administrators = new Set((responsibleProfiles.data ?? []).filter(profile => profile.user_type === "administrator").map(profile => profile.id));
       if (responsibleIds.some(id => !assigned.has(id) && !administrators.has(id))) return NextResponse.json({ error: "Un responsable ya no tiene acceso al proceso del análisis." }, { status: 403, headers: noStore });
     }
-    const finalized = await db.rpc("iq_root2cause_finalize_draft", { p_draft_id: body.id, p_expected_revision: body.expectedRevision });
-    if (finalized.error || !finalized.data || typeof finalized.data.folio !== "string") {
-      const missing = finalized.error?.code === "PGRST202" || /iq_root2cause_finalize_draft/i.test(finalized.error?.message ?? "");
-      const conflict = /CONCURRENT|REVISION/i.test(finalized.error?.message ?? "");
-      return NextResponse.json({ error: missing ? "Finalizar análisis requiere instalar el SQL de persistencia Root2Cause; el borrador se conservó." : conflict ? "El borrador cambió en otra sesión. Recárgalo antes de finalizar." : "No se finalizó el borrador; su contenido permanece guardado." }, { status: missing ? 503 : conflict ? 409 : 422, headers: noStore });
-    }
-    const names = new Map((responsibleProfiles.data ?? []).map(profile => [profile.id, ""]));
-    const rows = await admin.from("profiles").select("id,full_name").in("id", responsibleIds).eq("organization_id", current.organizationId);
-    if (rows.error) return NextResponse.json({ error: "El A3 quedó finalizado, pero no se pudieron verificar los nombres de responsables. Reintenta la vinculación desde el mismo borrador." }, { status: 503, headers: noStore });
-    for (const profile of rows.data ?? []) names.set(profile.id, profile.full_name);
-    for (const plan of plans) {
-      const ownerUserId = plan.ownerUserId as string;
-      const linked = await admin.from("corrective_action_plans").update({ owner_id: ownerUserId, owner_name: names.get(ownerUserId) })
-        .eq("id", plan.id as string).eq("corrective_action_id", body.id).select("id").maybeSingle();
-      if (linked.error || !linked.data) return NextResponse.json({ error: "El A3 quedó finalizado, pero una acción no pudo vincularse a su responsable. El reintento seguro está disponible." }, { status: 503, headers: noStore });
-    }
-    return NextResponse.json(finalized.data, { headers: noStore });
+    return finalize();
   }
 
   const id = body.id, expectedRevision = body.revision, currentStep = body.currentStep, payload = body.payload;

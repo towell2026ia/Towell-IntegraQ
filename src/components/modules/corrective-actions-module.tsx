@@ -145,7 +145,7 @@ export function CorrectiveActionsModule({
     return rootCauseActions.filter((action) => {
       const matchesQuery =
         !normalizedQuery ||
-        [action.folio, action.title, action.area, action.owner].some((value) =>
+        [action.folio, action.a3?.descriptiveTitle ?? action.title, action.area, action.owner].some((value) =>
           value.toLocaleLowerCase("es").includes(normalizedQuery),
         );
       const matchesStatus =
@@ -255,13 +255,15 @@ export function CorrectiveActionsModule({
       rootCause: values.a3.rootCause,
       ownerId: session.authUserId,
       participantUserIds: [session.authUserId ?? session.userId],
+      organizationId: session.organizationId,
+      externalReference: values.externalClaimReference,
       relatedPartyId: values.relatedPartyId,
       qualityCaseId: values.qualityCaseId,
       portalVisible: false,
     };
 
     const persisted = action;
-    onActionsChange([persisted, ...actions]);
+    onActionsChange([persisted, ...actions.filter(item => item.id !== persisted.id)]);
     setSelectedId(action.id);
     setListScope(
       action.source === "customer"
@@ -479,7 +481,7 @@ export function CorrectiveActionsModule({
                         : getCorrectiveActionLabel(action.status)}
                     </span>
                   </div>
-                  <strong>{action.title}</strong>
+                  <strong>{action.a3?.descriptiveTitle || action.title}</strong>
                   <div className="record-meta">
                     <span>{action.area}</span>
                     <span>{action.owner}</span>

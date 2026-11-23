@@ -18,6 +18,8 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: () =>
 } }) }));
 
 import { GET } from "./route";
+import { mapStoredAction } from "@/lib/corrective-action-storage";
+import { matchesCorrectiveListScope } from "@/lib/corrective-action-list";
 
 const org = "org-a";
 const row = (id: string, process_id: string | null, organization_id = org) => ({ id, process_id, organization_id });
@@ -60,4 +62,21 @@ describe("Root2Cause internal consultation", () => {
     state.pages = [{ data: null, error: { message: "denied" } }];
     expect((await GET()).status).toBe(500);
   });
+});
+
+it("T-RCA-01-01 / 02 reloads the persisted AC in its own category and process exactly once", async () => {
+  state.session = { ...state.session!, userType: "Usuario interno", assignedProcessIds: ["P-13"],
+    assignedModuleIds: ["corrective-actions"], moduleActionPermissions: [{moduleId: "corrective-actions", action: "view"}] };
+  const action = { ...row("case", "P-13"), folio: "AC-000071", source: "customer", quality_case_id: "claim",
+    external_organization_id: "client", external_reference: "REF-47", corrective_action_a3: { workflow_metadata: {descriptiveTitle: "Análisis QA"} },
+    corrective_action_plans: [{id:"plan", description:"Medir", owner_id:"responsible", owner_name:"Operador", cause_category:"method", due_date:"2026-12-03"}] };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    state.pages = [{ data: [action, {...action, id:"hidden", process_id:"P-99"}, {...action, id:"retired", deleted_at:"2026-11-01"}], error:null }];
+    const response = await GET();
+    const actions = (await response.json()).actions.map(mapStoredAction) as ReturnType<typeof mapStoredAction>[];
+    expect(actions.filter(item => matchesCorrectiveListScope(item,"customer"))).toHaveLength(1);
+    expect(actions.filter(item => matchesCorrectiveListScope(item,"internal"))).toHaveLength(0);
+    expect(actions).toMatchObject([{id:"case", folio:"AC-000071", relatedPartyId:"client", qualityCaseId:"claim",
+      externalReference:"REF-47", a3:{descriptiveTitle:"Análisis QA", plans:[{id:"plan",ownerUserId:"responsible",causeCategory:"method"}]}}]);
+  }
 });

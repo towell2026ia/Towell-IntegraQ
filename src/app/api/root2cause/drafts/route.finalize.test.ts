@@ -57,11 +57,11 @@ beforeEach(() => {
   mock.rpc.mockReset().mockResolvedValue({ data: { id: draftId, folio: "AC-000001" }, error: null });
 });
 
-it("links the selected active internal profile to the persisted action after finalization", async () => {
+it("uses the atomic plan RPC for the selected active profile", async () => {
   const response = await POST(finalizeRequest());
   expect(response.status).toBe(200);
-  expect(mock.rpc).toHaveBeenCalledWith("iq_root2cause_finalize_draft", { p_draft_id: draftId, p_expected_revision: 2 });
-  expect(mock.updates).toContainEqual({ table: "corrective_action_plans", values: { owner_id: responsibleId, owner_name: "Responsable real" } });
+  expect(mock.rpc).toHaveBeenCalledWith("iq_root2cause_finalize_plan", { p_draft_id: draftId, p_expected_revision: 2 });
+  expect(mock.updates).toHaveLength(0);
 });
 
 it("rejects a plan M that does not match its actual Ishikawa cause before finalizing", async () => {
@@ -72,10 +72,17 @@ it("rejects a plan M that does not match its actual Ishikawa cause before finali
   expect(mock.updates).toHaveLength(0);
 });
 
-it("can safely retry owner linking after a finalized RPC response was lost", async () => {
+it("returns the original result after a finalized RPC response was lost", async () => {
   mock.draftStatus = "finalized";
   mock.rpc.mockResolvedValue({ data: { id: draftId, folio: "AC-000001", replayed: true }, error: null });
   const response = await POST(finalizeRequest());
   expect(response.status).toBe(200);
-  expect(mock.updates).toContainEqual({ table: "corrective_action_plans", values: { owner_id: responsibleId, owner_name: "Responsable real" } });
+  expect(mock.updates).toHaveLength(0);
+});
+
+it("requires the same expediente and a server-issued AC before showing success", async () => {
+  for (const data of [{ id: draftId, folio: draftId }, { id: planId, folio: "AC-000001" }]) {
+    mock.rpc.mockResolvedValue({ data, error: null });
+    expect((await POST(finalizeRequest())).status).toBe(502);
+  }
 });

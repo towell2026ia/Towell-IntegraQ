@@ -144,7 +144,7 @@ function createInitialDraft(claim?: CustomerClaim): A3Draft {
   return {
     evidenceId: crypto.randomUUID(),
     reviewedSteps: [],
-    externalClaimReference: "",
+    externalClaimReference: claim?.external_reference ?? "",
     brainstormIds: [],
     causeItems: [],
     origin: claim ? "customer" : "internal",
@@ -173,12 +173,13 @@ function createInitialDraft(claim?: CustomerClaim): A3Draft {
 
 export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClaim, onCustomerCatalog }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void }) {
   const storageKey = initialClaim ? `${draftStorageKey}.claim.${initialClaim.id}` : draftStorageKey;
-  const persistence=useScopedDraft<{step:number;draft:A3Draft;aiDraft?:AiRootCauseDraft;newIdea?:string;causeInputs?:Record<IshikawaKey,string>}>(storageKey);
+  const persistence=useScopedDraft<{revision?:number; confirmedHash?:string; step:number;draft:A3Draft;aiDraft?:AiRootCauseDraft;newIdea?:string;causeInputs?:Record<IshikawaKey,string>}>(storageKey);
   const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
   const [step, setStep] = useContinuityState(`${storageKey}:step`,0);
   const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft(initialClaim));
   const [draftId, setDraftId] = useState<string>();
   const [draftRevision, setDraftRevision] = useState(0);
+  const confirmedHash = useRef<string | undefined>(undefined);
   const [drafts, setDrafts] = useState<Omit<RootCauseStoredDraft, "payload">[]>([]);
   const [draftListError, setDraftListError] = useState("");
   const [draftSaved, setDraftSaved] = useState(false);
@@ -249,6 +250,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       const saved = result.draft;
       preferServerDraft.current = true;
       setLoaded(false);
+      confirmedHash.current = undefined;
       setDraftId(saved.id); setDraftRevision(saved.revision); setDraftSaved(true);
       setDraft(normalizeDraft(saved.payload.draft as unknown as A3Draft));
       setStep(Math.min(Math.max(saved.currentStep, 0), stepLabels.length - 1));
@@ -259,7 +261,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     finally { setSaving(false); }
   };
 
-  const persistDraft = async (targetStep = step) => {
+  const persistDraft = async (targetStep = step, forFinalization = false) => {
     const id = draftId ?? draft.evidenceId ?? crypto.randomUUID();
     const savedDraft = { ...draft, evidenceId: id };
     if (session.workspaceMode === "demo") {
@@ -267,10 +269,19 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       persistence.dirty(true); setDraft(savedDraft); setDraftId(id); setDraftSaved(true);
       return { id, revision: 0 };
     }
-    const result = await saveRootCauseDraft({ id, revision: draftRevision, currentStep: targetStep,
-      payload: { step: targetStep, draft: savedDraft as unknown as Record<string, unknown>, ...(aiDraft ? { aiDraft } : {}), newIdea, causeInputs } });
+    const payload = { step: targetStep, draft: savedDraft as unknown as Record<string, unknown>, ...(aiDraft ? { aiDraft } : {}), newIdea, causeInputs };
+    // JSONB and the browser may return object keys in different orders after reloading.
+    const serialized = JSON.stringify(payload, (_, value) => value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
+    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    if (forFinalization && draftRevision > 0 && confirmedHash.current === hash) {
+      return { id, revision: draftRevision };
+    }
+    const result = await saveRootCauseDraft({ id, revision: draftRevision, currentStep: targetStep, payload });
+    confirmedHash.current = hash;
     setDraft(savedDraft); setDraftId(result.id); setDraftRevision(result.revision); setDraftSaved(true);
-    persistence.write({ step: targetStep, draft: savedDraft, ...(aiDraft ? { aiDraft } : {}), newIdea, causeInputs });
+    persistence.write({ ...payload, draft: savedDraft, revision: result.revision, confirmedHash: hash });
     persistence.dirty(true); await refreshSavedDrafts();
     return { id: result.id, revision: result.revision };
   };
@@ -294,7 +305,12 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       if (saved) {
         try {
           const parsed = saved;
-          if (parsed.draft) setDraft(normalizeDraft(parsed.draft));
+          if (parsed.draft) {
+            setDraft(normalizeDraft(parsed.draft));
+            setDraftId(parsed.draft.evidenceId);
+            setDraftRevision(parsed.revision ?? 0);
+            confirmedHash.current = parsed.confirmedHash;
+          }
           if(parsed.newIdea)setNewIdea(parsed.newIdea);
           if(parsed.causeInputs)setCauseInputs(parsed.causeInputs);
           if (parsed.aiDraft) setAiDraft(parsed.aiDraft);
@@ -312,9 +328,9 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   useEffect(() => {
     if (loaded) {
       const hasText=JSON.stringify({...draft,evidenceId:undefined})!==JSON.stringify({...createInitialDraft(initialClaim),evidenceId:undefined})||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
-      if(hasText){persistence.write({ step, draft, ...(aiDraft?{aiDraft}:{}),newIdea,causeInputs });persistence.dirty(true);}
+      if(hasText){persistence.write({ step, draft, revision: draftRevision, confirmedHash: confirmedHash.current, ...(aiDraft?{aiDraft}:{}),newIdea,causeInputs });persistence.dirty(true);}
     }
-  }, [aiDraft, draft, loaded, step, storageKey, newIdea, causeInputs, initialClaim,persistence]);
+  }, [aiDraft, draft, draftRevision, loaded, step, storageKey, newIdea, causeInputs, initialClaim,persistence]);
 
 
   useEffect(()=>()=>persistence.dirty(false),[persistence]);
@@ -410,7 +426,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     const source = getCorrectiveSource(draft.origin);
     setSaving(true); setSaveError("");
     try {
-      const persisted = await persistDraft();
+      const persisted = await persistDraft(step, true);
       await onComplete({
       draftId: persisted.id,
       draftRevision: persisted.revision,
