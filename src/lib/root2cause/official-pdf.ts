@@ -38,9 +38,14 @@ export function buildRootCauseOfficialPdf(input: RootCausePdfInput) {
     pdf.text(label, margin, y); y += 6; pdf.setDrawColor(130); pdf.line(margin, y, margin + width, y); y += 5;
   };
   const field = (label: string, value: unknown) => {
+    pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(30);
     const lines = pdf.splitTextToSize(`${label}: ${show(value)}`, width - 2) as string[];
-    ensure(lines.length * 4.5 + 2); pdf.setFont("helvetica", "normal"); pdf.setFontSize(9); pdf.setTextColor(30);
-    pdf.text(lines, margin, y); y += lines.length * 4.5 + 2;
+    for (const line of lines) {
+      ensure(4.5);
+      pdf.text(line, margin, y);
+      y += 4.5;
+    }
+    y += 2;
   };
   const list = (label: string, values: unknown[]) => {
     header(label);

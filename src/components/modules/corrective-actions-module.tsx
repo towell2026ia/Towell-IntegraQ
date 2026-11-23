@@ -62,6 +62,7 @@ interface CorrectiveActionsModuleProps {
   claimSeed?: CustomerClaim;
   onClaimSeedClear?: () => void;
   onNavigateCustomers?: () => void;
+  onNavigateDocuments?: () => void;
   actions: CorrectiveAction[];
   focusId?: string;
   onActionsChange: (actions: CorrectiveAction[]) => void;
@@ -88,13 +89,14 @@ export function CorrectiveActionsModule({
   claimSeed,
   onClaimSeedClear,
   onNavigateCustomers,
+  onNavigateDocuments,
 }: CorrectiveActionsModuleProps) {
   const today = toIsoDate(new Date());
   const focusedAction = actions.find((action) => action.id === focusId && action.source !== "supplier");
   const [selectedId, setSelectedId] = useContinuityState("root2cause:selected",focusedAction?.id ?? actions[0]?.id ?? "");
   const [query, setQuery] = useContinuityState("root2cause:query","");
   const [statusFilter, setStatusFilter] = useContinuityState("root2cause:status","all");
-  const [workspaceView, setWorkspaceView] = useContinuityState<CorrectiveWorkspaceView>("root2cause:view",claimSeed ? "a3" : "lists");
+  const [workspaceView, setWorkspaceView] = useState<CorrectiveWorkspaceView>(claimSeed ? "a3" : "lists");
   const [listScope, setListScope] = useContinuityState<CorrectiveListScope>("root2cause:scope",
     focusedAction?.source === "customer"
       ? "customer"
@@ -104,7 +106,7 @@ export function CorrectiveActionsModule({
           ? "internal"
           : "open",
   );
-  const [registryView, setRegistryView] = useContinuityState<CorrectiveRegistryView>("root2cause:registry","index");
+  const [registryView, setRegistryView] = useState<CorrectiveRegistryView>(focusedAction ? "report" : "index");
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
   const [publicationError, setPublicationError] = useState("");
@@ -400,6 +402,7 @@ export function CorrectiveActionsModule({
         />
       </section>
 
+      {onNavigateDocuments && canPerformModuleAction(session,"documents","view") && <button type="button" className="button button-secondary" onClick={() => { if (confirmLeaving()) onNavigateDocuments(); }}>Consultar metodología en Información Documentada</button>}
       <div className="quality-view-tabs corrective-main-tabs" aria-label="Vistas de Root2Cause">
         <button className={workspaceView === "lists" ? "active" : ""} type="button" onClick={() => {if(confirmLeaving())setWorkspaceView("lists");}}><BookOpen size={15} /> Listados de acciones</button>
         {canCreate ? <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button> : null}

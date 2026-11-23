@@ -4,6 +4,7 @@ import { ArrowLeft, Download, FileText } from "lucide-react";
 import {useEffect,useState,type ReactNode} from "react";
 
 import { A3StepEvidence } from "./a3-step-evidence";
+import { A3ClaimEvidence } from "./a3-claim-evidence";
 import { A3ReportEvidence } from "./a3-report-evidence";
 import { A3RedboothPlan } from "./a3-redbooth-plan";
 import type { ActiveSession } from "@/lib/session-data";
@@ -118,6 +119,7 @@ export function A3ActionReport({
               } catch (error) { setOfficialPdfMessage(error instanceof Error ? error.message : "No se pudo consultar la versión seleccionada."); }
               finally { setOfficialPdfBusy(false); }
             })()}>Descargar versión seleccionada</button>
+              {selectedPdfId && <a className="button button-secondary" target="_blank" rel="noreferrer" href={`/api/root2cause/published-actions/${encodeURIComponent(action.id)}/pdf?fileId=${encodeURIComponent(selectedPdfId)}&preview=1`}>Ver versión seleccionada</a>}
           </> : null}
           <button className="button button-primary" type="button" disabled={preparingEvidence} onClick={() => window.print()}>
             <Download size={16} /> Exportar PDF
@@ -161,6 +163,7 @@ export function A3ActionReport({
             {analysis?.descriptiveTitle ? <ReportFact label="Descripción breve" value={analysis.descriptiveTitle} /> : null}
             <div className="wide"><small>Descripción integral</small><p>{action.problem}</p></div>
           </div>
+          {session && action.source === "customer" && action.qualityCaseId && <A3ClaimEvidence key={action.qualityCaseId} claimId={action.qualityCaseId}/>}
           {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={0} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
@@ -228,7 +231,7 @@ export function A3ActionReport({
           {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={7} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
-        {analysis && session ? <><A3ReportEvidence analysis={analysis} onBusyChange={setPreparingEvidence}/><A3RedboothPlan action={action}/>{analysis.plans.map(plan=><section className="print-hidden" key={plan.id}><h4>Evidencias de acción: {plan.description}</h4><A3StepEvidence evidenceId={analysis.evidenceId} step={plan.id} processId={action.processId} readOnly={action.status==="closed"}/></section>)}</> : null}
+        {analysis && session ? <><A3ReportEvidence key={action.id} analysis={analysis} onBusyChange={setPreparingEvidence}/><A3RedboothPlan key={action.id} action={action}/>{analysis.plans.map(plan=><section className="print-hidden" key={plan.id}><h4>Evidencias de acción: {plan.description}</h4><A3StepEvidence evidenceId={analysis.evidenceId} step={plan.id} processId={action.processId} readOnly={action.status==="closed"}/></section>)}</> : null}
         <footer className="a3-report-footer">
           <span><FileText size={14} /> {action.folio}</span>
           <span>Copia controlada para consulta · IntegraQ</span>

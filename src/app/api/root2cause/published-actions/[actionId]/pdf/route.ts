@@ -58,8 +58,10 @@ export async function GET(request: Request, context: { params: Promise<{ actionI
   if (bytes.error || !bytes.data || createHash("sha256").update(Buffer.from(await bytes.data.arrayBuffer())).digest("hex") !== String(file.sha256).toLowerCase()) {
     return NextResponse.json({ error: "La integridad del PDF no pudo confirmarse." }, { status: 503, headers });
   }
-  const signed = await scope.admin.storage.from(bucket).createSignedUrl(file.object_path, 60, { download: file.original_name });
+  const preview = new URL(request.url).searchParams.get("preview") === "1";
+  const signed = await scope.admin.storage.from(bucket).createSignedUrl(file.object_path, 60, preview ? undefined : { download: file.original_name });
   if (signed.error || !signed.data?.signedUrl) return NextResponse.json({ error: "No fue posible preparar la descarga autorizada." }, { status: 503, headers });
+  if (preview) return new NextResponse(null,{status:302,headers:{...headers,Location:signed.data.signedUrl,"Referrer-Policy":"no-referrer"}});
   return NextResponse.json({ fileId: file.id, version: file.version, sha256: file.sha256, signedUrl: signed.data.signedUrl }, { headers });
 }
 
@@ -84,9 +86,11 @@ export async function POST(_request: Request, context: { params: Promise<{ actio
   const filesResult = action.process_id
     ? await admin.from("file_objects").select("id,bucket_id,object_path,original_name,mime_type,size_bytes,sha256,workspace_id,process_id,module_id,audience,resource_type,resource_key,deleted_at")
       .eq("workspace_id", organizationId).eq("process_id", action.process_id).eq("module_id", "corrective-actions").eq("audience", "internal")
-      .eq("resource_type", "root2cause_evidence").in("resource_key", keys).is("deleted_at", null).order("created_at", { ascending: true }).limit(100)
+      .eq("resource_type", "root2cause_evidence").in("resource_key", keys).eq("is_current", true).is("deleted_at", null).order("created_at", { ascending: true }).limit(101)
     : { data: [], error: null };
   if (filesResult.error) return NextResponse.json({ error: "No fue posible consultar las evidencias autorizadas." }, { status: 503, headers });
+  if ((filesResult.data?.length ?? 0) > 100) return NextResponse.json({ error: "El expediente supera las 100 evidencias por PDF. No se registró una versión parcial." }, { status: 422, headers });
+  if (!analysisRow) return NextResponse.json({ error: "Falta el análisis persistido del expediente." }, {status:409,headers});
   const evidence: Array<{ name: string; mime: string; sha256: string; imagePng?: Uint8Array }> = [];
   let bytesRead = 0;
   for (const file of filesResult.data ?? []) {

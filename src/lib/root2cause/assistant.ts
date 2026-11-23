@@ -68,11 +68,11 @@ export function relevantExcerpts(textContent:string,query:string,max=6000):strin
 }
 
 /** Context guard remains stable when accepting other stages of the same draft. */
-export function proposalContext(problem:string,processId:string|undefined):string {
- return JSON.stringify([problem,processId??null]);
+export function proposalContext(problem:string,processId:string|undefined,...scope:(string|undefined)[]):string {
+ return JSON.stringify([problem,processId??null,...scope]);
 }
-export function assertProposalContext(expected:string,problem:string,processId:string|undefined){
- if(expected!==proposalContext(problem,processId))throw new Error("El contexto o proceso cambió. Solicita un borrador nuevo antes de incorporar propuestas.");
+export function assertProposalContext(expected:string,problem:string,processId:string|undefined,...scope:(string|undefined)[]){
+ if(expected!==proposalContext(problem,processId,...scope))throw new Error("El contexto o proceso cambió. Solicita un borrador nuevo antes de incorporar propuestas.");
 }
 
 /** A manual edit in any contributing stage invalidates the outstanding proposal. */

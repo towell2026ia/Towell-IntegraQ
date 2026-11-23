@@ -22,13 +22,15 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { A3ProposalReview } from "@/components/modules/a3-proposal-review";
+import { writeActiveDraft } from "@/lib/root2cause/draft-cache";
+import { changeCause, classifyCauses, causeInUse, removeCause } from "@/lib/root2cause/cause-links";
 import { appendBlankActionPlan, ishikawaCategories, isActionPlanReady, removeActionPlan, type RootCauseResponsible } from "@/lib/root2cause/action-plan";
 import { A3StepEvidence } from "@/components/modules/a3-step-evidence";
 import { applyStageSuggestion, stageSnapshot, proposalContext, assertProposalContext, assertProposalSnapshots, type RootCauseProposal, type StageSuggestion } from "@/lib/root2cause/assistant";
 import { processCatalog } from "@/lib/configuration-data";
 import { canAccessProcess } from "@/lib/session-data";
 
-import { useScopedDraft, useContinuityState } from "@/components/workspace-continuity";
+import { useScopedDraft } from "@/components/workspace-continuity";
 import { confirmLeaving } from "@/lib/workspace-continuity";
 import { ClaimEditor } from "@/components/modules/customer-claims-panel";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
@@ -173,17 +175,35 @@ function createInitialDraft(claim?: CustomerClaim): A3Draft {
 
 export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClaim, onCustomerCatalog }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void }) {
   const storageKey = initialClaim ? `${draftStorageKey}.claim.${initialClaim.id}` : draftStorageKey;
-  const persistence=useScopedDraft<{revision?:number; confirmedHash?:string; step:number;draft:A3Draft;aiDraft?:AiRootCauseDraft;newIdea?:string;causeInputs?:Record<IshikawaKey,string>}>(storageKey);
+  type CachedDraft = { revision?: number; confirmedHash?: string; step: number; draft: A3Draft; aiDraft?: AiRootCauseDraft; newIdea?: string; causeInputs?: Record<IshikawaKey,string> };
+  const currentCache = useScopedDraft<CachedDraft>(storageKey);
+  const otherCaches = useScopedDraft<Record<string, CachedDraft>>(storageKey + ".pending");
+  const persistence = useMemo(() => ({
+    ...currentCache,
+    write(value: CachedDraft) {
+      return writeActiveDraft(value, currentCache, otherCaches);
+    },
+    discard(id?: string) {
+      if (!id) return;
+      if (currentCache.read()?.draft.evidenceId === id) currentCache.clear();
+      const others = otherCaches.read();
+      if (others && id in others) {
+        delete others[id];
+        otherCaches.write(others);
+      }
+    },
+  }), [currentCache, otherCaches]);
+  const [availableLocal, setAvailableLocal] = useState<CachedDraft[]>([]);
   const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
-  const [step, setStep] = useContinuityState(`${storageKey}:step`,0);
-  const [draft, setDraft] = useState<A3Draft>(() => createInitialDraft(initialClaim));
+  const [step, setStep] = useState(0);
+  const [initialDraft] = useState(() => createInitialDraft(initialClaim));
+  const [draft, setDraft] = useState<A3Draft>(initialDraft);
   const [draftId, setDraftId] = useState<string>();
   const [draftRevision, setDraftRevision] = useState(0);
   const confirmedHash = useRef<string | undefined>(undefined);
   const [drafts, setDrafts] = useState<Omit<RootCauseStoredDraft, "payload">[]>([]);
   const [draftListError, setDraftListError] = useState("");
   const [draftSaved, setDraftSaved] = useState(false);
-  const preferServerDraft = useRef(false);
 
   const [loaded, setLoaded] = useState(false);
   const [newIdea, setNewIdea] = useState("");
@@ -248,8 +268,8 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     try {
       const result = await loadRootCauseDraft(id);
       const saved = result.draft;
-      preferServerDraft.current = true;
       setLoaded(false);
+      setProposal(undefined);
       confirmedHash.current = undefined;
       setDraftId(saved.id); setDraftRevision(saved.revision); setDraftSaved(true);
       setDraft(normalizeDraft(saved.payload.draft as unknown as A3Draft));
@@ -295,42 +315,43 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   useEffect(() => {
-    const restoreDraft = window.setTimeout(() => {
-      if (preferServerDraft.current) {
-        preferServerDraft.current = false;
-        setLoaded(true);
-        return;
-      }
-      const saved = persistence.read();
-      if (saved) {
-        try {
-          const parsed = saved;
-          if (parsed.draft) {
-            setDraft(normalizeDraft(parsed.draft));
-            setDraftId(parsed.draft.evidenceId);
-            setDraftRevision(parsed.revision ?? 0);
-            confirmedHash.current = parsed.confirmedHash;
-          }
-          if(parsed.newIdea)setNewIdea(parsed.newIdea);
-          if(parsed.causeInputs)setCauseInputs(parsed.causeInputs);
-          if (parsed.aiDraft) setAiDraft(parsed.aiDraft);
-          if (typeof parsed.step === "number") setStep(Math.min(Math.max(parsed.step, 0), stepLabels.length - 1));
-        } catch {
-          persistence.clear();
-        }
-      }
+    const timer = window.setTimeout(() => {
+      const saved = currentCache.read();
+      const entries = Object.values(otherCaches.read() ?? {});
+      setAvailableLocal(saved ? [saved, ...entries.filter(entry => entry.draft.evidenceId !== saved.draft.evidenceId)] : entries);
       setLoaded(true);
     }, 0);
+    return () => window.clearTimeout(timer);
+  }, [currentCache, otherCaches]);
 
-    return () => window.clearTimeout(restoreDraft);
-  }, [storageKey,persistence,setStep]);
+  const resumeLocal = (entry: CachedDraft) => {
+    const id = entry.draft.evidenceId;
+    const latest = currentCache.read();
+    const saved = latest?.draft.evidenceId === id ? latest : id ? otherCaches.read()?.[id] : null;
+    if (!saved) { setSaveError("El borrador local ya no está disponible. Consulta los borradores guardados."); return; }
+    setDraft(normalizeDraft(saved.draft));
+    setDraftId(saved.draft.evidenceId);
+    setDraftRevision(saved.revision ?? 0);
+    confirmedHash.current = saved.confirmedHash;
+    setDraftSaved(Boolean(saved.revision));
+    setNewIdea(saved.newIdea ?? "");
+    setCauseInputs(saved.causeInputs ?? {workforce:"", machinery:"", method:"", material:"", environment:"", measurement:""});
+    setStep(Math.max(0, Math.min(stepLabels.length - 1, saved.step)));
+    setAiDraft(saved.aiDraft);
+    setProposal(undefined);
+    setSaveError("");
+  };
 
   useEffect(() => {
     if (loaded) {
-      const hasText=JSON.stringify({...draft,evidenceId:undefined})!==JSON.stringify({...createInitialDraft(initialClaim),evidenceId:undefined})||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
-      if(hasText){persistence.write({ step, draft, revision: draftRevision, confirmedHash: confirmedHash.current, ...(aiDraft?{aiDraft}:{}),newIdea,causeInputs });persistence.dirty(true);}
+      const hasText=JSON.stringify({...draft,evidenceId:undefined})!==JSON.stringify({...initialDraft,evidenceId:undefined})||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
+      if (hasText) {
+        const stored = persistence.write({step,draft,revision:draftRevision,confirmedHash:confirmedHash.current,aiDraft,newIdea,causeInputs});
+        persistence.dirty(true);
+        if (!stored) setSaveError("El navegador no pudo conservar los cambios locales. Guarda el borrador antes de salir.");
+      }
     }
-  }, [aiDraft, draft, draftRevision, loaded, step, storageKey, newIdea, causeInputs, initialClaim,persistence]);
+  }, [aiDraft, draft, draftRevision, loaded, step, storageKey, newIdea, causeInputs, initialDraft,persistence]);
 
 
   useEffect(()=>()=>persistence.dirty(false),[persistence]);
@@ -362,11 +383,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   const updateCause = (id: string, changes: Partial<NonNullable<A3Analysis["causeItems"]>[number]>) => {
-    setDraft((current) => {
-      const causeItems = current.causeItems.map(item => item.id === id ? { ...item, ...changes } : item);
-      const ishikawa = Object.fromEntries((Object.keys(ishikawaLabels) as IshikawaKey[]).map(key => [key, causeItems.filter(item => item.category === key).map(item => item.text)])) as A3Analysis["ishikawa"];
-      return { ...current, causeItems, ishikawa };
-    });
+    setDraft(current => changeCause(current, id, changes));
   };
 
   const updatePlan = (id: string, changes: Partial<A3Analysis["plans"][number]>) => {
@@ -375,7 +392,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
   const resetDraft = () => {
     if (!window.confirm("Reiniciar vaciará el análisis no aprobado. Se conservarán los vínculos de evidencias del expediente.")) return;
-    persistence.clear();
+    persistence.discard(draft.evidenceId);
     setProposal(undefined);
     setDraft(current => ({...createInitialDraft(initialClaim),evidenceId:current.evidenceId,plans:current.plans,processId:current.processId}));
 
@@ -388,7 +405,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     if (aiRequestInFlight.current) return;
     aiRequestInFlight.current = true;
     setAiLoading(true);setAiError("");setProposal(undefined);
-    requestContext.current=proposalContext(draft.problem,draft.processId);
+    requestContext.current=proposalContext(draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area);
     const analysis=toA3Analysis(draft);requestSnapshots.current=stepLabels.map((_,i)=>stageSnapshot(analysis,i));
     try {
       const response=await fetch("/api/ai/root-cause/assist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,area:draft.area,problem:draft.problem,analysis,origin:draft.origin,...(draft.origin==="customer"&&draft.relatedPartyId?{relatedPartyId:draft.relatedPartyId}:{})})});
@@ -397,25 +414,36 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
   const acceptSuggestion=(suggestion:StageSuggestion)=>{
     if(!window.confirm("¿Incorporar esta propuesta revisada como borrador de la etapa? No confirma la causa ni aprueba acciones."))return false;
-    try{assertProposalContext(requestContext.current,draft.problem,draft.processId);const currentAnalysis=toA3Analysis(draft);assertProposalSnapshots(currentAnalysis,requestSnapshots.current);const next=applyStageSuggestion(currentAnalysis,suggestion,requestSnapshots.current[suggestion.step]);requestSnapshots.current[suggestion.step]=stageSnapshot(next,suggestion.step);setDraft(current=>{
-      let updated={...current,...next};
+    try{assertProposalContext(requestContext.current,draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area);const currentAnalysis=toA3Analysis(draft);assertProposalSnapshots(currentAnalysis,requestSnapshots.current);const next=applyStageSuggestion(currentAnalysis,suggestion,requestSnapshots.current[suggestion.step]);
+      const current = draft;
+      let updated: A3Draft = {...current,...next,brainstormIds:current.brainstormIds,causeItems:current.causeItems};
       if(suggestion.step===3){
-        const ids=next.brainstorm.map((_,index)=>current.brainstormIds[index]??crypto.randomUUID());
-        const existing=new Map(current.causeItems.filter(item=>item.sourceIdeaId).map(item=>[item.sourceIdeaId!,item]));
-        const linked=next.brainstorm.map((text,index)=>({...existing.get(ids[index]),id:existing.get(ids[index])?.id??crypto.randomUUID(),text,category:existing.get(ids[index])?.category??null,sourceIdeaId:ids[index]}));
-        updated={...updated,brainstormIds:ids,causeItems:[...current.causeItems.filter(item=>!item.sourceIdeaId),...linked]};
+        const additions = [...new Set(next.brainstorm)].filter(text => !current.brainstorm.includes(text));
+        const ideas = additions.map(text => ({ text, id: crypto.randomUUID(), sourceIdeaId: crypto.randomUUID(), category: null }));
+        updated = { ...updated, brainstorm: [...current.brainstorm, ...additions], brainstormIds: [...current.brainstormIds, ...ideas.map(idea => idea.sourceIdeaId)], causeItems: [...current.causeItems, ...ideas] };
       }
       if(suggestion.step===4){
-        const prior=current.causeItems.filter(item=>item.sourceIdeaId||item.category===null),used=new Set<string>();
-        const categorized=(Object.keys(ishikawaLabels) as IshikawaKey[]).flatMap(category=>next.ishikawa[category].map(text=>{
-          const old=current.causeItems.find(item=>!used.has(item.id)&&item.category===category&&item.text===text);if(old)used.add(old.id);
-          return {id:old?.id??crypto.randomUUID(),text,category,sourceIdeaId:old?.sourceIdeaId};
-        }));
-        updated={...updated,causeItems:[...prior.filter(item=>!categorized.some(value=>value.sourceIdeaId&&value.sourceIdeaId===item.sourceIdeaId)),...categorized]};
+        for (const category of ishikawaCategories) {
+          for (const text of next.ishikawa[category]) {
+            const matches = updated.causeItems.filter(item => item.text === text);
+            if (matches.some(item => item.category === category)) continue;
+            if (matches.length > 1 || ishikawaCategories.some(other => other !== category && next.ishikawa[other].includes(text))) {
+              throw new Error("La propuesta contiene una causa ambigua. Revisa su clasificación antes de incorporarla.");
+            }
+            if (matches.length) updated = changeCause(updated, matches[0].id, {category});
+            else updated = {...updated, causeItems:[...updated.causeItems,{id:crypto.randomUUID(),text,category}]};
+          }
+        }
+        updated.ishikawa = classifyCauses(updated.causeItems);
       }
-      if(suggestion.step===5 && updated.rootCause.trim() && !updated.rootCauseCauseId) updated.rootCauseCauseId=crypto.randomUUID();
-      return updated;
-    });return true;}
+      if(suggestion.step===5 && updated.rootCause !== current.rootCause) {
+        updated.rootCauseCauseId = updated.rootCause.trim() ? crypto.randomUUID() : undefined;
+      }
+      const accepted = toA3Analysis(updated);
+      requestSnapshots.current = stepLabels.map((_,i) => stageSnapshot(accepted,i));
+      setDraft(updated);
+      return true;
+    }
     catch(error){setAiError(error instanceof Error?error.message:"No se incorporó la propuesta.");return false;}
   };
 
@@ -445,7 +473,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       a3: toA3Analysis(draft),
       aiDraft,
       });
-      persistence.clear();
+      persistence.discard(draft.evidenceId);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "No fue posible guardar el análisis.");
     } finally { setSaving(false); }
@@ -455,13 +483,19 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   return (
     <section className="a3-workbench">
       <header className="a3-workbench-header">
-        <div><p className="module-kicker">Metodología A3</p><h3>Nuevo análisis de acción correctiva</h3><p>{draftSaved ? "Borrador persistido en el expediente Root2Cause." : "Guarda el borrador para continuar desde otro inicio de sesión autorizado al proceso."}</p></div>
+        <div><p className="module-kicker">Metodología A3</p><h3>{draftId ? "Continuar análisis de acción correctiva" : "Nuevo análisis de acción correctiva"}</h3><p>{draftSaved ? "Borrador persistido en el expediente Root2Cause." : "Guarda el borrador para continuar desde otro inicio de sesión autorizado al proceso."}</p></div>
 
         <div className="a3-header-actions">
           <button className="icon-button" type="button" title="Reiniciar borrador" aria-label="Reiniciar borrador" onClick={resetDraft}><RotateCcw size={17} /></button>
         </div>
       </header>
 
+      {availableLocal.length > 0 && <section className="a3-stage-hint" aria-label="Continuar en este dispositivo">
+        <strong>Borradores de este dispositivo</strong>
+        {availableLocal.map(entry => <button key={entry.draft.evidenceId} type="button" className="button button-secondary" disabled={isSaving} onClick={() => resumeLocal(entry)}>
+          Continuar {entry.draft.title || "análisis sin título"} · etapa {entry.step + 1}
+        </button>)}
+      </section>}
       {session.workspaceMode !== "demo" ? <section className="a3-stage-hint" aria-label="Borradores guardados">
         <strong>Continuar un borrador guardado</strong>
         {draftListError ? <p role="alert">{draftListError}</p> : drafts.length ? <div>{drafts.map(item => <button className="button button-secondary" type="button" key={item.id} disabled={isSaving} onClick={() => void resumeSavedDraft(item.id)}>
@@ -483,8 +517,11 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
         {step === 1 ? <SeverityStage draft={draft} setDraft={setDraft} /> : null}
         {step === 2 ? <FiveW2HStage value={draft.fiveW2H} onChange={(fiveW2H) => setDraft((current) => ({ ...current, fiveW2H }))} /> : null}
-        {step === 3 ? <BrainstormStage ideas={draft.brainstorm} ids={draft.brainstormIds} onEdit={(index, text) => setDraft(current => { const brainstorm=[...current.brainstorm];brainstorm[index]=text;const id=current.brainstormIds[index];return {...current,brainstorm,causeItems:current.causeItems.map(item=>item.sourceIdeaId===id?{...item,text}:item),ishikawa:Object.fromEntries((Object.keys(ishikawaLabels) as IshikawaKey[]).map(key=>[key,current.causeItems.filter(item=>item.category===key).map(item=>item.sourceIdeaId===id?text:item.text)])) as A3Analysis["ishikawa"]}; })} newIdea={newIdea} setNewIdea={setNewIdea} addIdea={addIdea} /> : null}
-        {step === 4 ? <IshikawaStage value={draft.ishikawa} items={draft.causeItems} inputs={causeInputs} setInputs={setCauseInputs} addCause={addCause} updateCause={updateCause} /> : null}
+        {step === 3 ? <BrainstormStage ideas={draft.brainstorm} ids={draft.brainstormIds} onEdit={(index, text) => setDraft(current => {
+          const linked = current.causeItems.find(item => item.sourceIdeaId === current.brainstormIds[index]);
+          return linked ? changeCause(current, linked.id, { text }) : { ...current, brainstorm: current.brainstorm.map((idea, i) => i === index ? text : idea) };
+        })} newIdea={newIdea} setNewIdea={setNewIdea} addIdea={addIdea} /> : null}
+        {step === 4 ? <IshikawaStage value={draft.ishikawa} items={draft.causeItems} inputs={causeInputs} setInputs={setCauseInputs} addCause={addCause} updateCause={updateCause} linked={id => causeInUse(draft, id)} retire={id => setDraft(current => removeCause(current, id))} /> : null}
         {step === 5 ? <CausesStage draft={draft} setDraft={setDraft} /> : null}
         {step === 6 ? <WhysStage draft={draft} setDraft={setDraft} /> : null}
         {step === 7 ? <PlansStage draft={draft} setDraft={setDraft} updatePlan={updatePlan} responsibleUsers={responsibleUsers} loadingResponsibleUsers={loadingResponsibleUsers} responsibleUsersError={responsibleUsersError} /> : null}
@@ -572,8 +609,9 @@ function BrainstormStage({ ideas, ids, onEdit, newIdea, setNewIdea, addIdea }: {
   return <StageHeading icon={<Lightbulb size={20} />} title="4. Lluvia de ideas" description="Registra causas potenciales sin evaluarlas todavía; cada idea se transfiere al Ishikawa como candidata."><div className="a3-inline-entry"><input value={newIdea} onChange={(event) => setNewIdea(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addIdea(); } }} placeholder="Agregar una causa posible" /><button className="button button-secondary" type="button" onClick={addIdea}><Plus size={15} /> Agregar</button></div><div className="a3-idea-list">{ideas.map((idea, index) => <div key={ids[index] ?? `${idea}-${index}`}><span>{index + 1}</span><input aria-label={`Idea ${index + 1}`} value={idea} onChange={event => onEdit(index, event.target.value)} /></div>)}</div><p className="a3-stage-hint">Se requieren al menos tres ideas. Las ideas se conservan y pueden editarse sin perder su vínculo con Ishikawa.</p></StageHeading>;
 }
 
-function IshikawaStage({ value, items, inputs, setInputs, addCause, updateCause }: { value: A3Analysis["ishikawa"]; items: NonNullable<A3Analysis["causeItems"]>; inputs: Record<IshikawaKey, string>; setInputs: React.Dispatch<React.SetStateAction<Record<IshikawaKey, string>>>; addCause: (key: IshikawaKey) => void; updateCause: (id: string, changes: Partial<NonNullable<A3Analysis["causeItems"]>[number]>) => void }) {
-  return <StageHeading icon={<GitBranch size={20} />} title="5. Ishikawa 6M" description="Las ideas anteriores aparecen como causas candidatas. Asígnalas, edítalas o cambia su categoría sin perder su relación."><div className="ishikawa-grid">{(Object.keys(ishikawaLabels) as IshikawaKey[]).map((key) => <section key={key}><h5>{ishikawaLabels[key]} <span>{value[key].length}</span></h5><div><input value={inputs[key]} onChange={(event) => setInputs((current) => ({ ...current, [key]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCause(key); } }} placeholder="Agregar causa" /><button type="button" title={`Agregar a ${ishikawaLabels[key]}`} aria-label={`Agregar a ${ishikawaLabels[key]}`} onClick={() => addCause(key)}><Plus size={14} /></button></div><ul>{items.filter(item => item.category === key).map(item => <li key={item.id}><input aria-label={`Causa en ${ishikawaLabels[key]}`} value={item.text} onChange={event => updateCause(item.id, { text: event.target.value })} /><select aria-label="Reclasificar causa" value={item.category ?? ""} onChange={event => updateCause(item.id, { category: (event.target.value || null) as IshikawaKey | null })}><option value="">Sin clasificar</option>{(Object.keys(ishikawaLabels) as IshikawaKey[]).map(category => <option key={category} value={category}>{ishikawaLabels[category]}</option>)}</select></li>)}</ul></section>)}</div><section className="a3-cause-candidates"><h5>Causas candidatas sin clasificar</h5>{items.filter(item => !item.category).map(item => <div key={item.id}><input aria-label="Causa candidata" value={item.text} onChange={event => updateCause(item.id, { text: event.target.value })} /><select aria-label="Clasificación 6M" value="" onChange={event => updateCause(item.id, { category: (event.target.value || null) as IshikawaKey | null })}><option value="">Seleccionar 6M</option>{(Object.keys(ishikawaLabels) as IshikawaKey[]).map(category => <option key={category} value={category}>{ishikawaLabels[category]}</option>)}</select></div>)}</section></StageHeading>;
+function IshikawaStage({ value, items, inputs, setInputs, addCause, updateCause, linked, retire }: { value: A3Analysis["ishikawa"]; items: NonNullable<A3Analysis["causeItems"]>; inputs: Record<IshikawaKey, string>; setInputs: React.Dispatch<React.SetStateAction<Record<IshikawaKey, string>>>; addCause: (key: IshikawaKey) => void; linked: (id: string) => boolean; retire: (id: string) => void; updateCause: (id: string, changes: Partial<NonNullable<A3Analysis["causeItems"]>[number]>) => void }) {
+  const removeButton = (id: string) => <button type="button" disabled={linked(id)} title={linked(id) ? "La causa está vinculada a una conclusión o un plan" : "Retirar del Ishikawa"} onClick={() => retire(id)}>Retirar causa</button>;
+  return <StageHeading icon={<GitBranch size={20} />} title="5. Ishikawa 6M" description="Las ideas anteriores aparecen como causas candidatas. Asígnalas, edítalas o cambia su categoría sin perder su relación."><div className="ishikawa-grid">{(Object.keys(ishikawaLabels) as IshikawaKey[]).map((key) => <section key={key}><h5>{ishikawaLabels[key]} <span>{value[key].length}</span></h5><div><input value={inputs[key]} onChange={(event) => setInputs((current) => ({ ...current, [key]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addCause(key); } }} placeholder="Agregar causa" /><button type="button" title={`Agregar a ${ishikawaLabels[key]}`} aria-label={`Agregar a ${ishikawaLabels[key]}`} onClick={() => addCause(key)}><Plus size={14} /></button></div><ul>{items.filter(item => item.category === key).map(item => <li key={item.id}><input aria-label={`Causa en ${ishikawaLabels[key]}`} value={item.text} onChange={event => updateCause(item.id, { text: event.target.value })} /><select aria-label="Reclasificar causa" value={item.category ?? ""} onChange={event => updateCause(item.id, { category: (event.target.value || null) as IshikawaKey | null })}><option value="">Sin clasificar</option>{(Object.keys(ishikawaLabels) as IshikawaKey[]).map(category => <option key={category} value={category}>{ishikawaLabels[category]}</option>)}</select>{removeButton(item.id)}</li>)}</ul></section>)}</div><section className="a3-cause-candidates"><h5>Causas candidatas sin clasificar</h5>{items.filter(item => !item.category).map(item => <div key={item.id}><input aria-label="Causa candidata" value={item.text} onChange={event => updateCause(item.id, { text: event.target.value })} /><select aria-label="Clasificación 6M" value="" onChange={event => updateCause(item.id, { category: (event.target.value || null) as IshikawaKey | null })}><option value="">Seleccionar 6M</option>{(Object.keys(ishikawaLabels) as IshikawaKey[]).map(category => <option key={category} value={category}>{ishikawaLabels[category]}</option>)}</select>{removeButton(item.id)}</div>)}</section></StageHeading>;
 }
 
 function CausesStage({ draft, setDraft }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>> }) {

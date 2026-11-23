@@ -19,3 +19,9 @@ describe("Root2Cause official PDF renderer", () => {
     expect(bytes.byteLength).toBeGreaterThan(1000);
   });
 });
+
+it("adds pages for long fields instead of writing past the footer", () => {
+  const common = {folio:"AC-QA", title:"QA", problem:"", source:"internal", severity:"medium", area:"", process:"", owner:"", reportDate:"", dueDate:"", customer:"", externalReference:"",analysis:{},plans:[],evidence:[]};
+  const countPages = (text:string) => [...new TextDecoder().decode(buildRootCauseOfficialPdf({...common,problem:text})).matchAll(/\/Type \/Page\b/g)].length;
+  expect(countPages("Línea de análisis. ".repeat(3400))).toBeGreaterThan(countPages("Breve")+4);
+});
