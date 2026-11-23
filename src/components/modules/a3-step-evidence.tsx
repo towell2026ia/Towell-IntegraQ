@@ -13,5 +13,19 @@ export function A3StepEvidence({evidenceId,step,processId,readOnly=false,persist
  if(!access?.enabled)return <p role="status">Evidencias por etapa pendientes de activar los controles de acceso. No se cargaron archivos.</p>;
  const resourceKey=a3EvidenceKey(evidenceId,step),write=access.write&&!readOnly;
  const scope={moduleId:'corrective-actions' as const,resourceType:'root2cause_evidence',resourceKey,processId};
- return <section className="print-hidden"><EvidenceManager key={`${resourceKey}:${revision}`} {...scope} permissions={{read:true,add:write,replace:false,delete:false,history:true}} title="Evidencias de esta etapa" addLabel="Agregar documento original" description="Los documentos se conservan sin transformar. Fotografías y documentos quedan vinculados únicamente a esta etapa o acción."/>{write?<PhotoAttachmentPicker camera scope="indicator-evidence" label="Fotografías de esta etapa" confirmLabel="Cargar fotografías" onAccept={async file=>{await uploadAttachment(scope,file);setRevision(n=>n+1);}}/>:null}</section>;
+ return (
+   <section className="print-hidden">
+     <EvidenceManager key={`${resourceKey}:${revision}`} {...scope}
+       permissions={{read:true,add:write,replace:false,delete:false,history:true}}
+       title="Evidencias de esta etapa" addLabel="Agregar documento original"
+       description="Los documentos se conservan sin transformar. Fotografías y documentos quedan vinculados únicamente a esta etapa o acción." />
+     {typeof step === "string" && write && (
+       <PhotoAttachmentPicker camera scope="indicator-evidence" label="Fotografías de la acción"
+         confirmLabel="Cargar fotografías" onAccept={async file => {
+           await uploadAttachment(scope, file);
+           setRevision(n => n + 1);
+         }} />
+     )}
+   </section>
+ );
 }
