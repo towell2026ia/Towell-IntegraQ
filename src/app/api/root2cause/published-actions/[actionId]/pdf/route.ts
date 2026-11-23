@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import sharp from "sharp";
 import { canPerformModuleAction } from "@/lib/module-permissions";
-import { canAccessProcess, isAdministrator } from "@/lib/session-data";
+import { isAdministrator } from "@/lib/session-data";
 import { buildRootCauseOfficialPdf } from "@/lib/root2cause/official-pdf";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -18,12 +18,17 @@ type ActionRecord = {
   external_reference: string | null; external_organization_id: string | null; corrective_action_a3: Record<string, unknown> | Record<string, unknown>[] | null;
   corrective_action_plans?: Record<string, unknown>[];
 };
-type AuthorizedAction = { session: NonNullable<Awaited<ReturnType<typeof getAuthenticatedSession>>>; admin: ReturnType<typeof createAdminClient>; action: ActionRecord; organizationId: string } | { error: NextResponse };
+type AuthorizedAction = { session: NonNullable<Awaited<ReturnType<typeof getAuthenticatedSession>>>; db: Awaited<ReturnType<typeof createClient>>; admin: ReturnType<typeof createAdminClient>; action: ActionRecord; organizationId: string } | { error: NextResponse };
 
 async function authorized(actionId: string): Promise<AuthorizedAction> {
   const session = await getAuthenticatedSession();
   if (!session?.authUserId || session.workspaceMode === "demo" || !["Administrador", "Usuario interno"].includes(session.userType) || !canPerformModuleAction(session, "corrective-actions", "view")) {
     return { error: NextResponse.json({ error: "No tienes permiso para consultar este análisis." }, { status: 403, headers }) };
+  }
+  const db = await createClient();
+  const access = await db.rpc("iq_u08_read_case",{p_action:actionId});
+  if (access.error || access.data !== true) {
+    return { error: NextResponse.json({ error: "No se autorizó la consulta del expediente." }, { status: access.error ? 503 : 403, headers }) };
   }
   const admin = createAdminClient();
   const profile = await admin.from("profiles").select("organization_id,user_type,status,workspace_mode").eq("id", session.authUserId).maybeSingle();
@@ -31,11 +36,10 @@ async function authorized(actionId: string): Promise<AuthorizedAction> {
   if (profile.error || profile.data?.status !== "active" || profile.data.user_type !== role || profile.data.workspace_mode === "demo" || !profile.data.organization_id) {
     return { error: NextResponse.json({ error: "El perfil interno no está activo." }, { status: 403, headers }) };
   }
-  const result = await admin.from("corrective_actions").select("id,organization_id,folio,title,problem,source,severity,area,process_id,owner_name,due_date,created_at,updated_at,external_reference,external_organization_id,quality_case_id,deleted_at,corrective_action_a3(event_type,severity_justification,five_w_two_h,brainstorm,ishikawa,non_detection_cause,non_detection_whys,root_cause,root_cause_whys,workflow_metadata),corrective_action_plans(id,description,owner_name,due_date,status,cause_text,expected_result,completion_evidence,effectiveness_method)")
+  const result = await db.from("corrective_actions").select("id,organization_id,folio,title,problem,source,severity,area,process_id,owner_name,due_date,created_at,updated_at,external_reference,external_organization_id,quality_case_id,deleted_at,corrective_action_a3(event_type,severity_justification,five_w_two_h,brainstorm,ishikawa,non_detection_cause,non_detection_whys,root_cause,root_cause_whys,workflow_metadata),corrective_action_plans(id,description,owner_name,due_date,status,cause_text,expected_result,completion_evidence,effectiveness_method)")
     .eq("id", actionId).eq("organization_id", profile.data.organization_id).is("deleted_at", null).maybeSingle();
   if (result.error || !result.data) return { error: NextResponse.json({ error: "El análisis no está disponible." }, { status: 404, headers }) };
-  if (result.data.process_id && !canAccessProcess(session, result.data.process_id)) return { error: NextResponse.json({ error: "No tienes acceso al proceso de este análisis." }, { status: 403, headers }) };
-  return { session, admin, action: result.data as unknown as ActionRecord, organizationId: String(profile.data.organization_id) };
+  return { session, db, admin, action: result.data as unknown as ActionRecord, organizationId: String(profile.data.organization_id) };
 }
 
 export async function GET(request: Request, context: { params: Promise<{ actionId: string }> }) {
@@ -44,7 +48,7 @@ export async function GET(request: Request, context: { params: Promise<{ actionI
   const scope = await authorized(actionId);
   if ("error" in scope) return scope.error;
   const fileId = new URL(request.url).searchParams.get("fileId");
-  let query = scope.admin.from("file_objects").select("id,bucket_id,object_path,original_name,version,sha256,size_bytes,is_current,created_at")
+  let query = scope.db.from("file_objects").select("id,bucket_id,object_path,original_name,version,sha256,size_bytes,is_current,created_at")
     .eq("workspace_id", scope.organizationId).eq("resource_type", "root2cause_official_pdf").eq("resource_id", actionId).is("deleted_at", null);
   if (fileId) query = query.eq("id", fileId);
   else query = query.order("version", { ascending: false }).limit(50);
@@ -54,12 +58,12 @@ export async function GET(request: Request, context: { params: Promise<{ actionI
   if (!fileId) return NextResponse.json({ files: rows.filter(row => row.bucket_id === bucket).map(row => ({ id: row.id, version: row.version, sha256: row.sha256, sizeBytes: row.size_bytes, createdAt: row.created_at, current: row.is_current })) }, { headers });
   const file = rows[0];
   if (!file || file.bucket_id !== bucket) return NextResponse.json({ error: "La versión PDF no está disponible." }, { status: 404, headers });
-  const bytes = await scope.admin.storage.from(bucket).download(file.object_path);
+  const bytes = await scope.db.storage.from(bucket).download(file.object_path);
   if (bytes.error || !bytes.data || createHash("sha256").update(Buffer.from(await bytes.data.arrayBuffer())).digest("hex") !== String(file.sha256).toLowerCase()) {
     return NextResponse.json({ error: "La integridad del PDF no pudo confirmarse." }, { status: 503, headers });
   }
   const preview = new URL(request.url).searchParams.get("preview") === "1";
-  const signed = await scope.admin.storage.from(bucket).createSignedUrl(file.object_path, 60, preview ? undefined : { download: file.original_name });
+  const signed = await scope.db.storage.from(bucket).createSignedUrl(file.object_path, 60, preview ? undefined : { download: file.original_name });
   if (signed.error || !signed.data?.signedUrl) return NextResponse.json({ error: "No fue posible preparar la descarga autorizada." }, { status: 503, headers });
   if (preview) return new NextResponse(null,{status:302,headers:{...headers,Location:signed.data.signedUrl,"Referrer-Policy":"no-referrer"}});
   return NextResponse.json({ fileId: file.id, version: file.version, sha256: file.sha256, signedUrl: signed.data.signedUrl }, { headers });
@@ -76,7 +80,7 @@ export async function POST(_request: Request, context: { params: Promise<{ actio
     action.process_id ? admin.from("processes").select("id,name,organization_id").eq("id", action.process_id).eq("organization_id", organizationId).maybeSingle() : Promise.resolve({ data: null, error: null }),
   ]);
   if (customerResult.error || processResult.error || (action.external_organization_id && !customerResult.data) || (action.process_id && !processResult.data)) return NextResponse.json({ error: "No se pudo confirmar la identidad del cliente o proceso para el PDF." }, { status: 503, headers });
-  const userDb = await createClient();
+  const userDb = scope.db;
   const analysisRow = Array.isArray(action.corrective_action_a3) ? action.corrective_action_a3[0] : action.corrective_action_a3;
   const plans = (action.corrective_action_plans ?? []) as Record<string, unknown>[];
   const workflow = (analysisRow?.workflow_metadata ?? {}) as Record<string, unknown>;
@@ -143,7 +147,7 @@ export async function POST(_request: Request, context: { params: Promise<{ actio
   } else fileId = registered.data.fileId;
   const metadata = await admin.from("file_objects").select("id,object_path,original_name,version,sha256").eq("id", fileId).eq("workspace_id", organizationId).eq("resource_type", "root2cause_official_pdf").eq("resource_id", actionId).eq("bucket_id", bucket).is("deleted_at", null).maybeSingle();
   if (metadata.error || !metadata.data) return NextResponse.json({ error: "La versión quedó almacenada, pero no se pudo validar su referencia." }, { status: 503, headers });
-  const signed = await admin.storage.from(bucket).createSignedUrl(metadata.data.object_path, 60, { download: metadata.data.original_name });
+  const signed = await userDb.storage.from(bucket).createSignedUrl(metadata.data.object_path, 60, { download: metadata.data.original_name });
   if (signed.error || !signed.data?.signedUrl) return NextResponse.json({ error: "El PDF quedó almacenado, pero no se pudo preparar la descarga autorizada." }, { status: 503, headers });
   return NextResponse.json({ fileId: metadata.data.id, version: metadata.data.version, sha256: metadata.data.sha256, signedUrl: signed.data.signedUrl }, { headers });
 }

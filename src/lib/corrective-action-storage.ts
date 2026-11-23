@@ -35,6 +35,7 @@ export function mapStoredAction(row: Record<string, unknown>): CorrectiveAction 
       status: plan.status as A3Analysis["plans"][number]["status"] })),
   } : undefined;
   return {
+    readAuthorizedFor: typeof row.read_authorized_for === "string" ? row.read_authorized_for : undefined,
     id: String(row.id), organizationId: row.organization_id ? String(row.organization_id) : undefined,
     folio: String(row.folio), title: String(row.title), problem: String(row.problem),
     source: row.source as CorrectiveAction["source"], severity: row.severity as CorrectiveAction["severity"],

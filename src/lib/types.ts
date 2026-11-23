@@ -107,6 +107,7 @@ export interface CorrectiveAction {
   owner: string;
   ownerId?: string;
   processId?: string;
+  readAuthorizedFor?: string;
   participantUserIds?: string[];
   createdAt: string;
   dueDate: string;

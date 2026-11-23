@@ -6,13 +6,14 @@ export function canViewCorrectiveAction(
   session: ActiveSession,
   action: CorrectiveAction,
 ) {
+  if (action.organizationId && action.organizationId !== session.organizationId) return false;
   if (isAdministrator(session)) return true;
   if (!canPerformModuleAction(session, "corrective-actions", "view")) {
     return false;
   }
-  if (action.organizationId && action.organizationId !== session.organizationId) return false;
   if (!action.organizationId && session.workspaceMode !== "demo") return false;
-  return !action.processId || session.assignedProcessIds.includes(action.processId);
+  return !action.processId || session.assignedProcessIds.includes(action.processId) ||
+    Boolean(session.userType === "Usuario interno" && session.authUserId && action.readAuthorizedFor === session.authUserId);
 }
 
 export function canEditCorrectiveAction(

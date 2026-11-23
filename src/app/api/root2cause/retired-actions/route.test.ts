@@ -3,14 +3,15 @@ import { activeSession, type ActiveSession } from "@/lib/session-data";
 const state = vi.hoisted(() => ({ session: null as ActiveSession | null, profile: {} as Record<string,unknown>, pages: [] as Array<{data: unknown; error: unknown}>, calls: [] as Array<{table: string; method: string; args: unknown[]}>, rpc: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ rpc: state.rpc, from(table: string) {
+function tableQuery(table: string) {
   const chain: Record<string,unknown> = {};
   for (const method of ["select","eq","is","not","neq","order","range"]) chain[method] = (...args: unknown[]) => { state.calls.push({table,method,args}); return chain; };
   chain.maybeSingle = async () => ({data: state.profile,error:null});
   chain.then = (resolve: (value: unknown) => unknown) => resolve(state.pages.shift() ?? {data:[],error:null});
   return chain;
-} }) }));
-vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({rpc: state.rpc}) }));
+}
+vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({rpc: state.rpc, from: tableQuery}) }));
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({rpc: state.rpc, from: tableQuery}) }));
 import { GET, POST } from "./route";
 import { GET as operationalGET } from "../internal-actions/route";
 const id="cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -54,7 +55,8 @@ describe("administrative Root2Cause retirements",()=>{
 describe("Root2Cause operational regression",()=>{
   it("reload retains every authorized active and closed record and excludes retired/other organizations",async()=>{
     const rows=[{id:"open",organization_id:"org-a",status:"open",deleted_at:null},{id:"closed",organization_id:"org-a",status:"closed",deleted_at:null},{id:"retired",organization_id:"org-a",status:"closed",deleted_at:timestamp},{id:"other",organization_id:"org-b",deleted_at:null}];
-    state.pages=[{data:rows,error:null},{data:rows,error:null}];
+    const visibleRows=rows.map(row=>({...row,iq_u08_case_visible:true}));
+    state.pages=[{data:visibleRows,error:null},{data:visibleRows,error:null}];
     const first=await (await operationalGET()).json();const reloaded=await (await operationalGET()).json();
     expect(first.actions.map((r:{id:string})=>r.id)).toEqual(["open","closed"]);expect(reloaded).toEqual(first);
     expect(state.calls).toContainEqual({table:"corrective_actions",method:"is",args:["deleted_at",null]});

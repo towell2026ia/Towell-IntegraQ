@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/supabase/auth-session", () => ({ getAuthenticatedSession: async () => state.session }));
-vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: () => {
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: () => {
   const chain: Record<string, unknown> = {};
   for (const method of ["select", "eq", "is", "order"]) {
     chain[method] = (...args: unknown[]) => { state.calls.push({ method, args }); return chain; };
@@ -22,7 +22,7 @@ import { mapStoredAction } from "@/lib/corrective-action-storage";
 import { matchesCorrectiveListScope } from "@/lib/corrective-action-list";
 
 const org = "org-a";
-const row = (id: string, process_id: string | null, organization_id = org) => ({ id, process_id, organization_id });
+const row = (id: string, process_id: string | null, organization_id = org) => ({ id, process_id, organization_id, iq_u08_case_visible: true });
 
 beforeEach(() => {
   state.session = { ...activeSession, organizationId: org, workspaceMode: "production" };
@@ -39,12 +39,13 @@ describe("Root2Cause internal consultation", () => {
     expect((await response.json()).actions).toHaveLength(501);
     expect(state.calls.filter((call) => call.method === "range").map((call) => call.args)).toEqual([[0, 499], [500, 999]]);
     expect(state.calls).toContainEqual({ method: "eq", args: ["organization_id", org] });
+    expect(state.calls).toContainEqual({ method: "eq", args: ["iq_u08_case_visible", true] });
   });
 
   it("returns assigned processes and organization-wide records to a viewer without requiring participation", async () => {
     state.session = { ...state.session!, userType: "Usuario interno", assignedProcessIds: ["P-13"],
       assignedModuleIds: ["corrective-actions"], moduleActionPermissions: [{ moduleId: "corrective-actions", action: "view" }] };
-    state.pages = [{ data: [row("assigned", "P-13"), row("unassigned", null), row("other-area", "P-99"), row("foreign", "P-13", "org-b")], error: null }];
+    state.pages = [{ data: [row("assigned", "P-13"), row("unassigned", null), {...row("other-area", "P-99"),iq_u08_case_visible:false}, row("foreign", "P-13", "org-b")], error: null }];
     const response = await GET();
     expect(response.status).toBe(200);
     expect((await response.json()).actions.map((item: { id: string }) => item.id)).toEqual(["assigned", "unassigned"]);
@@ -71,7 +72,7 @@ it("T-RCA-01-01 / 02 reloads the persisted AC in its own category and process ex
     external_organization_id: "client", external_reference: "REF-47", corrective_action_a3: { workflow_metadata: {descriptiveTitle: "Análisis QA"} },
     corrective_action_plans: [{id:"plan", description:"Medir", owner_id:"responsible", owner_name:"Operador", cause_category:"method", due_date:"2026-12-03"}] };
   for (let attempt = 0; attempt < 2; attempt++) {
-    state.pages = [{ data: [action, {...action, id:"hidden", process_id:"P-99"}, {...action, id:"retired", deleted_at:"2026-11-01"}], error:null }];
+    state.pages = [{ data: [action, {...action, id:"hidden", process_id:"P-99",iq_u08_case_visible:false}, {...action, id:"retired", deleted_at:"2026-11-01"}], error:null }];
     const response = await GET();
     const actions = (await response.json()).actions.map(mapStoredAction) as ReturnType<typeof mapStoredAction>[];
     expect(actions.filter(item => matchesCorrectiveListScope(item,"customer"))).toHaveLength(1);

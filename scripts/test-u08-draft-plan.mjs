@@ -99,6 +99,10 @@ try {
   assert.equal((await rows("select count(*)::int n from audit_log where action='root2cause.created' and resource_id=$1",[id]))[0].n,1);
   console.log("PASS T-RCA-03-01/02 · folio, conservación tras fallo, reintento, única alta");
   console.log("PASS T-RCA-06-01/02 · plan simplificado persistido, ID y responsable reales del fixture");
+  if (process.argv.includes("--with-live-access")) {
+    const { verifyLiveAccess } = await import("./test-u08-live-access.mjs");
+    await verifyLiveAccess(db);
+  }
 } catch (error) {
   console.error(error.message, error.detail ?? "", error.where ?? "");
   process.exitCode = 1;
