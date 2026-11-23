@@ -1,5 +1,6 @@
 "use client";
 import { A3PortalPublication } from "./a3-portal-publication";
+import { A3PlanFollowup } from "./a3-plan-followup";
 import { useContinuityState } from "@/components/workspace-continuity";
 import { confirmLeaving } from "@/lib/workspace-continuity";
 
@@ -69,7 +70,7 @@ interface CorrectiveActionsModuleProps {
   session: ActiveSession;
 }
 
-type CorrectiveWorkspaceView = "lists" | "a3" | "retired";
+type CorrectiveWorkspaceView = "lists" | "a3" | "retired" | "followup";
 type CorrectiveRegistryView = "index" | "report";
 
 const statusOrder: CorrectiveActionStatus[] = [
@@ -406,9 +407,11 @@ export function CorrectiveActionsModule({
       <div className="quality-view-tabs corrective-main-tabs" aria-label="Vistas de Root2Cause">
         <button className={workspaceView === "lists" ? "active" : ""} type="button" onClick={() => {if(confirmLeaving())setWorkspaceView("lists");}}><BookOpen size={15} /> Listados de acciones</button>
         {canCreate ? <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button> : null}
+        {session.workspaceMode !== "demo" && canPerformModuleAction(session, "corrective-actions", "view") && <button type="button" className={workspaceView === "followup" ? "active" : ""} onClick={() => { if (confirmLeaving()) setWorkspaceView("followup"); }}>Seguimiento de acciones</button>}
         {isAdministrator(session) && session.workspaceMode !== "demo" ? <button className={workspaceView === "retired" ? "active" : ""} type="button" onClick={() => { if (confirmLeaving()) setWorkspaceView("retired"); }}>Registros retirados</button> : null}
       </div>
 
+      {workspaceView === "followup" && <A3PlanFollowup write={canPerformModuleAction(session,"corrective-actions","update")} quality={isAdministrator(session)}/>}
       {workspaceView === "retired" && isAdministrator(session) && session.workspaceMode !== "demo" ? <RetiredCorrectiveActions onActionsChange={onActionsChange} /> : null}
       {workspaceView === "lists" ? (
         <>

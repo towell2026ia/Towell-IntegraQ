@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {buildRedboothTask,resolveRedboothOwner,synchronizeApprovedAction,type SyncLedger,type RedboothConnector} from './redbooth';
+import {buildRedboothTask,resolveRedboothOwner,synchronizeApprovedAction,synchronizeApprovedPlan,type SyncLedger,type RedboothConnector} from './redbooth';
 import {ROOT2CAUSE_REDBOOTH_TARGET as target} from './redbooth-target';
 import type {CorrectiveAction} from '@/lib/types';
 const action={id:'case',folio:'AC-1'} as CorrectiveAction;
@@ -31,3 +31,14 @@ it('rejects a different list even inside QTW',()=>{expect(()=>buildRedboothTask(
 it('rejects tampered destination before reserving or calling any connector',async()=>{const s=await setup();await expect(synchronizeApprovedAction({...s.input,task:{...s.input.task,project_id:2113514}},s.connector,s.ledger)).rejects.toThrow(/QTW/);expect(s.ledger.claim).not.toHaveBeenCalled();expect(s.connector.createTask).not.toHaveBeenCalled();});
 it('does not reuse a ledger task from a different destination',async()=>{const s=await setup();vi.mocked(s.ledger.claim).mockResolvedValue({state:'done',task:{id:8,projectId:2113514,listId:6673813,url:'https://redbooth.com/a/#!/projects/2113514/tasks/8',status:'new'}});await expect(synchronizeApprovedAction(s.input,s.connector,s.ledger)).rejects.toThrow(/QTW/);expect(s.connector.createTask).not.toHaveBeenCalled();});
 it('rejects a remote response in a different list and marks reconciliation pending',async()=>{const s=await setup();vi.mocked(s.connector.createTask).mockResolvedValue({id:9,projectId:2233821,listId:1,url:'https://redbooth.com/a/#!/projects/2233821/tasks/9',status:'new'});await expect(synchronizeApprovedAction(s.input,s.connector,s.ledger)).rejects.toThrow(/destino/);expect(s.ledger.uncertain).toHaveBeenCalledOnce();expect(s.ledger.complete).not.toHaveBeenCalled();});
+
+it('can reserve a confirmed parent before children without PDF capability',async()=>{
+ const {input,connector}=await setup();const states=new Map<string,{state:"done";task:Awaited<ReturnType<typeof connector.createTask>>}>();
+ const ledger:SyncLedger={claim:async key=>states.get(key)??{state:"new"},created:async()=>{},complete:async(key,result)=>{states.set(key,{state:"done",task:result.task});},uncertain:async()=>{}};
+ const transport={...connector,createSubtask:vi.fn(async()=>({...await connector.getTask(10),id:10}))};
+ const parent={...input,planId:"principal",pdf:undefined};const child={...input,pdf:undefined};
+ await synchronizeApprovedPlan(parent,[child],transport,ledger);
+ await synchronizeApprovedPlan(parent,[child],transport,ledger);
+ expect(transport.createTask).toHaveBeenCalledTimes(1);expect(transport.createSubtask).toHaveBeenCalledTimes(1);
+ expect(transport.createSubtask.mock.calls[0]).toEqual([expect.objectContaining({id:9}),child.task,expect.stringContaining("org-a:case:plan")]);
+});
