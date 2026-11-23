@@ -5,6 +5,8 @@ import {
   documentTypeCatalog,
   getDocumentProcessIds,
   getPrimaryDocumentProcessId,
+  getVisibleProcessDocuments,
+  isProcessDocumentCode,
   isGroupedDocumentProcess,
 } from "./document-data";
 
@@ -18,6 +20,34 @@ describe("document type catalog", () => {
     expect(formats?.name).toBe("Formatos");
     expect(applicationForms?.name).toBe("Formularios");
     expect(formats?.code).not.toBe(applicationForms?.code);
+  });
+});
+
+describe("existing PR process documents", () => {
+  const records = [
+    { code: "PR-MTT-01", processId: "P-12" },
+    { code: "PR-LYD-01", processId: "P-34" },
+    { code: "PR-COS-01", processId: "P-22", lifecycle: { isDeleted: true } },
+    { code: "PR-COS-01_", processId: "P-22" },
+    { code: "PR-RH-01", processId: "P-11" },
+    { code: "AV-SGC-02", processId: "P-35" },
+    { code: "MAN-PR-01", processId: "P-12" },
+    { code: "PR-COS-SUB", processId: "P-23" },
+  ];
+  it("recognizes only real PR prefixes", () => {
+    expect(isProcessDocumentCode("PR-MTT-01")).toBe(true);
+    expect(isProcessDocumentCode("PR-COS-01_")).toBe(true);
+    expect(isProcessDocumentCode("AV-SGC-02")).toBe(false);
+    expect(isProcessDocumentCode("MAN-PR-01")).toBe(false);
+  });
+  it("keeps deleted Costura history out and retains the accepted LYD/PT relation", () => {
+    expect(getVisibleProcessDocuments(records, "P-22", () => true).map(item => item.code)).toEqual(["PR-COS-01_", "PR-COS-SUB"]);
+    expect(getVisibleProcessDocuments(records, "P-34", id => id === "P-34").map(item => item.code)).toEqual(["PR-LYD-01"]);
+    expect(getVisibleProcessDocuments(records, "P-12", id => id === "P-12").map(item => item.code)).toEqual(["PR-MTT-01"]);
+  });
+  it("does not expose sibling or parent PR documents through a grouped folder", () => {
+    expect(getVisibleProcessDocuments(records, "P-22", id => id === "P-23").map(item => item.code)).toEqual(["PR-COS-SUB"]);
+    expect(getVisibleProcessDocuments(records, "P-22", () => false)).toEqual([]);
   });
 });
 
