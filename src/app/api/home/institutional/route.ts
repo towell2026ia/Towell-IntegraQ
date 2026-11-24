@@ -11,7 +11,7 @@ type DocumentRow = { id: string; code: string; title: string; process_id: string
 type VersionRow = { id: string; document_id: string; revision: number; file_id: string | null; file_name: string; status: string };
 type LifecycleRow = { document_id: string; lifecycle_status: string; is_deleted: boolean };
 
-export async function GET() {
+export async function GET(request?: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const admin = createAdminClient();
@@ -19,9 +19,10 @@ export async function GET() {
   if (itemsResult.error) return NextResponse.json({ error: "No fue posible consultar la información institucional." }, { status: 500 });
   const administrator = isAdministrator(session);
   const rows = ((itemsResult.data ?? []) as ItemRow[]).filter((row) => administrator || (row.active && (session.userType === "Usuario interno" ? row.visible_to_internal : row.visible_to_external)));
-  const resolved = await resolveDocuments(admin, rows, administrator);
+  const includeCatalog = administrator && (!request || new URL(request.url).searchParams.get("itemsOnly") !== "1");
+  const resolved = await resolveDocuments(admin, rows, includeCatalog);
   const items = rows.map((row) => mapItem(row, resolved.documents, resolved.versions, resolved.availableFileIds, resolved.lifecycle)).filter((item) => administrator || item.available);
-  return NextResponse.json({ items, documents: administrator ? resolved.catalog : undefined });
+  return NextResponse.json({ items, documents: includeCatalog ? resolved.catalog : undefined });
 }
 
 export async function PATCH(request: Request) {
@@ -44,7 +45,7 @@ export async function PATCH(request: Request) {
   }
   const result = await admin.from("home_institutional_items").update({ content_kind: contentKind, document_id: documentId, short_text: shortText, visible_to_internal: Boolean(payload.visibleToInternal), visible_to_external: Boolean(payload.visibleToExternal), active, updated_by: session.authUserId }).eq("position", payload.position).select("position,title,content_kind,document_id,short_text,visible_to_internal,visible_to_external,active,display_order").single();
   if (result.error || !result.data) return NextResponse.json({ error: "No fue posible guardar la referencia institucional." }, { status: 500 });
-  const resolved = await resolveDocuments(admin, [result.data as ItemRow], true);
+  const resolved = await resolveDocuments(admin, [result.data as ItemRow], false);
   return NextResponse.json({ item: mapItem(result.data as ItemRow, resolved.documents, resolved.versions, resolved.availableFileIds, resolved.lifecycle) });
 }
 

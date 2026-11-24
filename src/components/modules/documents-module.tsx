@@ -24,7 +24,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { AuthorizedDocumentPreview, DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { clearHomeImages } from "./home-institutional-images";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
 import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
@@ -34,7 +35,6 @@ import {
 } from "@/lib/configuration-data";
 import {
   getDocumentPermissions,
-  getDocumentPreviewVersions,
   getWorkingVersion,
   isOperationalDocument,
   documentAdvancedActionsEnabled,
@@ -56,7 +56,7 @@ import {
 import type { ActiveSession } from "@/lib/session-data";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { documentVersionLabel } from "@/lib/document-replacement";
-import { loadStoredControlledDocument, restoreStoredDocument } from "@/lib/document-storage";
+import { loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -89,6 +89,8 @@ interface DocumentsModuleProps {
   focusId?: string;
   onControlledDocumentsChange: (documents: ControlledDocument[]) => void;
   session: ActiveSession;
+  liveCatalog?: boolean;
+  cache?: ReturnType<typeof createDocumentCatalogCache>;
 }
 
 function canReadControlledCatalog(session: ActiveSession) {
@@ -100,29 +102,60 @@ function canReadControlledCatalog(session: ActiveSession) {
   );
 }
 
-export function InitialDocumentPage({ documents, pending, session }: {
-  documents: ControlledDocument[]; pending: boolean; session: ActiveSession;
-}) {
-  const [opened, setOpened] = useState<ControlledDocument | null>(null);
-  if (!canReadControlledCatalog(session)) return null;
-  const visible = documents.filter(document => getDocumentPreviewVersions(document, session).length > 0);
-  return <>
-    {pending && visible.length > 0 ? <section className="document-control-table-wrap" aria-label="Primeros documentos autorizados">
-      <p role="status">Primeros documentos disponibles. La búsqueda, los filtros y los totales requieren el catálogo completo.</p>
-      <table className="document-control-table">
-        <thead><tr><th>Código</th><th>Documento</th><th>Consulta</th></tr></thead>
-        <tbody>{visible.map(document => <tr key={document.id}>
-          <td>{document.code}</td><td>{document.name}</td>
-          <td><button type="button" className="button button-secondary" onClick={() => setOpened(document)}>Vista rápida</button></td>
-        </tr>)}</tbody>
-      </table>
-    </section> : null}
-    {opened ? <AuthorizedDocumentPreview document={opened} session={session} activeOnly onClose={() => setOpened(null)} /> : null}
-  </>;
+type CachedRows<T> = Map<string, { value: T; time: number }>;
+export function createDocumentCatalogCache() {
+  return {
+    index: new Map() as CachedRows<DocumentIndexEntry[]>,
+    lists: new Map() as CachedRows<ControlledDocument[]>,
+    current: new Map() as CachedRows<Set<string>>,
+  };
 }
 
-export function DocumentsModule({
-  controlledDocuments,
+function useCatalogRead<T>(cache: CachedRows<T>, key: string, load: (signal: AbortSignal, key: string) => Promise<T>) {
+  const [state, setState] = useState<{ key: string; error?: string; value?: T } | null>(null);
+  useEffect(() => {
+    if (!key) return;
+    const saved = cache.get(key);
+    const controller = new AbortController();
+    const fresh = saved && Date.now() - saved.time < 60_000;
+    const result = fresh ? Promise.resolve(saved.value) : load(controller.signal, key);
+    void result.then(value => {
+      if (controller.signal.aborted) return;
+      if (!fresh) cache.set(key, { value, time: Date.now() });
+      setState({ key, value });
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setState({ key, error: error instanceof Error ? error.message : "Consulta documental no disponible." });
+    });
+    return () => controller.abort();
+  }, [cache, key, load]);
+  if (!key) return null;
+  if (state?.key === key) return state;
+  return null;
+}
+
+function loadCatalogSelection(signal: AbortSignal, key: string) {
+  const [processIds, typeId] = JSON.parse(key) as [string[] | null, string | null, number];
+  return loadStoredControlledDocuments({ processIds: processIds ?? undefined, typeId: typeId ?? undefined, signal });
+}
+
+export function DocumentsModule(props: DocumentsModuleProps) {
+  if (props.focusId && props.liveCatalog) return <FocusedCatalog key={props.focusId} {...props} focusId={props.focusId} />;
+  return <DocumentCatalog {...props} />;
+}
+
+function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
+  const [cache] = useState<CachedRows<ControlledDocument>>(() => new Map());
+  const load = useCallback(() => loadStoredControlledDocument(props.focusId), [props.focusId]);
+  const result = useCatalogRead(cache, props.focusId, load);
+  if (result?.error) return <p role="alert">{result.error}</p>;
+  if (!result?.value) return <p role="status">Consultando expediente…</p>;
+  return <DocumentCatalog {...props} controlledDocuments={[result.value]} />;
+}
+
+function DocumentCatalog({
+  controlledDocuments: suppliedDocuments,
+  liveCatalog = false,
+  cache,
   forms,
   focusId,
   onControlledDocumentsChange,
@@ -133,7 +166,18 @@ export function DocumentsModule({
   const authorizedProcesses = processCatalog.filter((process) =>
     !isGroupedDocumentProcess(process.id) && getAuthorizedDocumentProcessIds(process.id, canReadProcess).length > 0,
   );
-  const focusedDocument = controlledDocuments.find((document) => document.id === focusId && canReadProcess(document.processId));
+  const remote = liveCatalog;
+  const [refresh, setRefresh] = useState(0);
+  const [localCache] = useState(createDocumentCatalogCache);
+  const { index: indexCache, lists: listCache, current: currentCache } = cache ?? localCache;
+  const invalidate = () => {
+    indexCache.clear();
+    listCache.clear();
+    currentCache.clear();
+    setRefresh(previous => previous + 1);
+  };
+  const index = useCatalogRead(indexCache, remote && canViewControlledDocuments ? "index-" + refresh : "", loadDocumentIndex);
+  const focusedDocument = suppliedDocuments.find((document) => document.id === focusId && canReadProcess(document.processId));
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(
     focusedDocument ? getPrimaryDocumentProcessId(focusedDocument.processId) : authorizedProcesses[0]?.id ?? "",
@@ -148,13 +192,13 @@ export function DocumentsModule({
   const [selectedTypeId, setSelectedTypeId] = useState(focusedDocument?.documentTypeId ?? "processes");
   const [selectedFormId, setSelectedFormId] = useState<string | null>(focusedDocument?.appFormId ?? null);
   const [formView, setFormView] = useState<FormView>("dashboard");
-  const [organizationSources, setOrganizationSources] = useState<ProcessOrganizationSource[]>([]);
+  const [organizationSources, setOrganizationSources] = useState<ProcessOrganizationSource[] | null>(null);
   const loadOrganizationSources = useCallback(async () => {
     try { setOrganizationSources(await loadProcessOrganizationSources()); }
-    catch { setOrganizationSources([]); }
+    catch { setOrganizationSources(null); }
   }, []);
   useEffect(() => { void Promise.resolve().then(loadOrganizationSources); }, [loadOrganizationSources]);
-  const operationalDocuments = controlledDocuments.filter((document) => isOperationalDocument(document) && canReadProcess(document.processId));
+
   const canViewMasterList = canViewControlledDocuments && documentAdvancedActionsEnabled && processCatalog.some(
     (process) => getDocumentPermissions(session, process.id).masterList,
   );
@@ -167,7 +211,7 @@ export function DocumentsModule({
         (!normalized ||
           [process.id, process.name].some((value) =>
             value.toLocaleLowerCase("es").includes(normalized),
-          )),
+          ) || (index?.value ?? []).some(doc => !doc.deleted && getDocumentProcessIds(process.id).includes(doc.processId) && canReadProcess(doc.processId) && [doc.code, doc.title, doc.description].some(value => value.toLocaleLowerCase("es").includes(normalized)))),
     );
   })();
 
@@ -179,6 +223,25 @@ export function DocumentsModule({
     documentTypeCatalog[0];
   const selectedPermissions = getDocumentPermissions(session, selected?.id ?? "");
   const selectedDocumentProcessIds = selected ? getAuthorizedDocumentProcessIds(selected.id, canReadProcess) : [];
+  const master = documentsView === "master";
+  const [masterProcess, setMasterProcess] = useState<string | null>(null);
+  const masterIndex = index?.value;
+  const loadMasterIds = useCallback((signal: AbortSignal) =>
+    loadMasterCurrentIds(signal, (masterIndex ?? []).filter(row => !row.deleted && !row.obsolete && getDocumentPermissions(session, row.processId).masterList).map(row => row.id)),
+    [masterIndex, session]);
+  const currentIds = useCatalogRead(currentCache, master && remote && masterIndex ? "current-" + refresh : "", loadMasterIds);
+  const masterScope = masterProcess ? getAuthorizedDocumentProcessIds(masterProcess, id => canReadProcess(id) && getDocumentPermissions(session, id).masterList) : [];
+
+  const listKey = remote && ((master && masterProcess) || documentsView === "type")
+    ? JSON.stringify([master ? masterScope : selectedDocumentProcessIds, master ? null : selectedType.id, refresh]) : "";
+  const list = useCatalogRead(listCache, listKey, loadCatalogSelection);
+  const controlledDocuments = remote ? list?.value ?? [] : suppliedDocuments;
+  const activeIndex = remote ? index?.value?.filter(doc => !doc.deleted && canReadProcess(doc.processId)) :
+    suppliedDocuments.filter(doc => canReadProcess(doc.processId) && isOperationalDocument(doc)).map(doc => ({ processId: doc.processId, typeId: doc.documentTypeId }));
+  function updateDocuments(documents: ControlledDocument[]) {
+    if (remote) { clearHomeImages(session); invalidate(); }
+    else onControlledDocumentsChange(documents);
+  }
   const reviewableDocuments = controlledDocuments.filter(document => canReadProcess(document.processId) && (isOperationalDocument(document) || (getDocumentPermissions(session, document.processId).restore && document.versions.some(version => version.status === "pending"))));
   const typeDocuments = reviewableDocuments.filter(
     (document) =>
@@ -209,7 +272,7 @@ export function DocumentsModule({
   }
 
   function changeDocument(nextDocument: ControlledDocument) {
-    onControlledDocumentsChange(
+    updateDocuments(
       controlledDocuments.map((document) =>
         document.id === nextDocument.id ? nextDocument : document,
       ),
@@ -254,12 +317,15 @@ export function DocumentsModule({
       <section className="metric-grid" aria-label="Resumen documental">
         <DocumentMetric icon={<FileText size={18} />} label="Tipos documentales" value={8} tone="neutral" />
         <DocumentMetric icon={<BookOpenCheck size={18} />} label="Expedientes de proceso" value={authorizedProcesses.length} tone="success" />
-        <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={new Set(organizationSources.filter((source) => canReadProcess(source.processId)).map((source) => source.processId)).size} tone="warning" />
+        <DocumentMetric icon={<Workflow size={18} />} label="Organigramas cargados" value={organizationSources ? new Set(organizationSources.filter((source) => canReadProcess(source.processId)).map((source) => source.processId)).size : "—"} tone="warning" />
         <DocumentMetric icon={<Files size={18} />} label="Formularios activos" value={forms.filter((form) => form.status === "Activo" && canReadProcess(form.processId)).length} tone="danger" />
       </section>
 
+      {(index?.error || list?.error || currentIds?.error) && <p role="alert">{index?.error || list?.error || currentIds?.error} <button type="button" onClick={invalidate}>Reintentar</button></p>}
       {documentsView === "master" ? (
         <MasterDocumentList
+          index={remote ? index?.value : undefined} currentIds={currentIds?.value} live={remote}
+          selectedProcessId={masterProcess} setSelectedProcessId={setMasterProcess} pending={remote && !list?.value}
           documents={controlledDocuments.filter((document) => canReadProcess(document.processId))}
           session={session}
           onChangeDocument={changeDocument}
@@ -273,7 +339,7 @@ export function DocumentsModule({
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Buscar proceso"
+                placeholder="Buscar proceso o documento"
                 aria-label="Buscar proceso documental"
               />
             </label>
@@ -282,7 +348,7 @@ export function DocumentsModule({
           <div className="document-process-list">
             {filtered.map((process) => {
               const processIds = getDocumentProcessIds(process.id);
-              const documentCount = operationalDocuments.filter(
+              const documentCount = activeIndex?.filter(
                 (document) => processIds.includes(document.processId),
               ).length;
               return (
@@ -299,7 +365,7 @@ export function DocumentsModule({
                     </small>
                   </span>
                   <span className="document-count-state">
-                    {documentCount} {documentCount === 1 ? "doc" : "docs"}
+                    {documentCount === undefined ? "—" : documentCount + (documentCount === 1 ? " doc" : " docs")}
                   </span>
                 </button>
               );
@@ -308,21 +374,19 @@ export function DocumentsModule({
         </div>
 
         <div className={`documents-detail-panel ${documentsView === "process" ? "documents-detail-panel-home" : "documents-detail-panel-focus"}`}>
-          {!selected ? <p role="status">No hay procesos autorizados para esta búsqueda.</p> : null}
+          {!selected ? <p role="status">{remote && !index?.value && query ? "Consultando coincidencias en el catálogo…" : "No hay procesos autorizados para esta búsqueda."}</p> : null}
           {selected && documentsView === "process" ? (
             <ProcessDocumentHome
               process={selected}
-              documents={operationalDocuments.filter(
-                (document) => selectedDocumentProcessIds.includes(document.processId),
-              )}
+              documents={activeIndex?.filter(document => selectedDocumentProcessIds.includes(document.processId))}
               permissions={selectedPermissions}
-              source={selectedPermissions.view ? organizationSources.find((source) => source.processId === selected.id) : undefined}
+              source={selectedPermissions.view ? organizationSources?.find((source) => source.processId === selected.id) : undefined}
               onOrganizationSaved={loadOrganizationSources}
               onOpenType={openDocumentType}
             />
           ) : null}
 
-          {selected && documentsView === "type" ? (
+          {selected && documentsView === "type" ? (remote && !list?.value ? <p role="status">Consultando documentos del proceso…</p> :
             <DocumentTypeWorkspace
               process={selected}
               documentType={selectedType}
@@ -333,7 +397,7 @@ export function DocumentsModule({
               onOpenForm={openForm}
               onChangeDocument={changeDocument}
               onAddDocument={(document) =>
-                onControlledDocumentsChange([...controlledDocuments.filter(item => item.id !== document.id), document])
+                updateDocuments([...controlledDocuments.filter(item => item.id !== document.id), document])
               }
             />
           ) : null}
@@ -365,7 +429,7 @@ function ProcessDocumentHome({
   onOpenType,
 }: {
   process: ProcessCatalogItem;
-  documents: ControlledDocument[];
+  documents?: { typeId: string }[];
   permissions: ReturnType<typeof getDocumentPermissions>;
   source?: ProcessOrganizationSource;
   onOrganizationSaved: () => Promise<void> | void;
@@ -393,8 +457,8 @@ function ProcessDocumentHome({
         <div className="document-type-list">
           {documentTypeCatalog.map((documentType) => {
             const Icon = documentTypeIcons[documentType.id] ?? FileText;
-            const count = documents.filter(
-              (document) => document.documentTypeId === documentType.id,
+            const count = documents?.filter(
+              (document) => document.typeId === documentType.id,
             ).length;
             return (
               <button
@@ -407,7 +471,7 @@ function ProcessDocumentHome({
                   <strong>{documentType.name}</strong>
                   <small>{documentType.description}</small>
                 </span>
-                <span className="document-type-count">{count}</span>
+                <span className="document-type-count">{count ?? "—"}</span>
                 <ChevronRight size={15} className="document-type-arrow" />
               </button>
             );
@@ -429,6 +493,7 @@ function ProcessDocumentHome({
 type MasterStatusFilter = "current" | "review" | "obsolete" | "all" | "deleted";
 
 function MasterDocumentList({
+  index, currentIds, live, pending, selectedProcessId, setSelectedProcessId,
   documents,
   session,
   onChangeDocument,
@@ -436,8 +501,9 @@ function MasterDocumentList({
   documents: ControlledDocument[];
   session: ActiveSession;
   onChangeDocument: (document: ControlledDocument) => void;
+  live: boolean; pending: boolean; index?: DocumentIndexEntry[]; currentIds?: Set<string>;
+  selectedProcessId: string | null; setSelectedProcessId: (id: string | null) => void;
 }) {
-  const [selectedProcessId, setSelectedProcessId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [processFilter, setProcessFilter] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
@@ -482,10 +548,10 @@ function MasterDocumentList({
         <header className="master-list-header"><div><span className="detail-eyebrow"><TableProperties size={14} /> Información Documentada</span><h3>Lista Maestra</h3><p>Documentos vigentes agrupados por proceso y calculados desde la fuente documental.</p></div></header>
         <label className="panel-search master-list-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar proceso" aria-label="Buscar proceso en Lista Maestra" /></label>
         <div className="master-process-grid">
-          {authorizedProcesses.filter((process) => !query.trim() || process.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))).map((process) => {
+          {authorizedProcesses.filter((process) => !query.trim() || process.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")) || index?.some(d => !d.deleted && authorizedProcessIds.has(d.processId) && getDocumentProcessIds(process.id).includes(d.processId) && [d.title, d.code, d.description].some(v => v.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))))).map((process) => {
             const processIds = getDocumentProcessIds(process.id);
-            const count = scopedDocuments.filter((document) => processIds.includes(document.processId) && !document.lifecycle?.isDeleted && document.lifecycle?.status !== "obsolete" && document.versions.some((version) => version.status === "current")).length;
-            return <button key={process.id} type="button" onClick={() => { setSelectedProcessId(process.id); setProcessFilter(process.id); setQuery(""); }}><span><strong>{process.name}</strong><small>{process.id}</small></span><span>{count} documentos <ChevronRight size={15} /></span></button>;
+            const count = live ? (index && currentIds ? index.filter(d => !d.deleted && !d.obsolete && authorizedProcessIds.has(d.processId) && processIds.includes(d.processId) && currentIds.has(d.id)).length : "—") : scopedDocuments.filter((document) => processIds.includes(document.processId) && !document.lifecycle?.isDeleted && document.lifecycle?.status !== "obsolete" && document.versions.some((version) => version.status === "current")).length;
+            return <button key={process.id} type="button" onClick={() => { setSelectedProcessId(process.id); setProcessFilter(process.id); if (process.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"))) setQuery(""); }}><span><strong>{process.name}</strong><small>{process.id}</small></span><span>{count} documentos <ChevronRight size={15} /></span></button>;
           })}
         </div>
       </section>
@@ -497,7 +563,7 @@ function MasterDocumentList({
     <section className="master-list-panel">
       <header className="master-list-header master-list-detail-header">
         <button className="icon-button" type="button" onClick={() => { setSelectedProcessId(null); setProcessFilter(""); setQuery(""); }} title="Volver a procesos" aria-label="Volver a procesos"><ArrowLeft size={17} /></button>
-        <div><span className="detail-eyebrow"><TableProperties size={14} /> Lista Maestra</span><h3>{selectedProcess?.name ?? "Documentos"}</h3><p>{filteredDocuments.length} documentos encontrados</p></div>
+        <div><span className="detail-eyebrow"><TableProperties size={14} /> Lista Maestra</span><h3>{selectedProcess?.name ?? "Documentos"}</h3><p>{pending ? "Consultando documentos…" : filteredDocuments.length + " documentos encontrados"}</p></div>
       </header>
       <div className="master-list-filters">
         <label className="panel-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar código, nombre, descripción o proceso" /></label>
@@ -509,7 +575,7 @@ function MasterDocumentList({
       </div>
       <div className="document-control-table-wrap master-list-table-wrap"><table className="document-control-table master-list-table"><thead><tr><th>Código</th><th>Documento</th><th>Tipo</th><th>Versión</th><th>Fecha</th><th>Estado</th><th>Responsable</th><th>Historial</th></tr></thead><tbody>
         {filteredDocuments.map((document) => { const version = getWorkingVersion(document); const type = documentTypeCatalog.find((item) => item.id === document.documentTypeId); const status = document.lifecycle?.isDeleted ? "Eliminado" : document.lifecycle?.status === "obsolete" ? "Obsoleto" : version?.status === "current" ? "Vigente" : "En revisión"; return <tr key={document.id}><td><span className="document-code-chip">{document.code}</span></td><td><strong>{document.name}</strong></td><td>{type?.name ?? document.documentTypeId}</td><td>{documentVersionLabel(version)}</td><td>{version ? formatDate(version.modifiedAt) : "—"}</td><td><span className={`document-status document-status-${document.lifecycle?.isDeleted ? "rejected" : version?.status ?? "draft"}`}>{status}</span></td><td>{document.owner}</td><td>{getDocumentPermissions(session, document.processId).history ? <button className="document-icon-action" type="button" onClick={() => setHistoryId(document.id)} title="Historial" aria-label={`Historial de ${document.name}`}><History size={15} /></button> : "—"}</td></tr>; })}
-        {!filteredDocuments.length ? <tr className="document-empty-row"><td colSpan={8}><FileText size={22} /><strong>Sin documentos para estos filtros</strong><span>Ajusta el estado, proceso o búsqueda.</span></td></tr> : null}
+        {!pending && !filteredDocuments.length ? <tr className="document-empty-row"><td colSpan={8}><FileText size={22} /><strong>Sin documentos para estos filtros</strong><span>Ajusta el estado, proceso o búsqueda.</span></td></tr> : null}
       </tbody></table></div>
       {history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(await loadStoredControlledDocument(history.id)); setHistoryId(null); }} /> : null}
     </section>
@@ -728,7 +794,7 @@ function DocumentMetric({
 }: {
   icon: React.ReactNode;
   label: string;
-  value: number;
+  value: number | string;
   tone: "neutral" | "success" | "warning" | "danger";
 }) {
   return (

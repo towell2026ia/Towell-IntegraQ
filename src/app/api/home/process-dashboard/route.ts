@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { aggregateProcessHome, text, type HomeRecords, type HomeRow } from "@/lib/home-process-data";
 import { emptyHomeDashboardFilters } from "@/lib/home-dashboard";
-import { institutionalImageTitles } from "@/lib/home-institutional-images";
+import { findInstitutionalImages, institutionalImageTitles } from "@/lib/home-institutional-images";
 import type { ControlledDocument } from "@/lib/document-control-data";
 
 export async function GET(request: Request) {
@@ -15,23 +15,26 @@ export async function GET(request: Request) {
     const client = await createClient();
     const profile = await client.from("profiles").select("organization_id,user_type,status,workspace_mode").eq("id", session.authUserId).maybeSingle();
     if (profile.error || !profile.data?.organization_id || profile.data.status !== "active" || !["administrator", "internal"].includes(profile.data.user_type) || profile.data.workspace_mode === "demo") return NextResponse.json({ error: "La cuenta no tiene un ámbito productivo válido." }, { status: 403 });
-    const admin = createAdminClient();
+    const url = new URL(request.url);
+    const imagesOnly = url.searchParams.has("image") || url.searchParams.get("view") === "images";
+    const admin = imagesOnly && profile.data.user_type === "administrator" ? client : createAdminClient();
     type Filter = [string, "eq" | "in" | "is", unknown];
-    async function read(table: string, columns: string, filters: Filter[] = [], order = "id", authenticated = false): Promise<HomeRow[]> {
+    async function read(table: string, columns: string, filters: Filter[] = [], order = "id", authenticated = false, match?: string): Promise<HomeRow[]> {
       const rows: HomeRow[] = []; let total: number | null = null;
       for (;;) {
-        let query = (authenticated ? client : admin).from(table).select(columns, { count: "exact" });
+        let query = (authenticated ? client : admin).from(table).select(columns, !match && rows.length === 0 ? { count: "exact" } : {});
         for (const [column, op, value] of filters) query = op === "in" ? query.in(column, value as string[]) : op === "is" ? query.is(column, value as null) : query.eq(column, value);
+        if (match) query = query.or(match);
         query = query.order(order);
         if (table === "indicator_definition_processes") query = query.order("process_id");
         const page = await query.range(rows.length, rows.length + 499);
-        if (page.error || page.count === null || (total !== null && total !== page.count)) throw new Error(`HOME_SOURCE_${table}`);
-        total = page.count; const data = (page.data ?? []) as unknown as HomeRow[];
-        if (!data.length && rows.length < total) throw new Error("HOME_INCOMPLETE_PAGE");
+        if (page.error || (!match && rows.length === 0 && page.count === null)) throw new Error("HOME_SOURCE_" + table + (match ? "_lookup_" : "_rows_") + (page.error?.code ?? "COUNT"));
+        total = total ?? page.count; const data = (page.data ?? []) as unknown as HomeRow[];
+        if (!data.length && total !== null && rows.length < total) throw new Error("HOME_INCOMPLETE_PAGE");
         rows.push(...data);
         const keys = rows.map(r => r.id ?? `${r.indicator_id ?? ""}:${r.process_id ?? ""}:${r.document_id ?? ""}`);
         if (new Set(keys).size !== rows.length) throw new Error("HOME_CHANGED_DURING_PAGINATION");
-        if (rows.length >= total) return rows;
+        if ((total !== null && rows.length >= total) || !data.length) return rows;
       }
     }
     async function children(table: string, columns: string, column: string, ids: string[], order = "id", authenticated = false) {
@@ -45,39 +48,85 @@ export async function GET(request: Request) {
     const allProcesses = await read("processes", "id,name,organization_id,process_owner_user_id", [["organization_id", "eq", org], ["active", "eq", true]]);
     const processes = allProcesses.filter(p => administrator || session.assignedProcessIds.includes(text(p, "id")));
     const processIds = processes.map(p => text(p, "id"));
-    const allDocuments = await children("controlled_documents", "id,process_id,organization_id,code,title,document_type_id,active,deleted_at", "process_id", allProcesses.map(p => text(p, "id")));
-    const ownedDocuments = allDocuments.filter(d => d.organization_id === org || d.organization_id === null);
-    // Only exact institutional titles are shared; operational documents still require module/process access.
-    const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\.[^.]+$/, "").trim().toLocaleLowerCase("es");
-    const versions = await children("controlled_document_versions", "id,document_id,revision,status,file_id,file_name,uploaded_by,validator_id,updated_at", "document_id", ownedDocuments.map(d => text(d, "id")));
-    const institutional = ownedDocuments.filter(d => institutionalImageTitles.some(title => normalize(title) === normalize(text(d, "title")) || versions.some(v => v.document_id === d.id && normalize(title) === normalize(text(v, "file_name")))) && d.active === true && !d.deleted_at);
-    const documents = canPerformModuleAction(session, "documents", "view") ? (await children("controlled_documents", "id,process_id,organization_id,code,title,document_type_id,active,deleted_at", "process_id", processIds, "id", true)).filter(d => d.organization_id === org || d.organization_id === null) : [];
-    const documentIds = [...new Set([...documents, ...institutional].map(d => text(d, "id")))];
-    const lifecycle = await children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", documentIds, "document_id");
-    const imageDocuments: ControlledDocument[] = [];
-    const imageUrls: Record<string, string> = {};
-    for (const d of institutional) {
-      if (lifecycle.some(l => l.document_id === d.id && (l.is_deleted || l.lifecycle_status !== "active"))) continue;
-      // Institutional tiles are informational, not approval of the controlled document.
-      // Show the unique pending image if no current version exists; preserve its real status.
-      const current = versions.filter(v => v.document_id === d.id && v.status === "current");
-      const pending = versions.filter(v => v.document_id === d.id && v.status === "pending");
-      const candidates = current.length ? current : pending;
-      if (candidates.length !== 1) continue;
-      const v = candidates[0];
-      const files = await read("file_objects", "id,bucket_id,object_path,mime_type", [["id", "eq", v.file_id], ["deleted_at", "is", null]]);
-      const file = files[0];
-      const fileName = text(v, "file_name");
-      const objectPath = file ? text(file, "object_path") : "";
-      const imageExtension = /\\.(png|jpe?g|webp|gif)$/i.test(fileName) && /\\.(png|jpe?g|webp|gif)$/i.test(objectPath);
-      if (!file || !(text(file, "mime_type").startsWith("image/") || (text(file, "mime_type") === "application/octet-stream" && imageExtension))) continue;
-      const signed = await admin.storage.from(text(file, "bucket_id")).createSignedUrl(text(file, "object_path"), 300);
-      if (signed.error) throw new Error("HOME_IMAGE_UNAVAILABLE");
-      imageUrls[text(v, "id")] = signed.data.signedUrl;
-      imageDocuments.push({ id: text(d, "id"), processId: text(d, "process_id"), code: text(d, "code"), name: text(d, "title"), documentTypeId: text(d, "document_type_id"), owner: "", versions: [{ id: text(v, "id"), revision: Number(v.revision), status: v.status === "current" ? "current" : "pending", fileName: text(v, "file_name"), uploadedBy: "", validator: "", modifiedAt: text(v, "updated_at"), changeReason: "" }] });
+    if (imagesOnly) {
+      const scopedProcesses = allProcesses.map(p => text(p, "id"));
+      const normalized = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\.[^.]+$/, "").trim().toLocaleLowerCase("es");
+      // SQL narrows candidates; exact normalized matching below retains the institutional allowlist.
+      const possible = (column: string) => institutionalImageTitles.map(title =>
+        column + ".ilike.*" + normalized(title).replace(/[aeiou]/g, "_") + "*").join(",");
+      const projection = "id,organization_id,process_id,code,title,document_type_id,active,deleted_at";
+      const byProcess: Filter[] = [["process_id", "in", scopedProcesses], ["active", "eq", true], ["deleted_at", "is", null]];
+      // Page the organization scope before checking filenames. Embedding a filtered
+      // versions relation in the entire organization can evaluate RLS for every version
+      // in a single statement. The browser receives only the four institutional slots.
+      const namedByVersion: HomeRow[] = [];
+      const [scopeRows, namedDocs] = await Promise.all([
+        read("controlled_documents", "id", byProcess),
+        read("controlled_documents", projection, byProcess, "id", false, possible("title")),
+      ]);
+      const idsInScope = scopeRows.map(row => text(row, "id"));
+      async function matchBatch(ids: string[]) {
+        const filenames = await read("controlled_document_versions", "id,document_id,file_name", [["document_id", "in", ids]], "id", false, possible("file_name"));
+        namedByVersion.push(...filenames);
+      }
+      for (let offset = 0; offset < idsInScope.length; offset += 200) {
+        const batches = [idsInScope.slice(offset, offset + 100), idsInScope.slice(offset + 100, offset + 200)];
+        await Promise.all(batches.filter(batch => batch.length).map(matchBatch));
+      }
+      const exactTitle = (value: string) => institutionalImageTitles.some(title => normalized(title) === normalized(value));
+      const namedIds = new Set(namedDocs.map(d => d.id));
+      const otherIds = [...new Set(namedByVersion.filter(v => exactTitle(text(v, "file_name")) && !namedIds.has(v.document_id)).map(v => text(v, "document_id")))];
+      const matched = otherIds.length ? await children("controlled_documents", projection, "id", otherIds) : [];
+      const institutional = [...new Map([...namedDocs.filter(d => exactTitle(text(d, "title"))), ...matched].map(d => [d.id, d])).values()]
+        .filter(d => d.organization_id === org || d.organization_id === null);
+      const ids = institutional.map(d => text(d, "id"));
+      const [versions, lifecycle] = await Promise.all([
+        children("controlled_document_versions", "id,document_id,revision,status,file_id,file_name,updated_at", "document_id", ids),
+        children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", ids, "document_id"),
+      ]);
+      const imageDocuments: ControlledDocument[] = [];
+      const imageUrls: Record<string, string> = {};
+      const eligibleFiles = await children("file_objects", "id,bucket_id,object_path,mime_type,size_bytes,deleted_at", "id", [...new Set(versions.map(v => text(v, "file_id")).filter(Boolean))]);
+      const filesById = new Map(eligibleFiles.filter(f => !f.deleted_at).map(f => [f.id, f]));
+      const filesByVersion = new Map<string, HomeRow>();
+      for (const d of institutional) {
+        if (lifecycle.some(l => l.document_id === d.id && (l.is_deleted || l.lifecycle_status !== "active"))) continue;
+        // Institutional tiles are informational, not approval of the controlled document.
+        // Show the unique pending image if no current version exists; preserve its real status.
+        const current = versions.filter(v => v.document_id === d.id && v.status === "current");
+        const pending = versions.filter(v => v.document_id === d.id && v.status === "pending");
+        const candidates = current.length ? current : pending;
+        if (candidates.length !== 1) continue;
+        const v = candidates[0];
+        const file = filesById.get(v.file_id);
+        const fileName = text(v, "file_name");
+        const objectPath = file ? text(file, "object_path") : "";
+        const imageExtension = /\.(png|jpe?g|webp|gif)$/i.test(fileName) && /\.(png|jpe?g|webp|gif)$/i.test(objectPath);
+        if (!file || !(text(file, "mime_type").startsWith("image/") || (text(file, "mime_type") === "application/octet-stream" && imageExtension))) continue;
+        filesByVersion.set(text(v, "id"), file);
+        imageDocuments.push({ id: text(d, "id"), processId: text(d, "process_id"), code: text(d, "code"), name: text(d, "title"), documentTypeId: text(d, "document_type_id"), owner: "", versions: [{ id: text(v, "id"), revision: Number(v.revision), status: v.status === "current" ? "current" : "pending", fileName: text(v, "file_name"), sizeBytes: typeof file.size_bytes === "number" ? file.size_bytes : undefined, uploadedBy: "", validator: "", modifiedAt: text(v, "updated_at"), changeReason: "" }] });
+      }
+      // Only sign the unique, displayable approved version for each institutional slot.
+      const slots = findInstitutionalImages(imageDocuments, session, true);
+      const target = url.searchParams.get("image");
+      await Promise.all(slots.map(async ({ version }) => {
+        if (!version || (target && version.id !== target)) return;
+        const file = filesByVersion.get(version.id)!;
+        const signed = await admin.storage.from(text(file, "bucket_id")).createSignedUrl(text(file, "object_path"), 300);
+        if (signed.error) throw new Error("HOME_IMAGE_UNAVAILABLE");
+        imageUrls[version.id] = signed.data.signedUrl;
+      }));
+      const headers = { "Cache-Control": "private, no-store" };
+      if (url.searchParams.has("image")) {
+        const signedUrl = imageUrls[url.searchParams.get("image")!];
+        return signedUrl ? NextResponse.json({ signedUrl }, { headers }) : NextResponse.json({ error: "Imagen institucional no disponible." }, { status: 404, headers });
+      }
+      return NextResponse.json({ imageDocuments, imageUrls }, { headers });
     }
-    const url = new URL(request.url);
-    if (url.searchParams.has("image")) { const signedUrl = imageUrls[url.searchParams.get("image")!]; return signedUrl ? NextResponse.json({ signedUrl }, { headers: { "Cache-Control": "private, no-store" } }) : NextResponse.json({ error: "Imagen institucional no disponible." }, { status: 404 }); }
+    const documents = canPerformModuleAction(session, "documents", "view") ? (await children("controlled_documents", "id,process_id,organization_id,code,title,document_type_id,active,deleted_at", "process_id", processIds, "id", true)).filter(d => d.organization_id === org || d.organization_id === null) : [];
+    const documentIds = [...new Set(documents.map(d => text(d, "id")))];
+    const lifecycle = await children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", documentIds, "document_id");
+    const versions = await children("controlled_document_versions", "id,document_id,revision,status,uploaded_by,validator_id,updated_at", "document_id", documentIds);
     const indicators = canPerformModuleAction(session, "indicators", "view") ? await read("indicator_definitions", "id,code,name,process_id,active,leader_id,leader_name,metric_label,periodicity", [["organization_id", "eq", org], ["workspace_mode", "eq", "production"], ["active", "eq", true]], "id", true) : [];
     const relations = await children("indicator_definition_processes", "indicator_id,process_id", "indicator_id", indicators.map(d => text(d, "id")), "indicator_id");
     const scopedIndicators = indicators.filter(d => processIds.includes(text(d, "process_id")) || relations.some(r => r.indicator_id === d.id && processIds.includes(text(r, "process_id"))));
@@ -107,6 +156,8 @@ export async function GET(request: Request) {
     }
     const filters = { ...emptyHomeDashboardFilters };
     for (const key of Object.keys(filters) as Array<keyof typeof filters>) if (url.searchParams.has(key)) filters[key] = url.searchParams.get(key)!;
-    return NextResponse.json({ dashboard: aggregateProcessHome(session, records, filters), imageDocuments, imageUrls }, { headers: { "Cache-Control": "private, no-store" } });
-  } catch { return NextResponse.json({ error: "No fue posible consultar los datos autorizados de Inicio. Reintenta al actualizar la pantalla." }, { status: 503 }); }
+    return NextResponse.json({ dashboard: aggregateProcessHome(session, records, filters) }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    if (error instanceof Error && /^HOME_[A-Za-z0-9_]+$/.test(error.message)) console.warn(error.message);
+    return NextResponse.json({ error: "No fue posible consultar los datos autorizados de Inicio. Reintenta al actualizar la pantalla." }, { status: 503 }); }
 }

@@ -39,7 +39,8 @@ import { CorrectiveActionsModule } from "@/components/modules/corrective-actions
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { CustomersModule } from "@/components/modules/customers-module";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
-import { DocumentsModule, InitialDocumentPage } from "@/components/modules/documents-module";
+import { clearHomeImages } from "@/components/modules/home-institutional-images";
+import { createDocumentCatalogCache, DocumentsModule } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
 import { useHomeProcessData } from "@/lib/use-home-process-data";
@@ -69,7 +70,6 @@ import {
 } from "@/lib/access-policy";
 import {
   buildInitialControlledDocuments,
-  getDocumentPreviewVersions,
   mergeInitialControlledDocuments,
   synchronizeAppFormDocuments,
   type ControlledDocument,
@@ -185,6 +185,7 @@ export function IntegraQWorkspace({
 }) {
   const serializedSession = JSON.stringify(incomingSession);
   const session = useMemo(() => JSON.parse(serializedSession) as ActiveSession, [serializedSession]);
+  useEffect(() => () => clearHomeImages(session), [session]);
   const sessionKey=sessionAccessKey(session);
   const externalScope=isExternalUser(session);
   const demoMode = isDemoSession(session);
@@ -223,12 +224,11 @@ export function IntegraQWorkspace({
   const [navigationQuery, setNavigationQuery] = useState("");
   const [actions, setActions] = useState<CorrectiveAction[]>(() => demoMode ? demoCorrectiveActions : []);
   const [assets, setAssets] = useState<MeasurementAsset[]>(demoMeasurementAssets);
+  const [catalogCache] = useState(createDocumentCatalogCache);
   const [loadedDocuments, setControlledDocuments] = useState<ControlledDocument[]>(
     () => demoMode ? buildInitialControlledDocuments() : [],
   );
   const [documentLoad, setDocumentLoad] = useState<{ sessionKey: string; error: string | null } | null>(null);
-  const [firstDocuments, setFirstDocuments] = useState<{ sessionKey: string; retry: number; rows: ControlledDocument[] } | null>(null);
-  const [documentRetry, setDocumentRetry] = useState(0);
   const controlledDocuments = useMemo(
     () => demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error) ? loadedDocuments : [],
     [demoMode, documentLoad, sessionKey, loadedDocuments],
@@ -389,24 +389,20 @@ export function IntegraQWorkspace({
     window.localStorage.setItem("integraq.controlledDocuments.v1", JSON.stringify(loadedDocuments));
   }, [loadedDocuments, storageReady, demoMode]);
 
+  const needsGlobalDocuments = activeModule === "home-settings" || activeModule === "management-review";
   useEffect(() => {
-    if (!storageReady || demoMode) return;
-    let active = true;
-    void loadStoredControlledDocuments(rows => {
-      if (active) setFirstDocuments({ sessionKey, retry: documentRetry, rows });
-    })
-      .then((documents) => {
-        if (!active) return;
+    if (!storageReady || demoMode || !needsGlobalDocuments || externalScope) return;
+    const controller = new AbortController();
+    void loadStoredControlledDocuments({ signal: controller.signal }).then(documents => {
+      if (!controller.signal.aborted) {
         setControlledDocuments(documents);
         setDocumentLoad({ sessionKey, error: null });
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
-        setControlledDocuments([]);
-        setDocumentLoad({ sessionKey, error: error instanceof Error ? error.message : "No fue posible consultar el catálogo de Supabase." });
-      });
-    return () => { active = false; };
-  }, [storageReady, demoMode, sessionKey, documentRetry]);
+      }
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setDocumentLoad({ sessionKey, error: error instanceof Error ? error.message : "Error en la consulta documental." });
+    });
+    return () => controller.abort();
+  }, [storageReady, demoMode, sessionKey, needsGlobalDocuments, externalScope]);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -515,7 +511,7 @@ export function IntegraQWorkspace({
     () => buildHomeDashboard(homeSources),
     [homeSources],
   );
-  const productionHome = useHomeProcessData(session);
+  const productionHome = useHomeProcessData(session, undefined, activeModule === "home" || notificationsOpen);
   const homeDashboard = demoMode ? localHomeDashboard : productionHome.dashboard;
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
@@ -638,16 +634,19 @@ export function IntegraQWorkspace({
         </header>
 
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
-          {activeModule === "home" ? <HomeModule loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
+          {activeModule === "home" ? <HomeModule baseDashboard={productionHome.dashboard} loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
-          {activeModule === "home-settings" ? <HomeSettingsModule onChangeDocument={(updated) => setControlledDocuments(current => current.map(document => document.id === updated.id ? updated : document))} documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
+          {activeModule === "home-settings" ? <HomeSettingsModule onChangeDocument={(updated) => {
+            clearHomeImages(session);
+            catalogCache.index.clear();
+            catalogCache.lists.clear();
+            catalogCache.current.clear();
+            setControlledDocuments(current => current.map(document => document.id === updated.id ? updated : document));
+          }} documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
-          {activeModule === "documents" && !demoMode && firstDocuments?.sessionKey === sessionKey && firstDocuments.retry === documentRetry ? <InitialDocumentPage key={sessionKey} documents={firstDocuments.rows} pending={documentLoad?.sessionKey !== sessionKey || Boolean(documentLoad.error)} session={session} /> : null}
-          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey !== sessionKey && !(firstDocuments?.sessionKey === sessionKey && firstDocuments.retry === documentRetry && firstDocuments.rows.some(row => getDocumentPreviewVersions(row, session).length > 0)) ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
-          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey === sessionKey && documentLoad.error ? <section role="alert"><p>{documentLoad.error}</p><button type="button" onClick={() => { setDocumentLoad(null); setDocumentRetry(value => value + 1); }}>Reintentar</button></section> : null}
-          {activeModule === "documents" && (demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error)) ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
+          {activeModule === "documents" ? <DocumentsModule cache={catalogCache} liveCatalog={!demoMode} controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={sessionKey + (navigationTarget?.module === "documents" ? navigationTarget.id : "index")} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
           {activeModule === "indicators" ? <IndicatorsModule captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
           {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{riskLoadError || "Consultando riesgos autorizados en Supabase…"}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}

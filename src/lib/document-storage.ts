@@ -410,9 +410,19 @@ const detailColumns = `
   )
 `;
 
-const firstDocumentPageSize = 12;
+export interface CatalogScope {
+  processIds?: string[];
+  typeId?: string;
+  signal?: AbortSignal;
+  pageSize?: number;
+}
+export interface DocumentIndexEntry {
+  id: string; processId: string; typeId: string; title: string; code: string; description: string;
+  deleted: boolean; obsolete: boolean;
+}
 
-type CatalogTable = "controlled_documents" | "controlled_document_versions" | "document_lifecycle" | "profiles";
+
+type CatalogTable = "controlled_documents" | "controlled_document_versions" | "document_lifecycle" | "profiles" | "v_document_master_list";
 
 async function readCatalogRows<T>(
   client: ReturnType<typeof createClient>,
@@ -420,7 +430,7 @@ async function readCatalogRows<T>(
   columns: string,
   key: string,
   filter?: { column: string; ids: string[] },
-  firstPage?: (rows: T[]) => Promise<void>,
+  scope: CatalogScope = {},
 ): Promise<T[]> {
   const rows: T[] = [];
   const seen = new Set<string>();
@@ -433,24 +443,16 @@ async function readCatalogRows<T>(
     }
   }
   let total: number | null = null;
-  if (firstPage && !filter) {
-    const { data, error } = await client.from(table).select(columns).order(key, { ascending: true }).range(0, firstDocumentPageSize - 1);
-    if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code}, ${table}): ${errorMessage(error)}`);
-    append((data ?? []) as unknown as T[]);
-    if (rows.length) await firstPage([...rows]);
-    // Count after the first usable page. This also handles an empty catalog and server-side page caps.
-    const head = await client.from(table).select(key, { count: "exact", head: true });
-    if (head.error) throw new Error(`No se pudo verificar el total (${head.error.code}): ${errorMessage(head.error)}`);
-    total = head.count;
-    if (total === null || rows.length > total) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
-  }
   while (total === null || rows.length < total) {
-    let query = client.from(table).select(columns, { count: "exact" });
+    let query = client.from(table).select(columns, rows.length === 0 ? { count: "exact" } : {});
     if (filter) query = query.in(filter.column, filter.ids);
-    const { data, error, count } = await query.order(key, { ascending: true }).range(rows.length, rows.length + 499);
+    if (table === "controlled_documents" && scope.processIds) query = query.in("process_id", scope.processIds);
+    if (table === "controlled_documents" && scope.typeId) query = query.eq("document_type_id", databaseDocumentTypeIds[scope.typeId]);
+    const pageQuery = query.order(key, { ascending: true }).range(rows.length, rows.length + (scope.pageSize ?? 500) - 1);
+    const { data, error, count } = await (scope.signal ? pageQuery.abortSignal(scope.signal) : pageQuery);
     if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code ?? "consulta"}, ${table}): ${errorMessage(error)}`);
-    if (count === null || (total !== null && total !== count)) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
-    total = count;
+    if ((total === null && count === null) || (total !== null && count != null && total !== count)) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
+    total = total ?? count ?? 0;
     const page = (data ?? []) as unknown as T[];
     if ((!page.length && rows.length < total) || rows.length + page.length > total) throw new Error("La consulta devolvió un catálogo incompleto. Reintenta.");
     append(page);
@@ -463,19 +465,65 @@ async function readCatalogRelations<T>(
   table: Exclude<CatalogTable, "controlled_documents">,
   columns: string,
   ids: string[],
+  scope: CatalogScope,
 ): Promise<T[]> {
   const column = table === "profiles" ? "id" : "document_id";
   const key = table === "document_lifecycle" ? "document_id" : "id";
   const rows: T[] = [];
   // Bound the PostgREST URL even when a process owns hundreds of documents.
   for (let start = 0; start < ids.length; start += 100) {
-    rows.push(...await readCatalogRows<T>(client, table, columns, key, { column, ids: ids.slice(start, start + 100) }));
+    rows.push(...await readCatalogRows<T>(client, table, columns, key, { column, ids: ids.slice(start, start + 100) }, scope));
   }
   return rows;
 }
 
 
-export async function loadStoredControlledDocuments(onFirstPage?: (rows: ControlledDocument[]) => void): Promise<ControlledDocument[]> {
+// Legacy registrations can lack a lifecycle row. Resolve only those IDs against
+// the existing security-invoker master view, which defines their effective state.
+async function legacyStates(client: ReturnType<typeof createClient>, ids: string[], signal?: AbortSignal) {
+  const states = new Map<string, { lifecycle_status: DocumentLifecycle["status"]; is_deleted: boolean }>();
+  for (let start = 0; start < ids.length; start += 100) {
+    const rows = await readCatalogRows<{ id: string; lifecycle_status: DocumentLifecycle["status"]; is_deleted: boolean }>(
+      client, "v_document_master_list", "id,lifecycle_status,is_deleted", "id",
+      { column: "id", ids: ids.slice(start, start + 100) }, { signal });
+    for (const row of rows) states.set(row.id, row);
+  }
+  if (states.size !== ids.length) throw new Error("No se pudo verificar el ciclo de vida de todos los documentos.");
+  return states;
+}
+
+export async function loadMasterCurrentIds(signal: AbortSignal, ids: string[]) {
+  const client = createClient();
+  const current = new Set<string>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const batches = [ids.slice(i, i + 100), ids.slice(i + 100, i + 200)].filter(batch => batch.length);
+    const pages = await Promise.all(batches.map(batch => readCatalogRows<{ id: string; document_id: string; status: string }>(
+      client, "controlled_document_versions", "id,document_id,status", "id", { column: "document_id", ids: batch }, { signal })));
+    for (const page of pages) for (const row of page) if (row.status === "current") current.add(row.document_id);
+  }
+  return current;
+}
+
+export async function loadDocumentIndex(signal: AbortSignal): Promise<DocumentIndexEntry[]> {
+  const client = createClient();
+  const [records, states] = await Promise.all([
+    readCatalogRows<{ id: string; process_id: string; document_type_id: string; code: string; title: string; description: string | null; deleted_at: string | null }>(
+      client, "controlled_documents", "id,process_id,document_type_id,code,title,description,deleted_at", "id", undefined, { signal, pageSize: 1000 }),
+    readCatalogRows<{ document_id: string; is_deleted: boolean; lifecycle_status: string }>(
+      client, "document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", undefined, { signal, pageSize: 1000 }),
+  ]);
+  const lifecycle = new Map(states.map(row => [row.document_id, row]));
+  // This index counts registered, non-deleted documents, irrespective of version status.
+  // The security-invoker master list defines missing legacy lifecycle rows as not deleted.
+  // Reading either source must succeed. Versions are verified separately before showing "Vigente".
+  return records.map(row => {
+    const state = lifecycle.get(row.id);
+    return { id: row.id, processId: row.process_id, typeId: clientDocumentTypeIds[row.document_type_id], code: row.code,
+      title: row.title, description: row.description ?? "", obsolete: state?.lifecycle_status === "obsolete", deleted: Boolean(row.deleted_at || state?.is_deleted || state?.lifecycle_status === "deleted") };
+  });
+}
+
+export async function loadStoredControlledDocuments(scope: CatalogScope = {}): Promise<ControlledDocument[]> {
   const client = createClient();
   type RecordRow = Omit<StoredDocumentRow, "owner" | "lifecycle" | "activity" | "versions">;
   type LifecycleRow = StoredDocumentRow["lifecycle"][number] & { document_id: string };
@@ -488,8 +536,8 @@ export async function loadStoredControlledDocuments(onFirstPage?: (rows: Control
   async function loadRelations(rows: RecordRow[]) {
     const ids = rows.map(row => row.id);
     const [lifecycle, versions] = await Promise.all([
-      readCatalogRelations<LifecycleRow>(client, "document_lifecycle", "document_id,lifecycle_status,is_deleted", ids),
-      readCatalogRelations<VersionRow>(client, "controlled_document_versions", catalogVersionColumns, ids),
+      readCatalogRelations<LifecycleRow>(client, "document_lifecycle", "document_id,lifecycle_status,is_deleted", ids, scope),
+      readCatalogRelations<VersionRow>(client, "controlled_document_versions", catalogVersionColumns, ids, scope),
     ]);
     for (const item of lifecycle) lifecycleById.set(item.document_id, item);
     for (const row of rows) if (row.owner_id) profileIds.add(row.owner_id);
@@ -502,11 +550,14 @@ export async function loadStoredControlledDocuments(onFirstPage?: (rows: Control
     }
   }
 
+  let legacy: Awaited<ReturnType<typeof legacyStates>> | undefined;
   function documentSummary(row: RecordRow) {
     const lifecycle = lifecycleById.get(row.id);
+    const fallback = legacy?.get(row.id);
+    if (scope.signal && !lifecycle && !fallback && !row.deleted_at) throw new Error("No se pudo verificar el ciclo de vida del documento.");
     return mapStoredDocument({
       ...row, activity: [],
-      lifecycle: lifecycle ? [lifecycle] : [],
+      lifecycle: lifecycle ? [lifecycle] : fallback ? [{ ...fallback, deleted_at: null, delete_reason: null, obsoleted_at: null, obsolete_reason: null, replacement_document_id: null, restored_at: null, deleter: null, restorer: null, obsoleter: null }] : [],
       owner: profileById.get(row.owner_id ?? "") ?? null,
       versions: (versionsByDocument.get(row.id) ?? []).map(version => ({
         ...version,
@@ -516,21 +567,13 @@ export async function loadStoredControlledDocuments(onFirstPage?: (rows: Control
     }, true);
   }
 
-  let firstPageSize = 0;
-  const documents = await readCatalogRows<RecordRow>(client, "controlled_documents", catalogColumns, "id", undefined,
-    onFirstPage ? async rows => {
-      await loadRelations(rows);
-      firstPageSize = rows.length;
-      onFirstPage(rows.filter(row => {
-        const state = lifecycleById.get(row.id);
-        return !row.deleted_at && state?.lifecycle_status === "active" && !state.is_deleted;
-      }).map(documentSummary));
-    } : undefined,
-  );
-  await loadRelations(documents.slice(firstPageSize));
+  if (scope.processIds?.length === 0) return [];
+  const documents = await readCatalogRows<RecordRow>(client, "controlled_documents", catalogColumns, "id", undefined, scope);
+  await loadRelations(documents);
+  if (scope.signal) legacy = await legacyStates(client, documents.filter(row => !row.deleted_at && !lifecycleById.has(row.id)).map(row => row.id), scope.signal);
   try {
     const profiles = await readCatalogRelations<{ id: string; full_name: string }>(
-      client, "profiles", "id,full_name", [...profileIds],
+      client, "profiles", "id,full_name", [...profileIds], scope,
     );
     for (const profile of profiles) profileById.set(profile.id, profile);
   } catch {

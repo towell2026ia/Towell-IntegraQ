@@ -7,8 +7,9 @@ function query(table: string) {
   let rows = state.rows[table] ?? []; let count = rows.length;
   const q = {
     select: () => q,
+    or: () => q,
     eq: (key: string, value: unknown) => { rows = rows.filter(r => r[key] === value); return q; },
-    in: (key: string, values: unknown[]) => { rows = rows.filter(r => values.includes(r[key])); return q; },
+    in: (key: string, values: unknown[]) => { rows = rows.filter(r => values.includes(key === "controlled_documents.process_id" ? state.rows.controlled_documents?.find(d => d.id === r.document_id)?.process_id : r[key])); return q; },
     is: (key: string, value: unknown) => { rows = rows.filter(r => (r[key] ?? null) === value); return q; },
     order: () => q,
     range: (start: number, end: number) => { count = rows.length; rows = rows.slice(start, end + 1); return q; },
@@ -16,7 +17,7 @@ function query(table: string) {
     then: (resolve: (value: unknown) => unknown) => resolve({ data: rows, count, error: state.fail === table ? { code: "failure" } : null }),
   }; return q;
 }
-vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: (table: string) => { state.authenticatedTables.push(table); return query(table); }, rpc: async () => ({ data: true }) }) }));
+vi.mock("@/lib/supabase/server", () => ({ createClient: async () => ({ from: (table: string) => { state.authenticatedTables.push(table); return query(table); }, rpc: async () => ({ data: true }), storage: { from: () => ({ createSignedUrl: async () => ({ data: { signedUrl: "https://test/image" }, error: null }) }) } }) }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: query, storage: { from: () => ({ createSignedUrl: async () => ({ data: { signedUrl: "https://test/image" }, error: null }) }) } }) }));
 import { GET } from "./route";
 beforeEach(() => {
@@ -66,12 +67,13 @@ describe("API de Inicio: alcance en servidor", () => {
     state.rows.controlled_documents = [{ id: "doc", organization_id: "org", process_id: "quality", title: "Política de Calidad", active: true, deleted_at: null }];
     state.rows.controlled_document_versions = [{ id: "version", document_id: "doc", revision: 1, status: "current", file_id: "file", file_name: "Política de Calidad.png", updated_at: "2026-11-03T12:00:00Z" }];
     state.rows.file_objects = [{ id: "file", bucket_id: "private", object_path: "image.png", mime_type: "image/png", deleted_at: null }];
-    const administrator = await (await GET(new Request("https://test"))).json();
+    const administrator = await (await GET(new Request("https://test?view=images"))).json();
     state.session = { ...activeSession, authUserId: "user", userType: "Usuario interno", assignedModuleIds: ["home"], assignedProcessIds: [] };
     state.rows.profiles[0].user_type = "internal";
-    const internal = await (await GET(new Request("https://test"))).json();
+    const internal = await (await GET(new Request("https://test?view=images"))).json();
     expect(internal.imageDocuments).toEqual(administrator.imageDocuments);
     expect(internal.imageDocuments).toHaveLength(1);
-    expect(internal.dashboard.pendingTasks).toEqual([]);
+    expect(internal.dashboard).toBeUndefined();
+    expect(state.calls).not.toContain("indicator_definitions");
   });
 });

@@ -50,6 +50,7 @@ import type { HomeSectionConfiguration } from "@/lib/home-visibility";
 import { getInstitutionalDocumentUrl, loadInstitutionalInformation, type InstitutionalItem } from "@/lib/institutional-information-data";
 
 interface HomeModuleProps {
+  baseDashboard?: ReturnType<typeof useHomeProcessData>["dashboard"];
   onNavigate: (module: WorkspaceModuleId, targetId?: string) => void;
   sources: HomeDashboardSources;
   loading?: boolean;
@@ -97,7 +98,7 @@ const moduleIcons: Partial<Record<WorkspaceModuleId, LucideIcon>> = {
   organization: UserRound,
 };
 
-export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleProps) {
+export function HomeModule({ onNavigate, sources, loading = false, baseDashboard }: HomeModuleProps) {
   const [asOf] = useState(() => new Date());
   const [filters, setFilters] = useState<HomeDashboardFilters>(emptyHomeDashboardFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -126,11 +127,11 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
   useEffect(() => {
     let cancelled = false;
     const refresh = async () => {
-      try { const result = await loadInstitutionalInformation(); if (!cancelled) { setInstitutionalItems(result.items.filter((item) => item.active && item.available)); setInstitutionalError(""); } }
+      try { const result = await loadInstitutionalInformation(true); if (!cancelled) { setInstitutionalItems(result.items.filter((item) => item.active && item.available)); setInstitutionalError(""); } }
       catch (cause) { if (!cancelled) setInstitutionalError(cause instanceof Error ? cause.message : "No fue posible consultar la información institucional."); }
     };
-    void refresh(); const onFocus = () => void refresh(); window.addEventListener("focus", onFocus);
-    return () => { cancelled = true; window.removeEventListener("focus", onFocus); };
+    void refresh();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -151,9 +152,10 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
     () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
     [asOf, filters, sectionConfigurations, sources],
   );
-  const serverHome = useHomeProcessData(sources.session, filters);
+  const useBase = Boolean(baseDashboard) && Object.entries(emptyHomeDashboardFilters).every(([name, value]) => filters[name as keyof HomeDashboardFilters] === value);
+  const serverHome = useHomeProcessData(sources.session, filters, !useBase);
   const productionHome = sources.session.workspaceMode !== "demo";
-  const dashboard = productionHome ? serverHome.dashboard : localDashboard;
+  const dashboard = productionHome ? (useBase ? baseDashboard! : serverHome.dashboard) : localDashboard;
   const searchResults = useMemo(
     () => searchHomeDashboard(dashboard.searchIndex, searchQuery),
     [dashboard.searchIndex, searchQuery],
@@ -262,7 +264,7 @@ export function HomeModule({ onNavigate, sources, loading = false }: HomeModuleP
 
       {!productionHome && visibleSections.has("quality-policy") && sources.documentLoadError ? <p role="alert">{sources.documentLoadError} <button type="button" onClick={() => onNavigate("documents")}>Revisar carga documental</button></p> : null}
       {!productionHome && visibleSections.has("quality-policy") && sources.documentsLoading ? <p role="status">Cargando imágenes del catálogo documental…</p> : null}
-      {visibleSections.has("quality-policy") && (productionHome || (!sources.documentLoadError && !sources.documentsLoading)) ? <HomeInstitutionalImages documents={productionHome ? serverHome.imageDocuments : sources.documents} institutionalRead={productionHome} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
+      {visibleSections.has("quality-policy") && (productionHome || (!sources.documentLoadError && !sources.documentsLoading)) ? <HomeInstitutionalImages key={sources.session.authUserId ?? sources.session.userId} documents={sources.documents} institutionalRead={productionHome} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
 
       {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
         <section className="home-dashboard-section home-institutional-section" aria-label="Información institucional">

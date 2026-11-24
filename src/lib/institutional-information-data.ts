@@ -29,8 +29,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload;
 }
 
-export async function loadInstitutionalInformation() {
-  const response = await fetch("/api/home/institutional", { cache: "no-store" });
+export async function loadInstitutionalInformation(itemsOnly = false) {
+  const response = await fetch(itemsOnly ? "/api/home/institutional?itemsOnly=1" : "/api/home/institutional", { cache: "no-store" });
   return parseResponse<{ items: InstitutionalItem[]; documents?: InstitutionalDocumentOption[] }>(response);
 }
 

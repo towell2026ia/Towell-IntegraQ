@@ -1,12 +1,12 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-vi.mock("@/lib/document-storage", () => ({}));
+vi.mock("@/lib/document-storage", () => ({ loadDocumentIndex: vi.fn(), loadMasterCurrentIds: vi.fn() }));
 vi.mock("@/lib/organization-chart-storage", () => ({ loadProcessOrganizationSources: vi.fn() }));
 vi.mock("@/components/modules/general-information-module", () => ({ GeneralInformationModule: () => null }));
 vi.mock("@/components/modules/process-organization-chart", () => ({ ProcessOrganizationChart: () => null }));
 vi.mock("@/components/modules/document-preview-viewer", () => ({ DocumentPreviewViewer: () => null }));
-import { DocumentsModule, InitialDocumentPage } from "./documents-module";
+import { DocumentsModule } from "./documents-module";
 import { DocumentTypeWorkspace } from "./document-type-workspace";
 import { getDocumentPermissions, type ControlledDocument } from "@/lib/document-control-data";
 import { getAuthorizedDocumentProcessIds, documentTypeCatalog } from "@/lib/document-data";
@@ -65,11 +65,11 @@ describe("FIX-03A grouped document visibility", () => {
   });
 });
 
-it("keeps the progressive page within the same module, process and version permissions", () => {
-  const current = documents.map(d => ({ ...d, versions: d.versions.map(v => ({ ...v, status: "current" as const })) }));
-  const page = (session: ActiveSession) => renderToStaticMarkup(createElement(InitialDocumentPage, { session, documents: current, pending: true }));
-  expect(page(user)).toContain("private-P-19");
-  expect(page(user)).not.toContain("private-P-18");
-  expect(page({ ...user, userType: "Cliente" })).not.toContain("private-P-19");
-  expect(page({ ...user, assignedModuleIds: [], moduleActionPermissions: [] })).not.toContain("private-P-19");
+it("renders authorized process navigation before loading any remote records", () => {
+  const html = renderToStaticMarkup(createElement(DocumentsModule, { session: user, liveCatalog: true, controlledDocuments: [], forms: [], onControlledDocumentsChange: vi.fn() }));
+  expect(html).toContain("Información General");
+  expect(html).toContain("P-13 ·");
+  expect(html).not.toContain("P-01 ·");
+  expect(html).not.toContain("Primeros documentos");
+  expect(html).not.toContain("Archivo documental anterior");
 });
