@@ -14,7 +14,7 @@ async function readPlans(): Promise<Plan[]> {
   if (!response.ok || !Array.isArray(result.plans)) throw new Error(result.error ?? "No se pudo consultar el seguimiento.");
   return result.plans;
 }
-export function A3PlanFollowup({write,quality}:{write:boolean;quality:boolean}) {
+export function A3PlanFollowup({write,quality,openPlan}:{write:boolean;quality:boolean;openPlan?:(id:string)=>(()=>void)|undefined}) {
   const [plans,setPlans] = useState<Plan[]>([]), [loading,setLoading] = useState(true), [error,setError] = useState("");
   const [owner,setOwner] = useState(""), [status,setStatus] = useState(""), [date,setDate] = useState("");
   const [members,setMembers] = useState<Member[]>([]), [catalogError,setCatalogError] = useState("");
@@ -42,10 +42,10 @@ export function A3PlanFollowup({write,quality}:{write:boolean;quality:boolean}) 
     <label>Estado <select value={status} onChange={e=>setStatus(e.target.value)}><option value="">Todos</option>{Object.entries(statuses).map(([v,t])=><option key={v} value={v}>{t}</option>)}</select></label>
     <label>Compromiso <input type="date" value={date} onChange={e=>setDate(e.target.value)}/></label>
     <button type="button" className="button button-secondary" onClick={()=>{setLoading(true);setRefresh(v=>v+1);}}>Actualizar</button>
-    {catalogError && <p role="alert">{catalogError}</p>}{error && <p role="alert">{error}</p>}{loading ? <p role="status">Consultando acciones…</p> : rows.map(p=><PlanProgress key={p.plan_id+":"+p.revision} plan={p} members={members} write={write} quality={quality} onUpdate={()=>{setLoading(true);setRefresh(v=>v+1);}}/>)}
+    {catalogError && <p role="alert">{catalogError}</p>}{error && <p role="alert">{error}</p>}{loading ? <p role="status">Consultando acciones…</p> : rows.map(p=><PlanProgress key={p.plan_id+":"+p.revision} openReport={openPlan?.(p.plan_id)} plan={p} members={members} write={write} quality={quality} onUpdate={()=>{setLoading(true);setRefresh(v=>v+1);}}/>)}
     {!loading && !error && !rows.length && <p>Sin acciones para esta consulta.</p>}</section>;
 }
-function PlanProgress({plan,members,write,quality,onUpdate}:{plan:Plan;members:Member[];write:boolean;quality:boolean;onUpdate:()=>void}) {
+function PlanProgress({plan,members,write,quality,onUpdate,openReport}:{openReport?:()=>void;plan:Plan;members:Member[];write:boolean;quality:boolean;onUpdate:()=>void}) {
   const [note,setNote]=useState(""),[fileId,setFileId]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const [ownerId,setOwnerId]=useState("");
   async function record(command: string) {
@@ -59,7 +59,7 @@ function PlanProgress({plan,members,write,quality,onUpdate}:{plan:Plan;members:M
     } catch(e) { setError(e instanceof Error ? e.message : "No se confirmó el avance."); }
     finally { setBusy(false); }
   }
-  return <article><h4>{plan.folio} · {plan.description}</h4><p>{plan.owner_name || "Sin responsable"} · {plan.due_date} · {statuses[plan.status]}</p>
+  return <article><h4>{plan.folio} · {plan.description}</h4>{openReport && <button type="button" className="button button-secondary" onClick={openReport}>Ver expediente A3</button>}<p>{plan.owner_name || "Sin responsable"} · {plan.due_date} · {statuses[plan.status]}</p>
     <p>Avance: {plan.note || "Sin registrar"}</p><p>Eficacia: {plan.effectiveness==="effective" ? "Verificada" : plan.effectiveness==="ineffective" ? "Insuficiente" : "Pendiente"} {plan.review_note}</p>
     {write && <fieldset disabled={busy}><label>Nota de seguimiento <textarea maxLength={2000} value={note} onChange={e=>setNote(e.target.value)}/></label>
       {quality && plan.status !== "completed" && <><label>Reasignar a <select value={ownerId} onChange={e=>setOwnerId(e.target.value)}><option value="">Seleccionar responsable interno</option>{members.map(m=><option key={m.id} value={m.id}>{m.fullName}</option>)}</select></label><button type="button" disabled={!ownerId || !note.trim()} onClick={()=>void record("assign")}>Confirmar asignación</button></>}

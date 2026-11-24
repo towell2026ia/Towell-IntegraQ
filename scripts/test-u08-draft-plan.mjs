@@ -27,7 +27,7 @@ try {
     create type action_item_status as enum ('pending');
     create table corrective_actions(id uuid primary key,folio text unique,title text,problem text,source corrective_action_source,
       severity corrective_action_severity,process_id text,area text,owner_name text,quality_case_id uuid,external_organization_id uuid,
-      due_date date,status text,progress int,root_cause text,portal_visible boolean,organization_id uuid,created_by uuid);
+      deleted_at timestamptz,due_date date,status text,progress int,root_cause text,portal_visible boolean,organization_id uuid,created_by uuid);
     create table corrective_action_a3(corrective_action_id uuid primary key,event_type text,severity_justification text,five_w_two_h jsonb,
       brainstorm jsonb,ishikawa jsonb,non_detection_cause text,non_detection_whys jsonb,root_cause text,root_cause_whys jsonb,ai_draft jsonb,updated_by uuid);
     create table corrective_action_plans(id uuid primary key,corrective_action_id uuid,description text,owner_name text,owner_id uuid,due_date date,status action_item_status);
@@ -70,6 +70,7 @@ try {
   await db.query("select iq_root2cause_create_action($1)",[JSON.stringify(legacy)]);
   const legacyBefore=await rows("select to_jsonb(a) as original from corrective_actions a where id=$1",[legacyId]);
   await db.exec(sql("IQ-ROOT2CAUSE-U08-PLAN"));
+  await db.exec(sql("IQ-ROOT2CAUSE-U08-DRAFT-SYNC"));
   assert.deepEqual(await rows("select to_jsonb(a) as original from corrective_actions a where id=$1",[legacyId]),legacyBefore);
   assert.equal((await rows("select iq_root2cause_create_action($1) as a",[JSON.stringify(legacy)]))[0].a.replayed,true);
   await db.exec("set role authenticated");
@@ -99,6 +100,22 @@ try {
   assert.equal((await rows("select count(*)::int n from audit_log where action='root2cause.created' and resource_id=$1",[id]))[0].n,1);
   console.log("PASS T-RCA-03-01/02 · folio, conservación tras fallo, reintento, única alta");
   console.log("PASS T-RCA-06-01/02 · plan simplificado persistido, ID y responsable reales del fixture");
+  await db.exec("set role authenticated");
+  await who(actor);
+  const partialId = randomUUID();
+  const partial = {evidenceId:partialId,origin:"system",processId:"",plans:[{description:""}]};
+  for (const [revision,step] of [...Array(8).keys(),...Array.from({length:7},(_,i)=>6-i)].entries()) {
+    const payload={step,draft:partial};
+    const result=await rows("select iq_root2cause_save_draft($1,$2,$3,$4,null,'sgc') as ack",[partialId,revision,step,payload]);
+    assert.equal(result[0].ack.revision,revision+1);
+    assert.deepEqual((await rows("select payload from root2cause_drafts where id=$1",[partialId]))[0].payload,payload);
+  }
+  await assert.rejects(rows("select iq_root2cause_finalize_plan($1,15)",[partialId]), /responsable|incomplet|plan|REQUIRED/i);
+  const duplicateId=randomUUID();
+  await assert.rejects(rows("select iq_root2cause_save_draft($1,0,0,$2,'PROC-QA','customer',$3,$4)",
+    [duplicateId,{step:0,draft:{...draft,evidenceId:duplicateId}},customer,claim]),/CLAIM_ALREADY_LINKED/);
+  await db.exec("reset role");
+  console.log("PASS P0 · SGC incompleto, ocho etapas en ambos sentidos, revisión confirmada, finalización bloqueada y reclamo sin duplicación");
   if (process.argv.includes("--with-live-access")) {
     const { verifyLiveAccess } = await import("./test-u08-live-access.mjs");
     await verifyLiveAccess(db);

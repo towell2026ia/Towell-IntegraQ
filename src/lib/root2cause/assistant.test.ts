@@ -24,3 +24,9 @@ it('rejects a proposal after context or authorized process changes',()=>{const b
 it('invalidates action suggestions if an earlier cause was manually changed',()=>{const a=analysis();const snapshots=Array.from({length:8},(_,i)=>stageSnapshot(a,i));a.rootCause='Manual correction';expect(()=>assertProposalSnapshots(a,snapshots)).toThrow(/expediente cambió/);});
 it('allows accepting successive reviewed stages from one full proposal',()=>{let a=analysis();const snapshots=Array.from({length:8},(_,i)=>stageSnapshot(a,i));const s=normalizeProposal({stages:[{...stage(5),fields:{rootCause:'Reviewed hypothesis'}}]},[],5).stages[0];assertProposalSnapshots(a,snapshots);a=applyStageSuggestion(a,s,snapshots[5]);snapshots[5]=stageSnapshot(a,5);expect(()=>assertProposalSnapshots(a,snapshots)).not.toThrow();});
 it('rejects an incomplete request snapshot',()=>{expect(()=>assertProposalSnapshots(analysis(),[])).toThrow();});
+
+it("preserves a captured cause when the reviewed proposal has no supported replacement",()=>{
+ const a=analysis();a.nonDetectionCause="Control registrado";
+ const suggestion=normalizeProposal({stages:[{...stage(5),fields:{rootCause:"Hipótesis revisada"}}]},[],5).stages[0];
+ expect(applyStageSuggestion(a,suggestion,stageSnapshot(a,5)).nonDetectionCause).toBe("Control registrado");
+});

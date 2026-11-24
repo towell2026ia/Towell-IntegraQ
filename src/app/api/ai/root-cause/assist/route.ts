@@ -13,15 +13,11 @@ import { retrieveRootCauseDocuments } from "@/lib/root2cause/context-server";
 const MODEL = "gpt-5-nano";
 const MAX_REQUEST_CHARS = 100_000;
 const MAX_INPUT_BYTES = 64 * 1024;
-const MAX_OUTPUT_TOKENS = 8_192;
+export const maxDuration = 30;
+const REQUEST_BUDGET_MS = 27_000;
 const SINGLE_FLIGHT_TTL_MS = 60_000;
 const MAX_CONCURRENT_USERS_PER_INSTANCE = 3;
 const ARRAY_FIELDS = new Set(["brainstorm", "nonDetectionWhys", "rootCauseWhys", ...stageFields[4]]);
-
-const fieldNames = [...new Set(stageFields.flat())];
-const fieldsSchema = Object.fromEntries(fieldNames.map((name) => [name, ARRAY_FIELDS.has(name)
-  ? { type: "array", items: { type: "string" } }
-  : { type: "string" }]));
 
 const actionSchema = {
   type: "object",
@@ -37,30 +33,25 @@ const actionSchema = {
   },
 };
 
-const proposalSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["stages", "warnings"],
-  properties: {
-    stages: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["step", "fields", "rationale", "missingData", "references", "actions"],
-        properties: {
-          step: { type: "integer", enum: [0, 1, 2, 3, 4, 5, 6, 7] },
-          fields: { type: "object", additionalProperties: false, required: fieldNames, properties: fieldsSchema },
-          rationale: { type: "string" },
-          missingData: { type: "array", items: { type: "string" } },
-          references: { type: "array", items: { type: "string" } },
-          actions: { type: "array", items: actionSchema },
-        },
-      },
+function schemaFor(mode: unknown, step: number) {
+  const stages = stageFields.map((names, index) => ({
+    type: "object", additionalProperties: false,
+    required: ["step", "fields", "rationale", "missingData", "references", ...(index === 7 ? ["actions"] : [])],
+    properties: {
+      step: { type: "integer", enum: [index] },
+      fields: { type: "object", additionalProperties: false, required: [...names],
+        properties: Object.fromEntries(names.map(name => [name, ARRAY_FIELDS.has(name)
+          ? {type:"array", items:{type:"string"}} : {type:"string"}])) },
+      rationale: {type:"string"}, missingData: {type:"array",items:{type:"string"}},
+      references: {type:"array",items:{type:"string"}},
+      ...(index === 7 ? {actions:{type:"array",items:actionSchema}} : {}),
     },
-    warnings: { type: "array", items: { type: "string" } },
-  },
-} as const;
+  }));
+  return {type:"object", additionalProperties:false, required:["stages","warnings"], properties:{
+    stages:{type:"array",items:mode === "step" ? stages[step] : {anyOf:stages}},
+    warnings:{type:"array",items:{type:"string"}},
+  }};
+}
 
 const instructions = [
   "Eres un asistente para análisis de causa raíz Root2Cause con ocho etapas CAPA. Devuelve JSON que cumpla exactamente el esquema.",
@@ -100,6 +91,20 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const signal = AbortSignal.any([request.signal, AbortSignal.timeout(REQUEST_BUDGET_MS)]);
+  let onAbort: (() => void) | undefined;
+  try {
+    const expired = new Promise<NextResponse>(resolve => {
+      onAbort = () => resolve(json({error:"Se interrumpió la espera de IA. Tu borrador se conserva."}, 504));
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, {once:true});
+    });
+    return await Promise.race([expired, assist(request, signal)]);
+  } finally { if (onAbort) signal.removeEventListener("abort", onAbort); }
+}
+
+async function assist(request: Request, signal: AbortSignal) {
+  const start = performance.now();
   const session = await getAuthenticatedSession();
   if (!session?.authUserId) return json({ error: "Sesión requerida." }, 401);
 
@@ -132,8 +137,11 @@ export async function POST(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return json({ error: "Falta configurar OPENAI_API_KEY como secreto del servidor." }, 503);
 
+  const authMs = Math.round(performance.now() - start);
+  const claimReference = typeof body.claimReference === "string" ? body.claimReference.slice(0,120) : "";
   const requestFingerprint = createHash("sha256").update(JSON.stringify({
     userId: session.authUserId,
+    claimReference,
     processId: body.processId,
     area: typeof body.area === "string" ? body.area.trim() : "",
     mode: body.mode,
@@ -151,38 +159,47 @@ export async function POST(request: Request) {
   if (existingFlight) userFlights.delete(session.authUserId);
   if (userFlights.size >= MAX_CONCURRENT_USERS_PER_INSTANCE) return json({ error: "Se alcanzó el límite de solicitudes simultáneas de IA. Intenta de nuevo en unos momentos." }, 429);
 
-  const promise = generateProposal({ session, body, origin: String(origin), customerId: typeof customerId === "string" ? customerId : undefined, apiKey, requestFingerprint });
+  const promise = generateProposal({ session, body, origin: String(origin), customerId: typeof customerId === "string" ? customerId : undefined, apiKey, requestFingerprint, signal, authMs, claimReference });
   const flight: Flight = { fingerprint: requestFingerprint, expiresAt: Date.now() + SINGLE_FLIGHT_TTL_MS, promise };
   userFlights.set(session.authUserId, flight);
   try { return respond(await promise); }
   finally { if (userFlights.get(session.authUserId) === flight) userFlights.delete(session.authUserId); }
 }
 
-async function generateProposal({ session, body, origin, customerId, apiKey, requestFingerprint }: {
+async function generateProposal({ session, body, origin, customerId, apiKey, requestFingerprint, signal, authMs, claimReference }: {
   session: NonNullable<Awaited<ReturnType<typeof getAuthenticatedSession>>>;
   body: Record<string, unknown>;
   origin: string;
   customerId?: string;
   apiKey: string;
   requestFingerprint: string;
+  signal: AbortSignal;
+  authMs: number;
+  claimReference: string;
 }): Promise<ApiResult> {
+  const timings: Record<string, number> = {authorization:authMs};
+  async function measure<T>(phase: string, fn: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    try { return await fn(); }
+    finally { timings[phase] = Math.round(performance.now() - start); }
+  }
   try {
-    const client = new OpenAI({ apiKey, timeout: 45_000, maxRetries: 0 });
+    signal.throwIfAborted();
+    const client = new OpenAI({ apiKey, timeout: REQUEST_BUDGET_MS, maxRetries: 0 });
+    const proposalSchema = schemaFor(body.mode, Number(body.step));
+    const outputLimit = body.mode === "step" ? 1_500 : 4_000;
     const input = {
       mode: body.mode,
       step: body.mode === "step" ? body.step : undefined,
       problem: body.problem,
+      claimReference: origin === "customer" ? claimReference : undefined,
       correctiveActionType: origin === "customer" ? "Externa" : origin === "system" ? "SGC" : "Interna",
       processId: body.processId,
       area: typeof body.area === "string" ? body.area.trim() : "",
-      customer: origin === "customer" ? customerId ? await resolveCustomer(session, customerId) : { status: "no seleccionado" } : null,
+      customer: origin === "customer" ? customerId ? await measure("customerAuthorization", () => resolveCustomer(session, customerId)) : { status: "no seleccionado" } : null,
       analysis: body.analysis ?? null,
     };
     const retrievalQuery = JSON.stringify({ problem: body.problem, analysis: body.analysis ?? null, processId: body.processId, area: input.area, origin, customer: input.customer }).slice(0, 16_000);
-    // This GET verifies account/model access before any document text is sent or generation is billed.
-    try { await client.models.retrieve(MODEL); }
-    catch (error) { throw mapModelAvailabilityError(error); }
-
     const analysisRecord = body.analysis && typeof body.analysis === "object" && !Array.isArray(body.analysis)
       ? body.analysis as Record<string, unknown> : {};
     const planIds = Array.isArray(analysisRecord.plans)
@@ -190,8 +207,8 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
       : [];
     const evidenceId = typeof analysisRecord.evidenceId === "string" ? analysisRecord.evidenceId : undefined;
     const evidenceScope = evidenceId ? { evidenceId, planIds } : undefined;
-    const { documents: authorizedDocuments, warnings } = await retrieveRootCauseDocuments(session, String(body.processId), retrievalQuery, evidenceScope);
-    const documents = authorizedDocuments.map((document) => ({ ...document, excerpt: document.excerpt?.slice(0, 4_000) }));
+    const { documents: authorizedDocuments, warnings } = await measure("documents", () => retrieveRootCauseDocuments(session, String(body.processId), retrievalQuery, evidenceScope, {stage:body.mode === "step",signal}));
+    const documents = authorizedDocuments.slice(0, body.mode === "step" ? 4 : 8).map((document) => ({ ...document, excerpt: document.excerpt?.slice(0, body.mode === "step" ? 900 : 1_500) }));
     const payload = JSON.stringify({ input, documents });
     // UTF-8 byte length is a conservative upper bound for text token count; include prompt/schema overhead too.
     const inputBytes = Buffer.byteLength(payload, "utf8") + Buffer.byteLength(instructions, "utf8") + Buffer.byteLength(JSON.stringify(proposalSchema), "utf8") + 1_024;
@@ -201,17 +218,19 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
 
     const bucket = Math.floor(Date.now() / (5 * 60_000));
     const idempotencyKey = `root2cause-${createHash("sha256").update(`${session.authUserId}:${requestFingerprint}:${bucket}`).digest("hex")}`;
-    const response = await client.responses.create({
+    signal.throwIfAborted();
+    const response = await measure("openai", () => client.responses.create({
       model: MODEL,
       instructions,
       input: payload,
-      max_output_tokens: MAX_OUTPUT_TOKENS,
+      max_output_tokens: outputLimit,
+      reasoning: {effort:"minimal"},
       store: false,
       text: { format: { type: "json_schema", name: "root2cause_proposal", strict: true, schema: proposalSchema } },
-    }, { idempotencyKey });
+    }, { idempotencyKey, signal }));
 
     const usage = response.usage;
-    await logLegacyAiRequest({
+    await measure("audit", () => logLegacyAiRequest({
       user: session,
       module: "corrective-actions",
       capability: "root2cause.contextual_draft",
@@ -230,10 +249,10 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
         outputUnits: usage?.output_tokens ?? null,
         totalUnits: usage?.total_tokens ?? null,
         cachedInputUnits: usage?.input_tokens_details.cached_tokens ?? null,
-        maxOutputUnits: MAX_OUTPUT_TOKENS,
+        maxOutputUnits: outputLimit,
         inputBytes,
       },
-    });
+    }));
 
     if (response.status !== "completed" || !response.output_text.trim()) {
       throw new AssistError(502, "GPT-5 nano devolvió una respuesta incompleta o vacía. El expediente no se modificó.");
@@ -253,7 +272,7 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
     if (status === 400) return { status: 502, data: { error: "OpenAI rechazó el contexto o el esquema estructurado de Root2Cause." } };
     console.error("Falló la solicitud autorizada de Root2Cause a OpenAI.", { status: status ?? null, type: (error as { name?: string })?.name ?? "Error" });
     return { status: 502, data: { error: "No se pudo generar una propuesta con GPT-5 nano. El análisis existente se conservó." } };
-  }
+  } finally { console.info("root2cause.assist.duration_ms", {mode:body.mode, ...timings}); }
 }
 
 async function resolveCustomer(session: NonNullable<Awaited<ReturnType<typeof getAuthenticatedSession>>>, customerId: string): Promise<{ id: string; code: string; name: string }> {

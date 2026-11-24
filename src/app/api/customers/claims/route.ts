@@ -1,3 +1,4 @@
+import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { claimActor, authorizedClaim, authorizedClaimLink, ClaimApiError, claimError, claimErrorStatus } from "@/lib/customer-claims-server";
 import { validateClaimInput, type ClaimsCatalog } from "@/lib/customer-claims";
@@ -29,7 +30,13 @@ export async function GET() {
       evidence.push(...await pages<ClaimsCatalog["evidence"][number]>((f,t) => actor.admin.from("file_objects").select("id,resource_id,original_name,size_bytes,mime_type,version,is_current,created_at,uploaded_by").eq("resource_type","customer_claim_evidence").eq("workspace_id",actor.organizationId).in("resource_id",chunk).is("deleted_at",null).order("id").range(f,t)));
       history.push(...await pages<ClaimsCatalog["history"][number]>((f,t)=>actor.admin.from("audit_log").select("id,resource_id,action,actor_id,created_at,reason").eq("resource_type","quality_case").eq("organization_id",actor.organizationId).in("resource_id",chunk).order("created_at",{ascending:false}).range(f,t)));
     }
-    const actions = ids.length ? await pages<ClaimsCatalog["actions"][number]>((f,t) => actor.admin.from("corrective_actions").select("id,folio,title,external_organization_id,quality_case_id,status").eq("organization_id",actor.organizationId).eq("source","customer").in("external_organization_id",ids).is("deleted_at",null).order("id").range(f,t)) : [];
+    const scoped = await createClient();
+    const drafts = ids.length ? await pages<{id:string;quality_case_id:string;external_organization_id:string}>((f,t) =>
+      scoped.from("root2cause_drafts").select("id,quality_case_id,external_organization_id").eq("organization_id",actor.organizationId)
+        .eq("source","customer").eq("status","draft").not("quality_case_id","is",null).in("external_organization_id",ids).order("id").range(f,t)) : [];
+    for (const claim of claims) claim.linkedDraftIds = drafts.filter(draft => draft.quality_case_id === claim.id &&
+      draft.external_organization_id === claim.external_organization_id).map(draft => draft.id);
+    const actions = ids.length ? await pages<ClaimsCatalog["actions"][number]>((f,t) => scoped.from("corrective_actions").select("id,folio,title,external_organization_id,quality_case_id,status").eq("organization_id",actor.organizationId).eq("source","customer").in("external_organization_id",ids).is("deleted_at",null).order("id").range(f,t)) : [];
     return NextResponse.json({ customers, claims, findings: findings.length, history, evidence, actions, processes } satisfies ClaimsCatalog, { headers: { "Cache-Control":"private, no-store" } });
   } catch (e) { return NextResponse.json(claimError(e), { status: claimErrorStatus(e) }); }
 }

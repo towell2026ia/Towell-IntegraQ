@@ -163,7 +163,7 @@ export function CorrectiveActionsModule({
 
   const selected =
     filteredActions.find((action) => action.id === selectedId) ??
-    filteredActions[0];
+    (registryView === "report" ? undefined : filteredActions[0]);
   const canEditSelected = selected
     ? canEditCorrectiveAction(session, selected)
     : false;
@@ -411,7 +411,13 @@ export function CorrectiveActionsModule({
         {isAdministrator(session) && session.workspaceMode !== "demo" ? <button className={workspaceView === "retired" ? "active" : ""} type="button" onClick={() => { if (confirmLeaving()) setWorkspaceView("retired"); }}>Registros retirados</button> : null}
       </div>
 
-      {workspaceView === "followup" && <A3PlanFollowup write={canPerformModuleAction(session,"corrective-actions","update")} quality={isAdministrator(session)}/>}
+      {workspaceView === "followup" && <A3PlanFollowup openPlan={id=>{
+        const action = rootCauseActions.find(a=>a.a3?.plans.some(plan=>plan.id===id));
+        if (!action) return;
+        return () => {setQuery("");setStatusFilter("all");setSelectedId(action.id);
+          setListScope(action.source==="customer"?"customer":action.source==="sgc"||action.source==="audit"?"system":"internal");
+          setWorkspaceView("lists");setRegistryView("report");};
+      }} write={canPerformModuleAction(session,"corrective-actions","update")} quality={isAdministrator(session)}/>}
       {workspaceView === "retired" && isAdministrator(session) && session.workspaceMode !== "demo" ? <RetiredCorrectiveActions onActionsChange={onActionsChange} /> : null}
       {workspaceView === "lists" ? (
         <>
@@ -595,7 +601,7 @@ export function CorrectiveActionsModule({
         </article> : null}
           </section>
         </>
-      ) : workspaceView === "a3" && canCreate ? (
+      ) : workspaceView === "a3" && (canCreate || claimSeed?.linkedDraftIds?.length) ? (
         <A3AnalysisWorkbench
           initialClaim={claimSeed}
           onCustomerCatalog={onNavigateCustomers}

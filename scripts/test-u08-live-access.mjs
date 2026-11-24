@@ -11,7 +11,7 @@ export async function verifyLiveAccess(db) {
   await db.exec("alter type corrective_action_source add value 'supplier'");
   for(const status of ["in_progress","completed","cancelled"]) await db.exec("alter type action_item_status add value '"+status+"'");
   await db.exec(`create role service_role; create schema storage;
-    alter table corrective_actions add column deleted_at timestamptz,add column owner_id uuid;
+    alter table corrective_actions add column if not exists deleted_at timestamptz,add column owner_id uuid;
     alter table corrective_action_plans add column completed_at timestamptz,add column evidence_file_id uuid;
     create table corrective_action_effectiveness_reviews(corrective_action_id uuid);
     create table storage.objects(bucket_id text,name text);

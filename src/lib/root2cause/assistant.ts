@@ -46,7 +46,14 @@ export function applyStageSuggestion(analysis:A3Analysis,suggestion:StageSuggest
  if(stageSnapshot(analysis,suggestion.step)!==expected)throw new Error("La etapa cambió después de solicitar IA. Revisa el contenido y solicita una propuesta nueva.");
  const next=structuredClone(analysis); const target=next as unknown as Record<string,unknown>;
  for(const key of stageFields[suggestion.step]){
-  const value=suggestion.fields[key];if(value===undefined)continue;const [a,b]=key.split('.');
+  let value=suggestion.fields[key];
+  if (!value || (Array.isArray(value) && !value.some(item=>item.trim()))) continue;
+  const [a,b]=key.split('.');
+  if ((key==="nonDetectionWhys" || key==="rootCauseWhys") && Array.isArray(value)) {
+    const offered=value;
+    const existing=analysis[key];
+    value=Array.from({length:Math.max(existing.length,offered.length)},(_,i)=>offered[i]?.trim() || existing[i] || "");
+  }
   if(b)(target[a] as Record<string,unknown>)[b]=value;else target[a]=value;
  }
  if(suggestion.step===7){
@@ -64,7 +71,14 @@ export function applyStageSuggestion(analysis:A3Analysis,suggestion:StageSuggest
 export function relevantExcerpts(textContent:string,query:string,max=6000):string {
  const words=query.toLocaleLowerCase("es").match(/[\p{L}\p{N}]{3,}/gu)??[];
  const chunks=textContent.replace(/\s+/g," ").match(/.{1,900}/g)??[];
- return chunks.map((content,index)=>({content,index,score:words.filter(w=>content.toLocaleLowerCase("es").includes(w)).length})).filter(c=>c.score>0).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,6).map(c=>c.content).join("\n").slice(0,max);
+ const counts=new Map<string,number>();
+ for(const word of words)counts.set(word,(counts.get(word)??0)+1);
+ return chunks.map((content,index)=>{
+   const lower=content.toLocaleLowerCase("es");
+   let score=0;
+   for(const [word,count] of counts)if(lower.includes(word))score+=count;
+   return {content,index,score};
+ }).filter(c=>c.score>0).sort((a,b)=>b.score-a.score||a.index-b.index).slice(0,6).map(c=>c.content).join("\n").slice(0,max);
 }
 
 /** Context guard remains stable when accepting other stages of the same draft. */

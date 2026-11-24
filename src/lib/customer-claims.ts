@@ -2,6 +2,8 @@ export const claimStatuses = ["open", "under_review", "action_required", "closed
 export type ClaimStatus = typeof claimStatuses[number];
 export const claimStatusLabels: Record<ClaimStatus, string> = { open: "Abierto", under_review: "En revisión", action_required: "Requiere acción", closed: "Cerrado" };
 export interface CustomerClaim {
+  linkedDraftIds?: string[];
+  selectedDraftId?: string;
   id: string; folio: string; external_organization_id: string; received_at: string; title: string; description: string;
   status: ClaimStatus; external_reference: string | null; process_id: string | null; updated_at: string;
   cancelled_at: string | null; cancellation_reason: string | null;

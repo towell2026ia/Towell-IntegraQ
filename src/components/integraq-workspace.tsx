@@ -190,6 +190,7 @@ export function IntegraQWorkspace({
   const { appearance, error: appearanceError, refresh: refreshAppearance } = useHomeAppearance();
   const [claimSeed, setClaimSeed] = useState<CustomerClaim | null>(null);
   const [claimSeedId,setClaimSeedId]=useContinuityState("navigation:claim-seed","");
+  const [claimDraftId,setClaimDraftId]=useContinuityState("navigation:claim-draft","");
   const [claimSeedError,setClaimSeedError]=useState("");
   const [claimSeedRetry,setClaimSeedRetry]=useState(0);
   const [storedActiveModule, setActiveModule] = useContinuityState<WorkspaceModuleId>("navigation:module", () =>
@@ -201,9 +202,21 @@ export function IntegraQWorkspace({
   useEffect(()=>{
     if(!claimSeedId||activeModule!=="corrective-actions"||claimSeed?.id===claimSeedId)return;
     let active=true;
-    void claimsRequest<ClaimsCatalog>().then(catalog=>{if(!active)return;const found=catalog.claims.find(claim=>claim.id===claimSeedId&&!claim.cancelled_at);if(found){setClaimSeed(found);setClaimSeedError("");}else setClaimSeedError("El reclamo ya no está disponible en tu alcance autorizado. No se restauró el expediente.");}).catch(()=>{if(active)setClaimSeedError("No fue posible verificar el reclamo. El borrador sigue conservado; reintenta.");});
+    void claimsRequest<ClaimsCatalog>().then(catalog=>{
+      if (!active) return;
+      const claim = catalog.claims.find(item=>item.id===claimSeedId);
+      if (!claim || (claimDraftId && !claim.linkedDraftIds?.includes(claimDraftId))) {
+        setClaimSeedError("El borrador o reclamo ya no está disponible en tu alcance. Vuelve a Reclamos para consultar su estado.");
+        return;
+      }
+      if (!claimDraftId && !claim.linkedDraftIds?.length && (claim.cancelled_at || catalog.actions.some(action=>action.quality_case_id===claim.id))) {
+        setClaimSeedError("El reclamo cambió. Vuelve a Reclamos para consultar el expediente relacionado.");
+        return;
+      }
+      setClaimSeed({...claim,selectedDraftId:claimDraftId || undefined});setClaimSeedError("");
+    }).catch(()=>{if(active)setClaimSeedError("No fue posible verificar el reclamo. El borrador sigue conservado; reintenta.");});
     return()=>{active=false;};
-  },[claimSeedId,claimSeed?.id,activeModule,claimSeedRetry]);
+  },[claimSeedId,claimSeed?.id,activeModule,claimSeedRetry,claimDraftId]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [navigationQuery, setNavigationQuery] = useState("");
@@ -639,7 +652,7 @@ export function IntegraQWorkspace({
           {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== sessionKey ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || "Consultando Root2Cause en Supabase…"}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
           {activeModule === "corrective-actions" && (!claimSeedId||claimSeed?.id===claimSeedId) && (demoMode || actionLoadedSession === sessionKey) ? <CorrectiveActionsModule actions={actions} claimSeed={claimSeed??undefined} onClaimSeedClear={()=>{setClaimSeed(null);setClaimSeedId("");}} onNavigateCustomers={()=>changeModule("customers")} onNavigateDocuments={()=>changeModule("documents")} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${claimSeed?.id??(navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index")}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimSeedId(claim.id);setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
+          {activeModule === "customers" ? <CustomersModule onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimDraftId(claim.selectedDraftId ?? "");setClaimSeedId(claim.id);setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
           {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}

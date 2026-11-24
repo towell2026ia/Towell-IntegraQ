@@ -20,7 +20,7 @@ import {
   Target,
   Trash2,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { A3ProposalReview } from "@/components/modules/a3-proposal-review";
 import { writeActiveDraft } from "@/lib/root2cause/draft-cache";
 import { changeCause, classifyCauses, causeInUse, removeCause } from "@/lib/root2cause/cause-links";
@@ -36,7 +36,7 @@ import { ClaimEditor } from "@/components/modules/customer-claims-panel";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { loadRootCauseCustomers, type RootCauseCustomer } from "@/lib/root-cause-customers";
-import { listRootCauseDrafts, loadRootCauseDraft, saveRootCauseDraft, type RootCauseStoredDraft } from "@/lib/root-cause-draft-storage";
+import { RootCauseHttpError, readRootCauseJson, listRootCauseDrafts, loadRootCauseDraft, saveRootCauseDraft, type RootCauseStoredDraft } from "@/lib/root-cause-draft-storage";
 import type { ActiveSession } from "@/lib/session-data";
 
 import type {
@@ -173,7 +173,38 @@ function createInitialDraft(claim?: CustomerClaim): A3Draft {
   };
 }
 
-export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClaim, onCustomerCatalog }: { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void }) {
+const StageHelp = createContext<React.ReactNode>(null);
+
+async function payloadHash(payload: unknown) {
+  const canonical = JSON.stringify(payload, (_, value) => value && typeof value === "object" && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+type WorkbenchProps = { onCancel: () => void; onComplete: (submission: A3Submission) => Promise<void>; session: ActiveSession; initialClaim?: CustomerClaim; onCustomerCatalog?: () => void };
+export function A3AnalysisWorkbench(props: WorkbenchProps) {
+  const claim = props.initialClaim;
+  const linkedId = claim?.selectedDraftId ?? claim?.linkedDraftIds?.[0];
+  const [stored, setStored] = useState<RootCauseStoredDraft>();
+  const [error,setError] = useState("");
+  const [retry,setRetry] = useState(0);
+  useEffect(() => {
+    if (!linkedId) return;
+    let active = true;
+    void loadRootCauseDraft(linkedId).then(({draft}) => {
+      if (draft.id !== linkedId || draft.payload.draft.qualityCaseId !== claim?.id ||
+          draft.payload.draft.relatedPartyId !== claim?.external_organization_id) throw new Error("El vínculo del reclamo cambió.");
+      if (active) {setStored(draft);setError("");}
+    }).catch(e=>{if(active)setError(e.message);});
+    return () => {active=false;};
+  },[linkedId,claim?.id,claim?.external_organization_id,retry]);
+  if (linkedId && stored?.id !== linkedId) return <section><p role={error?"alert":"status"}>{error || "Recuperando el borrador vinculado…"}</p>
+    {error && <button type="button" onClick={()=>setRetry(value=>value+1)}>Reintentar</button>}<button type="button" onClick={props.onCancel}>Volver</button></section>;
+  return <DraftEditor key={linkedId ?? claim?.id ?? "new"} {...props} stored={linkedId ? stored : undefined}/>;
+}
+
+function DraftEditor({onCancel,onComplete,session,initialClaim,onCustomerCatalog,stored}: WorkbenchProps & {stored?:RootCauseStoredDraft}) {
   const storageKey = initialClaim ? `${draftStorageKey}.claim.${initialClaim.id}` : draftStorageKey;
   type CachedDraft = { revision?: number; confirmedHash?: string; step: number; draft: A3Draft; aiDraft?: AiRootCauseDraft; newIdea?: string; causeInputs?: Record<IshikawaKey,string> };
   const currentCache = useScopedDraft<CachedDraft>(storageKey);
@@ -195,26 +226,36 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   }), [currentCache, otherCaches]);
   const [availableLocal, setAvailableLocal] = useState<CachedDraft[]>([]);
   const [claimEditorCatalog,setClaimEditorCatalog]=useState<ClaimsCatalog|null>(null);
-  const [step, setStep] = useState(0);
-  const [initialDraft] = useState(() => createInitialDraft(initialClaim));
+  const [step, setStep] = useState(stored?.currentStep ?? 0);
+  const [initialDraft] = useState(() => stored ? normalizeDraft(stored.payload.draft as Partial<A3Draft>) : createInitialDraft(initialClaim));
   const [draft, setDraft] = useState<A3Draft>(initialDraft);
-  const [draftId, setDraftId] = useState<string>();
-  const [draftRevision, setDraftRevision] = useState(0);
+  const [draftId, setDraftId] = useState(stored?.id);
+  const [draftRevision, setDraftRevision] = useState(stored?.revision ?? 0);
   const confirmedHash = useRef<string | undefined>(undefined);
   const [drafts, setDrafts] = useState<Omit<RootCauseStoredDraft, "payload">[]>([]);
   const [draftListError, setDraftListError] = useState("");
-  const [draftSaved, setDraftSaved] = useState(false);
+  const [confirmedScope, setConfirmedScope] = useState(stored ? JSON.stringify([stored.id,stored.processId ?? "",stored.source,stored.payload.draft.relatedPartyId ?? ""]) : "");
+  const [syncError, setSyncError] = useState(false);
+  const [cacheError, setCacheError] = useState("");
+  const operation = useRef(false);
+  const [finalizing, setFinalizing] = useState(false);
+  const [opening,setOpening] = useState(false);
 
   const [loaded, setLoaded] = useState(false);
-  const [newIdea, setNewIdea] = useState("");
-  const [causeInputs, setCauseInputs] = useState<Record<IshikawaKey, string>>({ workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" });
-  const [aiDraft, setAiDraft] = useState<AiRootCauseDraft>();
+  const [newIdea, setNewIdea] = useState(stored?.payload.newIdea ?? "");
+  const [causeInputs, setCauseInputs] = useState<Record<IshikawaKey, string>>(stored?.payload.causeInputs as Record<IshikawaKey,string> ?? { workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" });
+  const [aiDraft, setAiDraft] = useState<AiRootCauseDraft | undefined>(stored?.payload.aiDraft as AiRootCauseDraft | undefined);
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
   const [proposal, setProposal] = useState<RootCauseProposal>();
   const requestSnapshots = useRef<string[]>([]);
   const requestContext = useRef("");
-  const aiRequestInFlight = useRef(false);
+  const aiController = useRef<AbortController | null>(null);
+  useEffect(() => () => aiController.current?.abort(), []);
+  const snapshot = JSON.stringify({step, draft, aiDraft, newIdea, causeInputs});
+  const [confirmedSnapshot, setConfirmedSnapshot] = useState(stored ? snapshot : "");
+  const draftSaved = session.workspaceMode !== "demo" && confirmedSnapshot === snapshot;
+  const aiDisabled = isAiLoading || !draft.processId || draft.problem.trim().length < 15;
   const [customers, setCustomers] = useState<RootCauseCustomer[]>([]);
   const [customerError, setCustomerError] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -264,21 +305,29 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   }, [session.workspaceMode]);
 
   const resumeSavedDraft = async (id: string) => {
-    setSaving(true); setSaveError("");
+    if (operation.current) return;
+    if (id === draft.evidenceId && !draftSaved && !window.confirm("¿Reemplazar los cambios de este editor por la revisión guardada en Supabase?")) return;
+    operation.current = true;
+    setSaving(true); setSaveError(""); setSyncError(false);
+    setOpening(true);
     try {
       const result = await loadRootCauseDraft(id);
       const saved = result.draft;
       setLoaded(false);
       setProposal(undefined);
       confirmedHash.current = undefined;
-      setDraftId(saved.id); setDraftRevision(saved.revision); setDraftSaved(true);
-      setDraft(normalizeDraft(saved.payload.draft as unknown as A3Draft));
+      setDraftId(saved.id); setDraftRevision(saved.revision);
+      const restored = normalizeDraft(saved.payload.draft as unknown as A3Draft);
+      const inputs = saved.payload.causeInputs ?? { workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" };
+      setConfirmedSnapshot(JSON.stringify({step:saved.currentStep,draft:restored,aiDraft:saved.payload.aiDraft,newIdea:saved.payload.newIdea ?? "",causeInputs:inputs}));
+      setConfirmedScope(JSON.stringify([saved.id,saved.processId ?? "",saved.source,restored.relatedPartyId ?? ""]));
+      setDraft(restored);
       setStep(Math.min(Math.max(saved.currentStep, 0), stepLabels.length - 1));
       setAiDraft(saved.payload.aiDraft as AiRootCauseDraft | undefined);
       setNewIdea(saved.payload.newIdea ?? ""); setCauseInputs(saved.payload.causeInputs ?? { workforce: "", machinery: "", method: "", material: "", environment: "", measurement: "" });
       setLoaded(true);
     } catch (error) { setSaveError(error instanceof Error ? error.message : "No se pudo reabrir el borrador."); }
-    finally { setSaving(false); }
+    finally { operation.current = false; setOpening(false); setSaving(false); }
   };
 
   const persistDraft = async (targetStep = step, forFinalization = false) => {
@@ -286,32 +335,33 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     const savedDraft = { ...draft, evidenceId: id };
     if (session.workspaceMode === "demo") {
       persistence.write({ step: targetStep, draft: savedDraft, ...(aiDraft ? { aiDraft } : {}), newIdea, causeInputs });
-      persistence.dirty(true); setDraft(savedDraft); setDraftId(id); setDraftSaved(true);
+      persistence.dirty(true); setDraftId(id);
       return { id, revision: 0 };
     }
     const payload = { step: targetStep, draft: savedDraft as unknown as Record<string, unknown>, ...(aiDraft ? { aiDraft } : {}), newIdea, causeInputs };
-    // JSONB and the browser may return object keys in different orders after reloading.
-    const serialized = JSON.stringify(payload, (_, value) => value && typeof value === "object" && !Array.isArray(value)
-      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]])) : value);
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serialized));
-    const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    const hash = await payloadHash(payload);
     if (forFinalization && draftRevision > 0 && confirmedHash.current === hash) {
       return { id, revision: draftRevision };
     }
     const result = await saveRootCauseDraft({ id, revision: draftRevision, currentStep: targetStep, payload });
     confirmedHash.current = hash;
-    setDraft(savedDraft); setDraftId(result.id); setDraftRevision(result.revision); setDraftSaved(true);
-    persistence.write({ ...payload, draft: savedDraft, revision: result.revision, confirmedHash: hash });
-    persistence.dirty(true); await refreshSavedDrafts();
+    setDraftId(result.id); setDraftRevision(result.revision); setConfirmedSnapshot(snapshot);
+    setConfirmedScope(JSON.stringify([id,draft.processId ?? "",getCorrectiveSource(draft.origin),draft.relatedPartyId ?? ""]));
+    persistence.dirty(true); void refreshSavedDrafts();
     return { id: result.id, revision: result.revision };
   };
 
-  const navigateToStep = async (targetStep: number) => {
-    if (targetStep < 0 || targetStep >= stepLabels.length || targetStep === step || isSaving) return;
-    setSaving(true); setSaveError("");
-    try { await persistDraft(targetStep); setStep(targetStep); }
-    catch (error) { setSaveError(error instanceof Error ? error.message : "No se guardó el avance; permanece en la etapa actual."); }
-    finally { setSaving(false); }
+  const navigateToStep = (targetStep: number) => {
+    if (!finalizing && targetStep >= 0 && targetStep < stepLabels.length) setStep(targetStep);
+  };
+
+  const saveChanges = async () => {
+    if (operation.current) return;
+    operation.current = true;
+    setSaving(true); setSaveError(""); setSyncError(false);
+    try { await persistDraft(); }
+    catch (error) { setSyncError(true); setSaveError(error instanceof Error ? error.message : "Supabase no confirmó el guardado."); }
+    finally { operation.current = false; setSaving(false); }
   };
 
   useEffect(() => {
@@ -324,34 +374,58 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
     return () => window.clearTimeout(timer);
   }, [currentCache, otherCaches]);
 
-  const resumeLocal = (entry: CachedDraft) => {
+  const resumeLocal = async (entry: CachedDraft) => {
+    if (operation.current) return;
     const id = entry.draft.evidenceId;
     const latest = currentCache.read();
     const saved = latest?.draft.evidenceId === id ? latest : id ? otherCaches.read()?.[id] : null;
     if (!saved) { setSaveError("El borrador local ya no está disponible. Consulta los borradores guardados."); return; }
-    setDraft(normalizeDraft(saved.draft));
+    const restored = normalizeDraft(saved.draft);
+    setDraft(restored);
     setDraftId(saved.draft.evidenceId);
     setDraftRevision(saved.revision ?? 0);
-    confirmedHash.current = saved.confirmedHash;
-    setDraftSaved(Boolean(saved.revision));
+    confirmedHash.current = undefined;
+    setConfirmedSnapshot("");
+    setConfirmedScope("");
     setNewIdea(saved.newIdea ?? "");
     setCauseInputs(saved.causeInputs ?? {workforce:"", machinery:"", method:"", material:"", environment:"", measurement:""});
     setStep(Math.max(0, Math.min(stepLabels.length - 1, saved.step)));
     setAiDraft(saved.aiDraft);
     setProposal(undefined);
     setSaveError("");
+    if (!id || session.workspaceMode === "demo") return;
+    operation.current = true; setOpening(true); setSaving(true);
+    try {
+      const {draft:remote} = await loadRootCauseDraft(id);
+      const remoteHash = await payloadHash(remote.payload);
+      const localHash = await payloadHash({step:saved.step,draft:saved.draft,aiDraft:saved.aiDraft,newIdea:saved.newIdea,causeInputs:saved.causeInputs});
+      if (localHash === remoteHash) {
+        confirmedHash.current = remoteHash;
+        setDraftRevision(remote.revision);
+        setConfirmedSnapshot(JSON.stringify({step:saved.step,draft:restored,aiDraft:saved.aiDraft,newIdea:saved.newIdea ?? "",causeInputs:saved.causeInputs ?? {workforce:"",machinery:"",method:"",material:"",environment:"",measurement:""}}));
+        setConfirmedScope(JSON.stringify([id,remote.processId ?? "",remote.source,restored.relatedPartyId ?? ""]));
+      } else if (saved.confirmedHash === remoteHash || remote.revision === saved.revision) {
+        setDraftRevision(remote.revision);
+      } else {
+        setSyncError(true); setSaveError("Supabase tiene una revisión distinta. Revisa los cambios locales antes de abrir la revisión del servidor.");
+      }
+    } catch (error) {
+      if (saved.revision || !(error instanceof RootCauseHttpError && error.status === 404)) {
+        setSaveError(error instanceof Error ? error.message : "No se pudo comprobar la revisión del servidor.");
+      }
+    } finally {operation.current=false;setOpening(false);setSaving(false);}
   };
 
   useEffect(() => {
     if (loaded) {
-      const hasText=JSON.stringify({...draft,evidenceId:undefined})!==JSON.stringify({...initialDraft,evidenceId:undefined})||Boolean(aiDraft)||Boolean(newIdea)||Object.values(causeInputs).some(Boolean);
-      if (hasText) {
+      const hasText = step !== (stored?.currentStep ?? 0) || draft !== initialDraft || Boolean(draftRevision || saveError || aiDraft || newIdea) || Object.values(causeInputs).some(Boolean);
+      if (hasText && !(stored && draft === initialDraft && draftSaved)) {
         const stored = persistence.write({step,draft,revision:draftRevision,confirmedHash:confirmedHash.current,aiDraft,newIdea,causeInputs});
-        persistence.dirty(true);
-        if (!stored) setSaveError("El navegador no pudo conservar los cambios locales. Guarda el borrador antes de salir.");
+        persistence.dirty(!draftSaved);
+        setCacheError(stored ? "" : "El navegador no pudo conservar los cambios. Mantén abierto el editor.");
       }
     }
-  }, [aiDraft, draft, draftRevision, loaded, step, storageKey, newIdea, causeInputs, initialDraft,persistence]);
+  }, [aiDraft, draft, draftRevision, loaded, step, storageKey, newIdea, causeInputs, initialDraft,persistence,draftSaved,stored,saveError]);
 
 
   useEffect(()=>()=>persistence.dirty(false),[persistence]);
@@ -402,19 +476,23 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   const requestAiSuggestions = async (mode:"full"|"step"="step") => {
-    if (aiRequestInFlight.current) return;
-    aiRequestInFlight.current = true;
+    if (aiController.current) return;
+    const controller = new AbortController();
+    aiController.current = controller;
     setAiLoading(true);setAiError("");setProposal(undefined);
-    requestContext.current=proposalContext(draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area);
+    requestContext.current=proposalContext(draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area,draft.qualityCaseId,draft.externalClaimReference);
     const analysis=toA3Analysis(draft);requestSnapshots.current=stepLabels.map((_,i)=>stageSnapshot(analysis,i));
     try {
-      const response=await fetch("/api/ai/root-cause/assist",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,area:draft.area,problem:draft.problem,analysis,origin:draft.origin,...(draft.origin==="customer"&&draft.relatedPartyId?{relatedPartyId:draft.relatedPartyId}:{})})});
-      const payload=await response.json();if(!response.ok)throw new Error(payload.error??"No fue posible consultar la IA.");setProposal(payload);
-    }catch(error){setAiError(error instanceof Error?error.message:"No fue posible consultar la IA.");}finally{aiRequestInFlight.current=false;setAiLoading(false);}
+      const response=await fetch("/api/ai/root-cause/assist",{method:"POST",signal:controller.signal,headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,step,processId:draft.processId,area:draft.area,problem:draft.problem,claimReference:draft.externalClaimReference,analysis,origin:draft.origin,...(draft.origin==="customer"&&draft.relatedPartyId?{relatedPartyId:draft.relatedPartyId}:{})})});
+      const payload = await readRootCauseJson<RootCauseProposal>(response);
+      if (!Array.isArray(payload.stages) || !Array.isArray(payload.documents) || !Array.isArray(payload.warnings)) throw new Error("La propuesta de IA llegó incompleta.");
+      if (!controller.signal.aborted) setProposal(payload);
+    }catch(error){setAiError(controller.signal.aborted ? "Espera cancelada." : error instanceof Error ? error.message : "No fue posible consultar la IA.");}finally{aiController.current=null;setAiLoading(false);}
   };
   const acceptSuggestion=(suggestion:StageSuggestion)=>{
+    if (finalizing) return false;
     if(!window.confirm("¿Incorporar esta propuesta revisada como borrador de la etapa? No confirma la causa ni aprueba acciones."))return false;
-    try{assertProposalContext(requestContext.current,draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area);const currentAnalysis=toA3Analysis(draft);assertProposalSnapshots(currentAnalysis,requestSnapshots.current);const next=applyStageSuggestion(currentAnalysis,suggestion,requestSnapshots.current[suggestion.step]);
+    try{assertProposalContext(requestContext.current,draft.problem,draft.processId,draft.evidenceId,draft.origin,draft.relatedPartyId,draft.area,draft.qualityCaseId,draft.externalClaimReference);const currentAnalysis=toA3Analysis(draft);assertProposalSnapshots(currentAnalysis,requestSnapshots.current);const next=applyStageSuggestion(currentAnalysis,suggestion,requestSnapshots.current[suggestion.step]);
       const current = draft;
       let updated: A3Draft = {...current,...next,brainstormIds:current.brainstormIds,causeItems:current.causeItems};
       if(suggestion.step===3){
@@ -448,11 +526,12 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
   };
 
   const completeAnalysis = async () => {
-    if (isSaving) return;
+    if (operation.current) return;
     const missing = getMissingFinalRequirements(draft, responsibleIds);
     if (missing.length) { setSaveError(`No se puede finalizar. Faltan: ${missing.join("; ")}.`); return; }
     const source = getCorrectiveSource(draft.origin);
-    setSaving(true); setSaveError("");
+    operation.current = true; setFinalizing(true);
+    setSaving(true); setSaveError(""); setSyncError(false);
     try {
       const persisted = await persistDraft(step, true);
       await onComplete({
@@ -476,7 +555,7 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
       persistence.discard(draft.evidenceId);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : "No fue posible guardar el análisis.");
-    } finally { setSaving(false); }
+    } finally { operation.current = false; setFinalizing(false); setSaving(false); }
 
   };
 
@@ -486,17 +565,18 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
         <div><p className="module-kicker">Metodología A3</p><h3>{draftId ? "Continuar análisis de acción correctiva" : "Nuevo análisis de acción correctiva"}</h3><p>{draftSaved ? "Borrador persistido en el expediente Root2Cause." : "Guarda el borrador para continuar desde otro inicio de sesión autorizado al proceso."}</p></div>
 
         <div className="a3-header-actions">
-          <button className="icon-button" type="button" title="Reiniciar borrador" aria-label="Reiniciar borrador" onClick={resetDraft}><RotateCcw size={17} /></button>
+          <button className="button button-ai" type="button" disabled={aiDisabled || finalizing || opening} onClick={()=>void requestAiSuggestions("full")}><Sparkles size={16}/> Llenar A3 con IA</button>
+          <button className="icon-button" type="button" title="Reiniciar borrador" aria-label="Reiniciar borrador" disabled={isSaving} onClick={resetDraft}><RotateCcw size={17} /></button>
         </div>
       </header>
 
-      {availableLocal.length > 0 && <section className="a3-stage-hint" aria-label="Continuar en este dispositivo">
+      {availableLocal.some(entry => !initialClaim || entry.draft.qualityCaseId === initialClaim.id && (!stored || entry.draft.evidenceId === stored.id)) && <section className="a3-stage-hint" aria-label="Continuar en este dispositivo">
         <strong>Borradores de este dispositivo</strong>
-        {availableLocal.map(entry => <button key={entry.draft.evidenceId} type="button" className="button button-secondary" disabled={isSaving} onClick={() => resumeLocal(entry)}>
+        {availableLocal.filter(entry => !initialClaim || entry.draft.qualityCaseId === initialClaim.id && (!stored || entry.draft.evidenceId === stored.id)).map(entry => <button key={entry.draft.evidenceId} type="button" className="button button-secondary" disabled={isSaving} onClick={() => resumeLocal(entry)}>
           Continuar {entry.draft.title || "análisis sin título"} · etapa {entry.step + 1}
         </button>)}
       </section>}
-      {session.workspaceMode !== "demo" ? <section className="a3-stage-hint" aria-label="Borradores guardados">
+      {!initialClaim && session.workspaceMode !== "demo" ? <section className="a3-stage-hint" aria-label="Borradores guardados">
         <strong>Continuar un borrador guardado</strong>
         {draftListError ? <p role="alert">{draftListError}</p> : drafts.length ? <div>{drafts.map(item => <button className="button button-secondary" type="button" key={item.id} disabled={isSaving} onClick={() => void resumeSavedDraft(item.id)}>
           {item.title || "Análisis sin título"} · {item.source === "customer" ? "Externa" : item.source === "sgc" ? "SGC" : "Interna"} · etapa {item.currentStep + 1} · revisión {item.revision}
@@ -505,14 +585,15 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
 
       <nav className="a3-stepper" aria-label="Etapas del análisis A3">
         {stepLabels.map((label, index) => (
-          <button className={`${index === step ? "active" : ""} ${completedSteps[index] ? "complete" : ""}`} key={label} type="button" disabled={isSaving} onClick={() => void navigateToStep(index)}>
+          <button className={`${index === step ? "active" : ""} ${completedSteps[index] ? "complete" : ""}`} key={label} type="button" disabled={finalizing || opening} onClick={() => navigateToStep(index)}>
             <span>{completedSteps[index] && index !== step ? <Check size={12} /> : index + 1}</span><small>{label}</small>
           </button>
         ))}
       </nav>
 
-      <div className="a3-stage">
-        {step === 0 ? <><OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} customerError={customerError} session={session} loading={isAiLoading} generate={()=>void requestAiSuggestions("full")} />{draft.origin==="customer"&&draft.relatedPartyId&&canPerformModuleAction(session,"customers","create")?<button className="button button-secondary" type="button" onClick={()=>{void claimsRequest<ClaimsCatalog>().then(setClaimEditorCatalog).catch(e=>setCustomerError((e as Error).message));}}>Registrar reclamo sin perder el avance del A3</button>:null}</> : null}
+      <fieldset className="a3-stage" style={{border:0,margin:0,minWidth:0}} disabled={finalizing || opening}>
+        <StageHelp.Provider value={<button className="button button-secondary" type="button" disabled={aiDisabled || opening} onClick={()=>void requestAiSuggestions("step")}><Sparkles size={14}/> Ayuda IA</button>}>
+        {step === 0 ? <><OpeningStage draft={draft} setDraft={setDraft} setOrigin={setOrigin} customers={customers} customerError={customerError} session={session} />{draft.origin==="customer"&&draft.relatedPartyId&&canPerformModuleAction(session,"customers","create")?<button className="button button-secondary" type="button" onClick={()=>{void claimsRequest<ClaimsCatalog>().then(setClaimEditorCatalog).catch(e=>setCustomerError((e as Error).message));}}>Registrar reclamo sin perder el avance del A3</button>:null}</> : null}
         {claimEditorCatalog?<ClaimEditor onCustomerCatalog={onCustomerCatalog} catalog={claimEditorCatalog} customerId={draft.relatedPartyId} title={draft.title} description={draft.problem} administrator={session.userType==="Administrador"} onClose={()=>setClaimEditorCatalog(null)} onSaved={async claim=>{const result=await loadRootCauseCustomers();setCustomers(result.customers);setDraft(current=>({...current,relatedPartyId:claim.external_organization_id,relatedParty:result.customers.find(c=>c.id===claim.external_organization_id)?.name??"",qualityCaseId:claim.id}));setClaimEditorCatalog(null);}}/>:null}
 
         {step === 1 ? <SeverityStage draft={draft} setDraft={setDraft} /> : null}
@@ -525,38 +606,31 @@ export function A3AnalysisWorkbench({ onCancel, onComplete, session, initialClai
         {step === 5 ? <CausesStage draft={draft} setDraft={setDraft} /> : null}
         {step === 6 ? <WhysStage draft={draft} setDraft={setDraft} /> : null}
         {step === 7 ? <PlansStage draft={draft} setDraft={setDraft} updatePlan={updatePlan} responsibleUsers={responsibleUsers} loadingResponsibleUsers={loadingResponsibleUsers} responsibleUsersError={responsibleUsersError} /> : null}
-        <A3StepEvidence key={`${draft.evidenceId}:${step}`} evidenceId={draft.evidenceId} step={step} processId={draft.processId} persisted={draftSaved}/>
-      </div>
-
-      <section className="a3-ai-assistant">
-        <header>
-          <span><Sparkles size={18} /></span>
-          <div><h4>Sugerencias de IA con contexto</h4><p>Descripción integral, proceso, documentación indexada y avance actual del A3.</p></div>
-          <button className="button button-ai" type="button" disabled={isAiLoading || draft.problem.trim().length < 15 || !draft.processId} onClick={()=>void requestAiSuggestions("step")}>
-            {isAiLoading ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} Ayudarme con IA en este paso
-          </button>
-        </header>
-        {aiError ? <div className="inline-error"><ShieldAlert size={16} />{aiError}</div> : null}
-        {proposal ? <A3ProposalReview key={JSON.stringify(proposal)} proposal={proposal} reviewed={[]} onAccept={acceptSuggestion} onReject={()=>setProposal(undefined)}/> : <p>Las propuestas requieren revisión. No se inventan documentos ni se aprueban causas automáticamente.</p>}
-      </section>
+        <A3StepEvidence key={`${draft.evidenceId}:${step}`} evidenceId={draft.evidenceId} step={step} processId={draft.processId} persisted={Boolean(draftRevision) && confirmedScope === JSON.stringify([draft.evidenceId,draft.processId ?? "",getCorrectiveSource(draft.origin),draft.relatedPartyId ?? ""])}/>
+        </StageHelp.Provider>
+      </fieldset>
+      {isAiLoading && <div role="status"><LoaderCircle size={15} className="spin"/> Consultando IA… <button type="button" onClick={()=>aiController.current?.abort()}>Cancelar espera</button></div>}
+      {aiError && <p role="alert"><ShieldAlert size={16}/> {aiError}</p>}
+      {proposal && <A3ProposalReview key={JSON.stringify(proposal)} proposal={proposal} reviewed={[]} onAccept={acceptSuggestion} onReject={()=>setProposal(undefined)}/>}
 
       <footer className="a3-footer">
-        <button className="button button-ghost" type="button" onClick={()=>{if(confirmLeaving())onCancel();}}>Salir al listado</button>
-        <span>{draftSaved ? <><Save size={14} /> Borrador guardado en Supabase</> : canContinue ? <><Save size={14} /> Borrador local conservado</> : <><AlertTriangle size={14} /> Borrador incompleto conservado localmente</>}</span>
+        <button className="button button-ghost" type="button" disabled={isSaving} onClick={()=>{if(confirmLeaving())onCancel();}}>Salir al listado</button>
+        <span role="status">{syncError ? (cacheError ? "Error de sincronización; cambios en el editor" : "Error de sincronización; cambios conservados en este dispositivo") : draftSaved ? "Guardado confirmado en Supabase · revisión " + draftRevision : "Cambios pendientes de guardar"}</span>
         <div>
-          <button className="button button-secondary" type="button" disabled={isSaving} onClick={() => { setSaving(true); setSaveError(""); void persistDraft().catch(error => setSaveError(error instanceof Error ? error.message : "No fue posible guardar el borrador.")).finally(() => setSaving(false)); }}><Save size={15} /> {isSaving ? "Guardando…" : "Guardar borrador"}</button>
-          <button className="button button-secondary" type="button" disabled={step === 0 || isSaving} onClick={() => void navigateToStep(step - 1)}><ChevronLeft size={16} /> Anterior</button>
-          {step < stepLabels.length - 1 ? <button className="button button-primary" type="button" disabled={!canContinue || isSaving} onClick={() => void navigateToStep(step + 1)}>Siguiente <ChevronRight size={16} /></button> : <button className="button button-primary" type="button" disabled={!canContinue || isSaving} onClick={() => void completeAnalysis()}><ClipboardCheck size={16} /> {isSaving ? "Guardando…" : "Crear acción A3"}</button>}
+          <button className="button button-secondary" type="button" disabled={isSaving} onClick={()=>void saveChanges()}><Save size={15}/> {isSaving ? "Guardando…" : "Guardar borrador"}</button>
+          <button className="button button-secondary" type="button" disabled={step === 0 || finalizing || opening} onClick={() => navigateToStep(step - 1)}><ChevronLeft size={16} /> Anterior</button>
+          {step < stepLabels.length - 1 ? <button className="button button-primary" type="button" disabled={finalizing || opening} onClick={() => navigateToStep(step + 1)}>Siguiente <ChevronRight size={16} /></button> : <button className="button button-primary" type="button" disabled={!canContinue || isSaving} onClick={() => void completeAnalysis()}><ClipboardCheck size={16} /> {isSaving ? "Guardando…" : "Crear acción A3"}</button>}
 
         </div>
       </footer>
       {getMissingFinalRequirements(draft, responsibleIds).length ? <details className="a3-stage-hint"><summary>Faltan estos datos para finalizar ({getMissingFinalRequirements(draft, responsibleIds).length})</summary><ul>{getMissingFinalRequirements(draft, responsibleIds).map(item => <li key={item}>{item}</li>)}</ul></details> : null}
-      {saveError ? <p role="alert">{saveError} El borrador local permanece disponible para reintentar.</p> : null}
+      {cacheError && <p role="alert">{cacheError}</p>}
+      {saveError ? <p role="alert">{saveError} {cacheError ? "" : "Los cambios permanecen en el editor."} {(draftId || syncError) && draft.evidenceId && <button type="button" disabled={isSaving} onClick={()=>void resumeSavedDraft(draft.evidenceId!)}>Abrir revisión de Supabase</button>}</p> : null}
     </section>
   );
 }
 
-function OpeningStage({ draft, setDraft, setOrigin, customers, customerError, session, loading, generate }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; setOrigin: (origin: A3Draft["origin"]) => void; customers: RootCauseCustomer[]; customerError: string; session: ActiveSession; loading: boolean; generate: () => void }) {
+function OpeningStage({ draft, setDraft, setOrigin, customers, customerError, session }: { draft: A3Draft; setDraft: React.Dispatch<React.SetStateAction<A3Draft>>; setOrigin: (origin: A3Draft["origin"]) => void; customers: RootCauseCustomer[]; customerError: string; session: ActiveSession }) {
   const [customerSearch, setCustomerSearch] = useState("");
   const [showCustomerOptions, setShowCustomerOptions] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === draft.relatedPartyId);
@@ -582,7 +656,7 @@ function OpeningStage({ draft, setDraft, setOrigin, customers, customerError, se
       <label><span>Responsable del análisis</span><input value={draft.owner} onChange={(event) => setDraft((current) => ({ ...current, owner: event.target.value }))} /></label>
       <label className="wide"><span>Título</span><input value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder="Resumen breve del problema" /></label>
       <label className="wide"><span>Descripción del problema</span><textarea rows={4} value={draft.problem} onChange={(event) => setDraft((current) => ({ ...current, problem: event.target.value }))} placeholder="Qué ocurrió, dónde, cuándo y con qué evidencia" /></label>
-      <div className="wide"><label><span>Proceso autorizado para consulta documental</span><select value={draft.processId??""} onChange={e=>setDraft(d=>({...d,processId:e.target.value}))}><option value="">Seleccionar proceso</option>{processCatalog.filter(p=>canAccessProcess(session,p.id)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><button type="button" className="button button-ai" disabled={loading||draft.problem.trim().length<15||!draft.processId} onClick={generate}>Generar análisis completo con IA</button></div>
+      <div className="wide"><label><span>Proceso autorizado para consulta documental</span><select value={draft.processId??""} onChange={e=>setDraft(d=>({...d,processId:e.target.value}))}><option value="">Seleccionar proceso</option>{processCatalog.filter(p=>canAccessProcess(session,p.id)).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label></div>
       <label><span>Fecha compromiso</span><input type="date" value={draft.dueDate} onChange={(event) => setDraft((current) => ({ ...current, dueDate: event.target.value }))} /></label>
     </div>
   </StageHeading>;
@@ -633,7 +707,8 @@ export function PlansStage({ draft, setDraft, updatePlan, responsibleUsers, load
 }
 
 function StageHeading({ icon, title, description, children, headingAction }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode; headingAction?: React.ReactNode }) {
-  return <section className="a3-stage-content"><header><span>{icon}</span><div><h4>{title}</h4><p>{description}</p></div>{headingAction}</header>{children}</section>;
+  const help = useContext(StageHelp);
+  return <section className="a3-stage-content"><header><span>{icon}</span><div><h4>{title}</h4><p>{description}</p></div>{help}{headingAction}</header>{children}</section>;
 }
 
 function isStepComplete(step: number, draft: A3Draft, responsibleIds: ReadonlySet<string> = new Set()) {

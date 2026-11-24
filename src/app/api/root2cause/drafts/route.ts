@@ -75,8 +75,10 @@ export async function POST(request: Request) {
       const finalized = await db.rpc("iq_root2cause_finalize_plan", { p_draft_id: body.id, p_expected_revision: body.expectedRevision });
       if (finalized.error) {
         const missing = finalized.error?.code === "PGRST202" || /iq_root2cause_finalize_plan/i.test(finalized.error?.message ?? "");
-        const conflict = /CONCURRENT|REVISION/i.test(finalized.error?.message ?? "");
-        return NextResponse.json({ error: missing ? "Finalizar análisis requiere instalar el SQL de persistencia Root2Cause; el borrador se conservó." : conflict ? "El borrador cambió en otra sesión. Recárgalo antes de finalizar." : "No se finalizó el borrador; su contenido permanece guardado." }, { status: missing ? 503 : conflict ? 409 : 422, headers: noStore });
+        const linked = saved.error?.message === "ROOT2CAUSE_CLAIM_ALREADY_LINKED";
+    const denied = saved.error?.code === "42501";
+    const conflict = /CONCURRENT|REVISION/i.test(finalized.error?.message ?? "");
+        return NextResponse.json({ error: missing ? "Finalizar análisis requiere instalar el SQL de persistencia Root2Cause; el borrador se conservó." : conflict ? "El borrador cambió en otra sesión. Recárgalo antes de finalizar." : "No se finalizó el borrador; su contenido permanece guardado." }, { status: missing ? 503 : (conflict || linked) ? 409 : denied ? 403 : 422, headers: noStore });
       }
       if (finalized.data?.id !== body.id || typeof finalized.data?.folio !== "string" || !/^AC-(?:\d{4}-)?\d+$/.test(finalized.data.folio)) {
         return NextResponse.json({ error: "El servidor no confirmó la identidad y el folio AC. Reintenta desde el mismo borrador." }, { status: 502, headers: noStore });
@@ -127,7 +129,7 @@ export async function POST(request: Request) {
     (payload as { step?: unknown }).step !== currentStep || JSON.stringify(payload).length > 200_000) return NextResponse.json({ error: "El contenido del borrador es inválido o supera el límite permitido." }, { status: 400, headers: noStore });
   const draft = (payload as { draft?: Record<string, unknown> }).draft;
   if (!draft || !["internal", "customer", "system"].includes(String(draft.origin)) || (draft.evidenceId !== id) ||
-    (draft.processId != null && (typeof draft.processId !== "string" || !isAdministrator(current.session) && !canAccessProcess(current.session, draft.processId)))) {
+    (draft.processId != null && (typeof draft.processId !== "string" || draft.processId !== "" && !isAdministrator(current.session) && !canAccessProcess(current.session, draft.processId)))) {
     return NextResponse.json({ error: "El borrador no coincide con el expediente o proceso autorizado." }, { status: 403, headers: noStore });
   }
   if (Number(expectedRevision) === 0 && !canPerformModuleAction(current.session, "corrective-actions", "create")) return NextResponse.json({ error: "No tienes permiso para crear borradores Root2Cause." }, { status: 403, headers: noStore });
@@ -140,9 +142,11 @@ export async function POST(request: Request) {
     p_quality_case_id: source === "customer" ? draft.qualityCaseId || null : null,
   });
   if (saved.error || !saved.data || typeof saved.data.revision !== "number") {
-    const missing = saved.error?.code === "PGRST202" || /iq_root2cause_save_draft/i.test(saved.error?.message ?? "");
+    const missing = saved.error?.code === "PGRST202";
+    const linked = saved.error?.message === "ROOT2CAUSE_CLAIM_ALREADY_LINKED";
+    const denied = saved.error?.code === "42501";
     const conflict = /CONCURRENT|REVISION/i.test(saved.error?.message ?? "");
-    return NextResponse.json({ error: missing ? "Guardar en Supabase requiere instalar el contrato de borradores Root2Cause. No se descartó el borrador local." : conflict ? "Otro usuario guardó cambios. Recarga el borrador antes de volver a guardar." : "No se confirmó el guardado. El borrador local permanece disponible." }, { status: missing ? 503 : conflict ? 409 : 422, headers: noStore });
+    return NextResponse.json({ error: linked ? "El reclamo ya tiene un A3. Abre el expediente desde Reclamos." : denied ? "El servidor denegó el guardado por permisos o alcance del expediente." : missing ? "Guardar en Supabase requiere instalar el contrato de borradores Root2Cause. No se descartó el borrador local." : conflict ? "Otro usuario guardó cambios. Recarga el borrador antes de volver a guardar." : "No se confirmó el guardado. El borrador local permanece disponible." }, { status: missing ? 503 : (conflict || linked) ? 409 : denied ? 403 : 422, headers: noStore });
   }
   return NextResponse.json(saved.data, { headers: noStore });
 }

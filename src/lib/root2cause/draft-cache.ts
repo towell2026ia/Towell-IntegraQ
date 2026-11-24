@@ -5,5 +5,6 @@ export function writeActiveDraft<T extends {draft:{evidenceId?:string}}>(
   const previous = active.read();
   const id = previous?.draft.evidenceId;
   if (previous && id && id !== value.draft.evidenceId && !others.write({...others.read(),[id]:previous})) return false;
-  return active.write(value);
+  // Match the wire representation, omitting optional undefined fields before storage validation.
+  return active.write(JSON.parse(JSON.stringify(value)) as T);
 }
