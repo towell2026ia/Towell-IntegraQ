@@ -3,21 +3,39 @@ import { createClient } from "@/lib/supabase/server";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 
+import { readConfirmedTaskLinks } from "@/lib/root2cause/redbooth-ledger";
+
 const headers = { "Cache-Control": "private, no-store" };
 async function authorized(write: boolean) {
   const s = await getAuthenticatedSession();
   return s?.authUserId && s.workspaceMode !== "demo" && ["Administrador", "Usuario interno"].includes(s.userType)
-    && canPerformModuleAction(s, "corrective-actions", "view") && (!write || canPerformModuleAction(s, "corrective-actions", "update"));
+    && canPerformModuleAction(s, "corrective-actions", "view") && (!write || canPerformModuleAction(s, "corrective-actions", "update")) ? s : null;
 }
 const denied = () => NextResponse.json({error:"Seguimiento no autorizado."},{status:403,headers});
 export async function GET(request: Request) {
-  if (!await authorized(false)) return denied();
+  const session = await authorized(false);
+  if (!session) return denied();
   const db = await createClient();
+  const historyId = new URL(request.url).searchParams.get("history");
+  if (historyId) {
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(historyId)) return denied();
+    const scope = await db.rpc("iq_u08_plan_queue");
+    if (scope.error) return NextResponse.json({error:"No se pudo verificar el alcance del plan."},{status:503,headers});
+    if (!scope.data?.some((p:{plan_id:string})=>p.plan_id===historyId)) return denied();
+    const events = await db.from("audit_log").select("created_at,reason").eq("module","corrective-actions")
+      .eq("action","root2cause.plan_followup").eq("resource_type","corrective_action_plan")
+      .eq("resource_id",historyId).order("created_at",{ascending:false}).order("id",{ascending:false}).limit(100);
+    return events.error ? NextResponse.json({error:"Historial no disponible para esta sesión."},{status:503,headers})
+      : NextResponse.json({events:events.data ?? []},{headers});
+  }
   const actionId = new URL(request.url).searchParams.get("action");
   if (actionId) {
     const result = await db.rpc("iq_u08_redbooth_status",{p_action:actionId});
-    return result.error ? NextResponse.json({error:"No se pudo verificar la sincronización."},{status:503,headers})
-      : NextResponse.json({records:result.data ?? []},{headers});
+    if (result.error || !session.organizationId) return NextResponse.json({error:"No se pudo verificar la sincronización."},{status:503,headers});
+    try {
+      const records = await readConfirmedTaskLinks(session.organizationId,actionId,result.data ?? []);
+      return NextResponse.json({records},{headers});
+    } catch { return NextResponse.json({error:"No se pudo verificar el vínculo."},{status:503,headers}); }
   }
   const { data, error } = await db.rpc("iq_u08_plan_queue");
   return error ? NextResponse.json({error:"No se pudo consultar el contrato de seguimiento."},{status:503,headers})

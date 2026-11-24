@@ -363,7 +363,7 @@ export function CorrectiveActionsModule({
         ))}
       </nav>
 
-      {workspaceView === "followup" && <A3PlanFollowup openPlan={id=>{
+      {workspaceView === "followup" && <A3PlanFollowup key={session.authUserId} actions={rootCauseActions} openPlan={id=>{
         const action = rootCauseActions.find(a=>a.a3?.plans.some(plan=>plan.id===id));
         if (!action) return;
         return () => {setQuery("");setStatusFilter("all");setSelectedId(action.id);

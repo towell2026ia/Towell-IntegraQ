@@ -1,6 +1,6 @@
 import {describe,it,expect,vi} from 'vitest';
 import {buildRedboothTask,resolveRedboothOwner,synchronizeApprovedAction,synchronizeApprovedPlan,type SyncLedger,type RedboothConnector} from './redbooth';
-import {ROOT2CAUSE_REDBOOTH_TARGET as target} from './redbooth-target';
+import {getPlanSync,ROOT2CAUSE_REDBOOTH_TARGET as target} from './redbooth-target';
 import type {CorrectiveAction} from '@/lib/types';
 const action={id:'case',folio:'AC-1'} as CorrectiveAction;
 const plan={id:'plan',description:'Verificar control',owner:'Ana',dueDate:'2026-11-20',status:'pending' as const};
@@ -41,4 +41,20 @@ it('can reserve a confirmed parent before children without PDF capability',async
  await synchronizeApprovedPlan(parent,[child],transport,ledger);
  expect(transport.createTask).toHaveBeenCalledTimes(1);expect(transport.createSubtask).toHaveBeenCalledTimes(1);
  expect(transport.createSubtask.mock.calls[0]).toEqual([expect.objectContaining({id:9}),child.task,expect.stringContaining("org-a:case:plan")]);
+});
+
+it('distingue falta de consulta, ausencia de reserva, reserva en curso y resultado incierto',()=>{
+  expect(getPlanSync(null,"plan").label).toBe("Sin verificar");
+  expect(getPlanSync([],"plan").label).toBe("Pendiente de sincronizar");
+  expect(getPlanSync([],"plan","enlace histórico").label).toBe("Requiere conciliación");
+  expect(getPlanSync([{item:"plan",sync_state:"pending",remote_id:null}],"plan").label).toBe("Sincronización en curso");
+  expect(getPlanSync([{item:"plan",sync_state:"error",remote_id:null}],"plan").url).toBeUndefined();
+});
+it('sólo abre el vínculo confirmado para el proyecto y el identificador registrados',()=>{
+  const row={item:"plan",sync_state:"synced",remote_id:"31"};
+  const url="https://redbooth.com/a/#!/projects/2233821/tasks/31";
+  expect(getPlanSync([row],"plan").url).toBeUndefined();
+  expect(getPlanSync([{...row,url}],"plan").url).toBe(url);
+  expect(getPlanSync([{...row,url:url.replace("/31","/32")}],"plan").url).toBeUndefined();
+  expect(getPlanSync([{...row,url:url.replace("2233821","1")}],"plan").url).toBeUndefined();
 });

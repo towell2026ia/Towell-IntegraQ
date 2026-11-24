@@ -1,0 +1,17 @@
+.followup { min-width: 0; }
+.metrics { grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); }
+.metrics [aria-pressed="true"] { border-color: var(--primary, #24638a); box-shadow: inset 0 0 0 1px currentColor; }
+.filters, .details { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%, 9rem),1fr)); gap: .75rem; }
+.filters { align-items: end; margin-bottom: 1rem; }
+.filters label:not(:first-child), .form label { display: grid; gap: .25rem; font-size: .85rem; }
+.filters label:first-child { align-self: end; }
+.filters input, .filters select, .form select, .form textarea { min-width: 0; width: 100%; font: inherit; }
+.card { border-top: 1px solid var(--line); padding: 1rem 0; overflow-wrap: anywhere; }
+.card header, .controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.card header { justify-content: space-between; font-size: .84rem; color: var(--muted); }
+.card h3 { margin: .4rem 0; }
+.details { margin: .65rem 0 1rem; }
+.details dt { font-size: .78rem; color: var(--muted); }
+.details dd { margin: .2rem 0 0; }
+.controls + .controls, .form { margin-top: .65rem; }
+.form { display: grid; gap: .6rem; max-width: 46rem; min-width: 0; padding: .75rem; border: 1px solid var(--line); border-radius: 7px; }
