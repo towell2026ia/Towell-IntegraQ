@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mock = vi.hoisted(() => ({ rpc: vi.fn(), upload: vi.fn(), download: vi.fn(), remove: vi.fn(), range: vi.fn(), from: vi.fn(), signedUrl: vi.fn() }));
+const mock = vi.hoisted(() => ({ rpc: vi.fn(), upload: vi.fn(), download: vi.fn(), remove: vi.fn(), maybeSingle: vi.fn(), from: vi.fn(), signedUrl: vi.fn() }));
 vi.mock("./supabase/client", () => ({ createClient: () => ({ rpc: mock.rpc, auth: { getUser: async () => ({ data: { user: { id: "actor" } } }) }, from: mock.from, storage: { from: () => ({ upload: mock.upload, download: mock.download, remove: mock.remove, createSignedUrl: mock.signedUrl }) } }) }));
 import { getControlledDocumentDownloadUrl, uploadPendingControlledDocument } from "./document-storage";
 import type { ActiveSession } from "./session-data";
@@ -8,9 +8,9 @@ const reservation = { fileId: "file-1", objectPath: "actor/documents/P-35/file-1
 beforeEach(() => {
  vi.clearAllMocks(); mock.upload.mockResolvedValue({ error: null }); mock.download.mockResolvedValue({ data: null, error: { message: "Not found" } });
  mock.rpc.mockImplementation(async name => ({ data: name === "reserve_controlled_document_upload" ? reservation : "document", error: null }));
- const query = { select: vi.fn().mockReturnThis(), order: vi.fn().mockReturnThis(), range: mock.range };
+ const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), maybeSingle: mock.maybeSingle };
  mock.from.mockReturnValue(query);
- mock.range.mockResolvedValue({ data: [{ id: "document", process_id: "P-35", document_type_id: "visual-aid", code: "AV-SGC-06", title: "Original identity", lifecycle: { is_deleted: true, lifecycle_status: "deleted", delete_reason: "Historical reason" }, versions: [], activity: [] }], count: 1, error: null });
+ mock.maybeSingle.mockResolvedValue({ data: { id: "document", process_id: "P-35", document_type_id: "visual-aid", code: "AV-SGC-06", title: "Original identity", lifecycle: { is_deleted: true, lifecycle_status: "deleted", delete_reason: "Historical reason" }, versions: [], activity: [] }, error: null });
 });
 describe("reserved controlled document upload", () => {
  it.each(["DOCUMENT_CODE_EXISTS", "FORBIDDEN", "DOCUMENT_PENDING_REVIEW", "DOCUMENT_SCOPE_MISMATCH", "DOCUMENT_CHANGED"])("%s is rejected before binary upload", async message => {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ client: vi.fn(), range: vi.fn(), select: vi.fn(), order: vi.fn(), from: vi.fn() }));
 vi.mock("@/lib/supabase/client", () => ({ createClient: mocks.client }));
-import { loadStoredControlledDocuments } from "./document-storage";
+import { loadStoredControlledDocument, loadStoredControlledDocuments } from "./document-storage";
 const row = (index: number) => ({ id: `doc-${index}`, process_id: "P-19", document_type_id: "manual", code: `MAN-${index}`, title: `Documento ${index}`, description: null, owner_id: null, owner: null, lifecycle: [], activity: [], versions: [] });
 beforeEach(() => {
   vi.resetAllMocks();
@@ -18,6 +18,30 @@ describe("authoritative document catalog", () => {
     expect(mocks.range.mock.calls).toEqual([[0, 499], [500, 999]]);
     expect(mocks.select.mock.calls[0][0]).toContain("lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(");
     expect(mocks.order).toHaveBeenCalledWith("id", { ascending: true });
+  });
+  it("keeps audit and file authorization off the catalog path", async () => {
+    mocks.range.mockResolvedValue({ data: [row(1)], count: 1, error: null });
+    const [document] = await loadStoredControlledDocuments();
+    expect(document.catalogSummary).toBe(true);
+    const columns = mocks.select.mock.calls[0][0];
+    expect(columns).not.toMatch(/document_audit_log|file_objects|object_path|sha256/);
+  });
+  it("reads one authorized record for history and file details", async () => {
+    const maybeSingle = vi.fn().mockResolvedValue({ data: row(7), error: null });
+    const eq = vi.fn().mockReturnValue({ maybeSingle });
+    mocks.select.mockReturnValue({ eq });
+    const document = await loadStoredControlledDocument("doc-7");
+    expect(document.id).toBe("doc-7");
+    expect(document.catalogSummary).toBeUndefined();
+    expect(eq).toHaveBeenCalledWith("id", "doc-7");
+    expect(mocks.select.mock.calls[0][0]).toMatch(/document_audit_log/);
+    expect(mocks.select.mock.calls[0][0]).toMatch(/file_objects/);
+    expect(mocks.range).not.toHaveBeenCalled();
+  });
+  it("surfaces denied or missing details without losing the catalog", async () => {
+    const eq = vi.fn().mockReturnValue({ maybeSingle: async () => ({ data: null, error: null }) });
+    mocks.select.mockReturnValue({ eq });
+    await expect(loadStoredControlledDocument("missing")).rejects.toThrow("no está disponible");
   });
   it("continues when the server page cap is smaller than the requested range", async () => {
     mocks.range.mockResolvedValueOnce({ data: [row(0)], count: 2, error: null }).mockResolvedValueOnce({ data: [row(1)], count: 2, error: null });

@@ -19,7 +19,7 @@ export async function createInstitutionalImageVersion(input: {
   let file = input.file;
   if (input.restoreVersionId) {
     const original = document.versions.find(version => version.id === input.restoreVersionId);
-    if (!original?.storageObjectPath) throw new Error("La versión seleccionada no tiene un original recuperable.");
+    if (!original || (!original.storageObjectPath && !original.catalogDocumentId)) throw new Error("La versión seleccionada no tiene un original recuperable.");
     const url = await getControlledDocumentDownloadUrl(original);
     if (!url) throw new Error("No fue posible consultar el archivo original.");
     const response = await fetch(url, { cache: "no-store" });

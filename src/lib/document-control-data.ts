@@ -19,6 +19,7 @@ export type ControlledDocumentStatus =
   | "obsolete";
 
 export interface ControlledDocumentVersion {
+  catalogDocumentId?: string;
   id: string;
   revision: number;
   versionNumber?: number;
@@ -91,6 +92,7 @@ export interface DocumentLifecycle {
 }
 
 export interface ControlledDocument {
+  catalogSummary?: boolean;
   id: string;
   processId: string;
   documentTypeId: string;

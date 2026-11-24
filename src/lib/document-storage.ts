@@ -103,9 +103,11 @@ export async function inspectControlledDocumentCode(code: string, processId: str
 }
 
 export async function loadStoredControlledDocument(documentId: string) {
-  const document = (await loadStoredControlledDocuments()).find(item => item.id === documentId);
-  if (!document) throw new Error("La operación se completó, pero no se pudo recargar el expediente. Reintenta la consulta antes de volver a cargar un archivo.");
-  return document;
+  const { data, error } = await createClient().from("controlled_documents")
+    .select(detailColumns).eq("id", documentId).maybeSingle();
+  if (error) throw new Error(`No se pudo consultar el expediente (${error.code}): ${errorMessage(error)}`);
+  if (!data) throw new Error("El expediente no está disponible para esta sesión.");
+  return mapStoredDocument(data as unknown as StoredDocumentRow);
 }
 
 export async function uploadPendingControlledDocument(input: ManualDocumentUploadInput): Promise<ControlledDocument> {
@@ -209,6 +211,12 @@ export async function getControlledDocumentDownloadUrl(
   version: ControlledDocumentVersion,
   target: "original" | "preview" = "original",
 ) {
+  if (version.catalogDocumentId) {
+    const document = await loadStoredControlledDocument(version.catalogDocumentId);
+    const stored = document.versions.find(item => item.id === version.id);
+    if (!stored) return null;
+    version = stored;
+  }
   const path = target === "preview" ? version.previewPath : version.storageObjectPath;
   if (!path) return null;
   const supabase = createClient();
@@ -332,6 +340,84 @@ function firstRelation<T>(relation: T | T[] | null) {
   return Array.isArray(relation) ? relation[0] ?? null : relation;
 }
 
+const catalogColumns = `
+  id, process_id, document_type_id, code, title, description, owner_id, deleted_at, deletion_reason,
+  owner:profiles!controlled_documents_owner_id_fkey(full_name),
+  lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(lifecycle_status, is_deleted),
+  versions:controlled_document_versions!controlled_document_versions_document_id_fkey(
+    id, revision, version_number, revision_sequence, legacy_revision, status, file_name, updated_at, uploaded_by, authorized_at,
+    uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
+    validator:profiles!controlled_document_versions_validator_id_fkey(full_name)
+  )
+`;
+
+const detailColumns = `
+  id,
+  process_id,
+  document_type_id,
+  code,
+  title,
+  description,
+  owner_id,
+  deleted_at,
+  deletion_reason,
+  owner:profiles!controlled_documents_owner_id_fkey(full_name),
+  lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(
+    lifecycle_status,
+    is_deleted,
+    deleted_at,
+    delete_reason,
+    obsoleted_at,
+    obsolete_reason,
+    replacement_document_id,
+    restored_at,
+    deleter:profiles!document_lifecycle_deleted_by_fkey(full_name),
+    obsoleter:profiles!document_lifecycle_obsoleted_by_fkey(full_name),
+    restorer:profiles!document_lifecycle_restored_by_fkey(full_name)
+  ),
+  activity:document_audit_log!document_audit_log_document_id_fkey(
+    id,
+    event_type,
+    performed_at,
+    reason,
+    document_version_id,
+    metadata,
+    performer:profiles!document_audit_log_performed_by_fkey(full_name)
+  ),
+  versions:controlled_document_versions!controlled_document_versions_document_id_fkey(
+    id,
+    revision,
+    version_number,
+    revision_sequence,
+    legacy_revision,
+    replacement_kind,
+    replaces_version_id,
+    status,
+    file_name,
+    change_reason,
+    change_summary,
+    comments,
+    updated_at,
+    authorized_at,
+    rejection_reason,
+    uploaded_by,
+    uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
+    validator:profiles!controlled_document_versions_validator_id_fkey(full_name),
+    file:file_objects!controlled_document_versions_file_id_fkey(
+      id,
+      bucket_id,
+      object_path,
+      mime_type,
+      size_bytes,
+      sha256,
+      preview_path,
+      preview_status,
+      preview_generated_at,
+      preview_error
+    )
+  )
+`;
+
 export async function loadStoredControlledDocuments(): Promise<ControlledDocument[]> {
   const supabase = createClient();
   const rows: StoredDocumentRow[] = [];
@@ -339,72 +425,7 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
   do {
     const { data, error, count } = await supabase
       .from("controlled_documents")
-      .select(`
-        id,
-        process_id,
-        document_type_id,
-        code,
-        title,
-        description,
-        owner_id,
-        deleted_at,
-        deletion_reason,
-        owner:profiles!controlled_documents_owner_id_fkey(full_name),
-        lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(
-          lifecycle_status,
-          is_deleted,
-          deleted_at,
-          delete_reason,
-          obsoleted_at,
-          obsolete_reason,
-          replacement_document_id,
-          restored_at,
-          deleter:profiles!document_lifecycle_deleted_by_fkey(full_name),
-          obsoleter:profiles!document_lifecycle_obsoleted_by_fkey(full_name),
-          restorer:profiles!document_lifecycle_restored_by_fkey(full_name)
-        ),
-        activity:document_audit_log!document_audit_log_document_id_fkey(
-          id,
-          event_type,
-          performed_at,
-          reason,
-          document_version_id,
-          metadata,
-          performer:profiles!document_audit_log_performed_by_fkey(full_name)
-        ),
-        versions:controlled_document_versions!controlled_document_versions_document_id_fkey(
-          id,
-          revision,
-          version_number,
-          revision_sequence,
-          legacy_revision,
-          replacement_kind,
-          replaces_version_id,
-          status,
-          file_name,
-          change_reason,
-          change_summary,
-          comments,
-          updated_at,
-          authorized_at,
-          rejection_reason,
-          uploaded_by,
-          uploader:profiles!controlled_document_versions_uploaded_by_fkey(full_name),
-          validator:profiles!controlled_document_versions_validator_id_fkey(full_name),
-          file:file_objects!controlled_document_versions_file_id_fkey(
-            id,
-            bucket_id,
-            object_path,
-            mime_type,
-            size_bytes,
-            sha256,
-            preview_path,
-            preview_status,
-            preview_generated_at,
-            preview_error
-          )
-        )
-      `, { count: "exact" })
+      .select(catalogColumns, { count: "exact" })
       .order("id", { ascending: true })
       .range(rows.length, rows.length + 499);
     if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code ?? "consulta"}): ${errorMessage(error)}`);
@@ -416,88 +437,92 @@ export async function loadStoredControlledDocuments(): Promise<ControlledDocumen
     if (new Set(rows.map(row => row.id)).size !== rows.length) throw new Error("El catálogo cambió durante la paginación. Reintenta.");
   } while (rows.length < total);
 
-  return rows.flatMap((row) => {
-    const documentTypeId = clientDocumentTypeIds[row.document_type_id];
-    if (!documentTypeId) throw new Error(`Tipo documental no reconocido: ${row.document_type_id}. No se mostrará un catálogo incompleto.`);
-    const defaultValidator = documentValidatorByProcess[row.process_id]?.name ?? "Jefatura del área";
-    const lifecycle = firstRelation(row.lifecycle);
-    return [{
-      id: row.id,
-      processId: row.process_id,
-      documentTypeId,
-      code: row.code,
-      name: row.title,
-      description: row.description ?? undefined,
-      owner: firstRelation(row.owner)?.full_name ?? defaultValidator,
-      ownerId: row.owner_id ?? undefined,
-      lifecycle: lifecycle ? {
-        status: lifecycle.lifecycle_status,
-        isDeleted: lifecycle.is_deleted || Boolean(row.deleted_at),
-        deletedAt: lifecycle.deleted_at ?? undefined,
-        deletedBy: firstRelation(lifecycle.deleter)?.full_name,
-        deleteReason: lifecycle.delete_reason ?? undefined,
-        obsoletedAt: lifecycle.obsoleted_at ?? undefined,
-        obsoletedBy: firstRelation(lifecycle.obsoleter)?.full_name,
-        obsoleteReason: lifecycle.obsolete_reason ?? undefined,
-        replacementDocumentId: lifecycle.replacement_document_id ?? undefined,
-        restoredAt: lifecycle.restored_at ?? undefined,
-        restoredBy: firstRelation(lifecycle.restorer)?.full_name,
-      } : { status: row.deleted_at ? "deleted" : "active", isDeleted: Boolean(row.deleted_at), deletedAt: row.deleted_at ?? undefined, deleteReason: row.deletion_reason ?? undefined },
-      activity: row.activity.map((event) => ({
-        id: event.id,
-        eventType: event.event_type,
-        performedBy: firstRelation(event.performer)?.full_name ?? "Sistema",
-        performedAt: event.performed_at,
-        reason: event.reason ?? undefined,
-        versionId: event.document_version_id ?? undefined,
-        metadata: event.metadata,
-      })).sort((left, right) => right.performedAt.localeCompare(left.performedAt)),
-      versions: row.versions
-        .map((version) => {
-          const file = firstRelation(version.file);
-          const validatorName = firstRelation(version.validator)?.full_name ?? defaultValidator;
-          return {
-            id: version.id,
-            revision: version.revision,
-            versionNumber: version.version_number ?? undefined,
-            revisionSequence: version.revision_sequence ?? undefined,
-            legacyRevision: version.legacy_revision ?? undefined,
-            replacementKind: version.replacement_kind ?? undefined,
-            replacesVersionId: version.replaces_version_id ?? undefined,
-            status: version.status,
-            fileName: version.file_name,
-            uploadedBy: firstRelation(version.uploader)?.full_name ?? "Carga documental masiva",
-            uploadedById: version.uploaded_by ?? undefined,
-            validator: validatorName,
-            modifiedAt: version.updated_at,
-            changeReason: version.change_reason,
-            changeSummary: version.change_summary ?? undefined,
-            comments: version.comments ?? undefined,
-            ...(version.authorized_at
-              ? { authorizedBy: validatorName, authorizedAt: version.authorized_at }
-              : {}),
-            ...(version.rejection_reason
-              ? { rejectionReason: version.rejection_reason }
-              : {}),
-            ...(file
-              ? {
-                  fileObjectId: file.id,
-                  storageBucket: file.bucket_id,
-                  storageObjectPath: file.object_path,
-                  mimeType: file.mime_type ?? undefined,
-                  sizeBytes: file.size_bytes ?? undefined,
-                  sha256: file.sha256 ?? undefined,
-                  previewPath: file.preview_path ?? undefined,
-                  previewStatus: file.preview_status ?? undefined,
-                  previewGeneratedAt: file.preview_generated_at ?? undefined,
-                  previewError: file.preview_error ?? undefined,
-                }
-              : {}),
-          } satisfies ControlledDocumentVersion;
-        })
-        .sort((left, right) => right.revision - left.revision),
-    } satisfies ControlledDocument];
-  });
+  return rows.map(row => mapStoredDocument(row, true));
+}
+
+function mapStoredDocument(row: StoredDocumentRow, summary = false): ControlledDocument {
+  const documentTypeId = clientDocumentTypeIds[row.document_type_id];
+  if (!documentTypeId) throw new Error(`Tipo documental no reconocido: ${row.document_type_id}. No se mostrará un catálogo incompleto.`);
+  const defaultValidator = documentValidatorByProcess[row.process_id]?.name ?? "Jefatura del área";
+  const lifecycle = firstRelation(row.lifecycle);
+  return {
+    ...(summary ? { catalogSummary: true } : {}),
+    id: row.id,
+    processId: row.process_id,
+    documentTypeId,
+    code: row.code,
+    name: row.title,
+    description: row.description ?? undefined,
+    owner: firstRelation(row.owner)?.full_name ?? defaultValidator,
+    ownerId: row.owner_id ?? undefined,
+    lifecycle: lifecycle ? {
+      status: lifecycle.lifecycle_status,
+      isDeleted: lifecycle.is_deleted || Boolean(row.deleted_at),
+      deletedAt: lifecycle.deleted_at ?? undefined,
+      deletedBy: firstRelation(lifecycle.deleter)?.full_name,
+      deleteReason: lifecycle.delete_reason ?? undefined,
+      obsoletedAt: lifecycle.obsoleted_at ?? undefined,
+      obsoletedBy: firstRelation(lifecycle.obsoleter)?.full_name,
+      obsoleteReason: lifecycle.obsolete_reason ?? undefined,
+      replacementDocumentId: lifecycle.replacement_document_id ?? undefined,
+      restoredAt: lifecycle.restored_at ?? undefined,
+      restoredBy: firstRelation(lifecycle.restorer)?.full_name,
+    } : { status: row.deleted_at ? "deleted" : "active", isDeleted: Boolean(row.deleted_at), deletedAt: row.deleted_at ?? undefined, deleteReason: row.deletion_reason ?? undefined },
+    activity: row.activity?.map((event) => ({
+      id: event.id,
+      eventType: event.event_type,
+      performedBy: firstRelation(event.performer)?.full_name ?? "Sistema",
+      performedAt: event.performed_at,
+      reason: event.reason ?? undefined,
+      versionId: event.document_version_id ?? undefined,
+      metadata: event.metadata,
+    })).sort((left, right) => right.performedAt.localeCompare(left.performedAt)),
+    versions: row.versions
+      .map((version) => {
+        const file = firstRelation(version.file);
+        const validatorName = firstRelation(version.validator)?.full_name ?? defaultValidator;
+        return {
+          id: version.id,
+          revision: version.revision,
+          versionNumber: version.version_number ?? undefined,
+          revisionSequence: version.revision_sequence ?? undefined,
+          legacyRevision: version.legacy_revision ?? undefined,
+          replacementKind: version.replacement_kind ?? undefined,
+          replacesVersionId: version.replaces_version_id ?? undefined,
+          status: version.status,
+          fileName: version.file_name,
+          uploadedBy: firstRelation(version.uploader)?.full_name ?? "Carga documental masiva",
+          uploadedById: version.uploaded_by ?? undefined,
+          validator: validatorName,
+          modifiedAt: version.updated_at,
+          changeReason: version.change_reason ?? "",
+          ...(summary ? { catalogDocumentId: row.id } : {}),
+          changeSummary: version.change_summary ?? undefined,
+          comments: version.comments ?? undefined,
+          ...(version.authorized_at
+            ? { authorizedBy: validatorName, authorizedAt: version.authorized_at }
+            : {}),
+          ...(version.rejection_reason
+            ? { rejectionReason: version.rejection_reason }
+            : {}),
+          ...(file
+            ? {
+                fileObjectId: file.id,
+                storageBucket: file.bucket_id,
+                storageObjectPath: file.object_path,
+                mimeType: file.mime_type ?? undefined,
+                sizeBytes: file.size_bytes ?? undefined,
+                sha256: file.sha256 ?? undefined,
+                previewPath: file.preview_path ?? undefined,
+                previewStatus: file.preview_status ?? undefined,
+                previewGeneratedAt: file.preview_generated_at ?? undefined,
+                previewError: file.preview_error ?? undefined,
+              }
+            : {}),
+        } satisfies ControlledDocumentVersion;
+      })
+      .sort((left, right) => right.revision - left.revision),
+  };
 }
 
 export function mergeStoredControlledDocuments(

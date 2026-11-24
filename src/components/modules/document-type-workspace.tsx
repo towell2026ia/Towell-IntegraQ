@@ -74,8 +74,7 @@ export function DocumentTypeWorkspace({
   const [notice, setNotice] = useState("");
   const visibleDocuments = documents.filter((document) => getDocumentPermissions(session, document.processId).view);
   const selected = (id: string | null) => visibleDocuments.find((item) => item.id === id) ?? null;
-  const selectedPreview = selected(previewId);
-  const preview = selectedPreview ? { ...selectedPreview, versions: getDocumentPreviewVersions(selectedPreview, session) } : null;
+  const preview = selected(previewId);
   const history = selected(historyId);
   const rejecting = selected(rejectId);
   const editing = selected(editId);
@@ -166,7 +165,9 @@ export function DocumentTypeWorkspace({
     </table></div>
 
     {uploadOpen && permissions.upload ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { if (documents.some(item => item.id === document.id)) onChangeDocument(document); else onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
-    {preview ? <DocumentPreviewModal document={preview} canDownload={getDocumentPermissions(session, preview.processId).download} onClose={() => setPreviewId(null)} /> : null}
+    {preview ? <DocumentDetail key={preview.id} document={preview} onClose={() => setPreviewId(null)}>
+      {full => <DocumentPreviewModal document={{ ...full, versions: getDocumentPreviewVersions(full, session) }} canDownload={getDocumentPermissions(session, full.processId).download} onClose={() => setPreviewId(null)} />}
+    </DocumentDetail> : null}
     {history && getDocumentPermissions(session, history.processId).history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(await loadStoredControlledDocument(history.id)); setHistoryId(null); announce("Recuperación enviada a autorización; el archivo anterior permanece retirado."); }} /> : null}
     {rejecting && getDocumentPermissions(session, rejecting.processId).validate ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
     {editing && getDocumentPermissions(session, editing.processId).edit ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
@@ -253,7 +254,38 @@ function DocumentPreviewModal({ document, canDownload, onClose }: { document: Co
   return <ModalShell title="Vista rápida" eyebrow={`${document.code} · ${documentVersionLabel(version)}`} onClose={onClose} className="document-preview-modal"><div className="secure-document-preview-body"><div className="secure-preview-metadata"><span><strong>{document.name}</strong><small>{version.fileName}</small></span><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span><span><small>Autoriza</small><strong>{version.validator}</strong></span><span><small>Modificación</small><strong>{formatDate(version.modifiedAt)}</strong></span></div><DocumentPreviewViewer code={document.code} onReadyChange={setPreviewReady} ref={viewerRef} version={version} />{version.rejectionReason ? <div className="document-rejection-note"><XCircle size={16} /><span><strong>Observación de rechazo</strong>{version.rejectionReason}</span></div> : null}</div><footer><span className="secure-preview-protection">Solo lectura · {spreadsheet ? "Hoja de cálculo original" : "Preview PDF normalizado cuando está disponible"}</span><button className="button button-secondary" type="button" onClick={onClose}>Cerrar</button>{canDownload ? <button className="button button-secondary" type="button" onClick={() => void downloadOriginal()}><Download size={16} /> Descargar original</button> : null}{canDownload && !spreadsheet ? <button className="button button-secondary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("image")}><FileImage size={16} /> {exporting === "image" ? "Generando…" : "Descargar imagen"}</button> : null}{canDownload && !spreadsheet ? <button className="button button-primary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("pdf")}><Download size={16} /> {exporting === "pdf" ? "Generando…" : "Descargar PDF preview"}</button> : null}</footer></ModalShell>;
 }
 
-export function DocumentHistoryModal({ document, canRestore, onClose, onRestore }: { document: ControlledDocument; canRestore: boolean; onClose: () => void; onRestore: () => Promise<void> }) {
+function DocumentDetail({ document, onClose, children }: {
+  document: ControlledDocument; onClose: () => void; children: (full: ControlledDocument) => React.ReactNode;
+}) {
+  const [result, setResult] = useState<{ document?: ControlledDocument; error?: string } | null>(null);
+  const { id, processId, catalogSummary } = document;
+  useEffect(() => {
+    if (!catalogSummary) return;
+    let active = true;
+    void loadStoredControlledDocument(id).then(full => {
+      if (full.processId !== processId) throw new Error("El proceso del documento cambió. Actualiza el catálogo.");
+      if (active) setResult({ document: full });
+    }).catch(cause => {
+      if (active) setResult({ error: cause instanceof Error ? cause.message : "No fue posible consultar el expediente." });
+    });
+    return () => { active = false; };
+  }, [id, processId, catalogSummary]);
+  if (!catalogSummary) return children(document);
+  if (result?.document?.id === id && result.document.processId === processId) return children(result.document);
+  return <ModalShell title="Expediente documental" eyebrow={document.code} onClose={onClose} className="document-history-modal">
+    {result?.error ? <p role="alert">{result.error}</p> : <p role="status">Cargando el expediente autorizado…</p>}
+  </ModalShell>;
+}
+
+type HistoryProps = { document: ControlledDocument; canRestore: boolean; onClose: () => void; onRestore: () => Promise<void> };
+
+export function DocumentHistoryModal(props: HistoryProps) {
+  return <DocumentDetail key={props.document.id} document={props.document} onClose={props.onClose}>
+    {full => <DocumentHistoryContent {...props} document={full} />}
+  </DocumentDetail>;
+}
+
+function DocumentHistoryContent({ document, canRestore, onClose, onRestore }: HistoryProps) {
   const [restoring, setRestoring] = useState(false); const [error, setError] = useState(""); const [historicalId, setHistoricalId] = useState<string | null>(null);
   const historical = document.versions.find(version => version.id === historicalId);
   if (historical) return <DocumentPreviewModal document={{ ...document, versions: [historical] }} canDownload onClose={() => setHistoricalId(null)} />;
