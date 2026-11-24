@@ -51,7 +51,7 @@ function safeExportName(value: string) {
   return value.replace(/[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ._-]+/g, "-");
 }
 
-function triggerDownload(blob: Blob, fileName: string) {
+export function triggerDownload(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const anchor = window.document.createElement("a");
   anchor.href = url;

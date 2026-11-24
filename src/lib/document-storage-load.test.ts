@@ -129,3 +129,41 @@ it("reports a lifecycle query error instead of displaying unverified active docu
   });
   await expect(loadStoredControlledDocuments()).rejects.toThrow("57014");
 });
+
+it("delivers only verified active documents before the global count and name resolution", async () => {
+  const first = { ...row(1), owner_id: "owner" };
+  const early = [first, row(2), row(3)];
+  const stillLoading = vi.fn();
+  relatedRows.document_lifecycle = [
+    { document_id: first.id, lifecycle_status: "active", is_deleted: false },
+    { document_id: "doc-2", lifecycle_status: "deleted", is_deleted: true },
+  ];
+  relatedRows.profiles = [{ id: "owner", full_name: "Titular" }];
+  mocks.select.mockImplementation((_projection, options) => {
+    if (options?.head) {
+      expect(stillLoading).toHaveBeenCalledTimes(1);
+      return Promise.resolve({ count: 4, error: null });
+    }
+    return { order: mocks.order };
+  });
+  mocks.range.mockResolvedValueOnce({ data: early, count: null, error: null })
+    .mockResolvedValueOnce({ data: [row(4)], count: 4, error: null });
+  const documents = await loadStoredControlledDocuments(page => {
+    expect(page.map(d => d.id)).toEqual([first.id]);
+    expect(relationFilter.mock.calls.some(([table]) => table === "profiles")).toBe(false);
+    stillLoading();
+  });
+  expect(mocks.range.mock.calls).toEqual([[0, 11], [3, 502]]);
+  expect(documents.map(d => d.id)).toEqual(["doc-1", "doc-2", "doc-3", "doc-4"]);
+  expect(documents[0].owner).toBe("Titular");
+});
+
+it("does not expose a first page when the lifecycle lookup fails", async () => {
+  mocks.range.mockResolvedValueOnce({ data: [row(1)], count: null, error: null });
+  relationFilter.mockImplementation((table: string) => {
+    if (table === "document_lifecycle") throw new Error("57014");
+  });
+  const firstPage = vi.fn();
+  await expect(loadStoredControlledDocuments(firstPage)).rejects.toThrow("57014");
+  expect(firstPage).not.toHaveBeenCalled();
+});

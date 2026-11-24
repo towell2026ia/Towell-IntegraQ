@@ -6,7 +6,7 @@ vi.mock("@/lib/organization-chart-storage", () => ({ loadProcessOrganizationSour
 vi.mock("@/components/modules/general-information-module", () => ({ GeneralInformationModule: () => null }));
 vi.mock("@/components/modules/process-organization-chart", () => ({ ProcessOrganizationChart: () => null }));
 vi.mock("@/components/modules/document-preview-viewer", () => ({ DocumentPreviewViewer: () => null }));
-import { DocumentsModule } from "./documents-module";
+import { DocumentsModule, InitialDocumentPage } from "./documents-module";
 import { DocumentTypeWorkspace } from "./document-type-workspace";
 import { getDocumentPermissions, type ControlledDocument } from "@/lib/document-control-data";
 import { getAuthorizedDocumentProcessIds, documentTypeCatalog } from "@/lib/document-data";
@@ -63,4 +63,13 @@ describe("FIX-03A grouped document visibility", () => {
     expect(html.match(/aria-label="Aprobar y publicar"/g)).toHaveLength(1);
     expect(html).not.toContain("private-P-18"); expect(html).toContain("private-P-19");
   });
+});
+
+it("keeps the progressive page within the same module, process and version permissions", () => {
+  const current = documents.map(d => ({ ...d, versions: d.versions.map(v => ({ ...v, status: "current" as const })) }));
+  const page = (session: ActiveSession) => renderToStaticMarkup(createElement(InitialDocumentPage, { session, documents: current, pending: true }));
+  expect(page(user)).toContain("private-P-19");
+  expect(page(user)).not.toContain("private-P-18");
+  expect(page({ ...user, userType: "Cliente" })).not.toContain("private-P-19");
+  expect(page({ ...user, assignedModuleIds: [], moduleActionPermissions: [] })).not.toContain("private-P-19");
 });

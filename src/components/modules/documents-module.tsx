@@ -25,7 +25,7 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { EvidenceManager } from "@/components/evidence/evidence-manager";
-import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { AuthorizedDocumentPreview, DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
 import { ProcessOrganizationChart } from "@/components/modules/process-organization-chart";
@@ -35,6 +35,7 @@ import {
 } from "@/lib/configuration-data";
 import {
   getDocumentPermissions,
+  getDocumentPreviewVersions,
   getWorkingVersion,
   isOperationalDocument,
   documentAdvancedActionsEnabled,
@@ -92,6 +93,36 @@ interface DocumentsModuleProps {
   session: ActiveSession;
 }
 
+function canReadControlledCatalog(session: ActiveSession) {
+  return isAdministrator(session) || (
+    !isExternalUser(session) && (
+      Boolean(session.assignedModuleIds?.includes("documents")) ||
+      Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === "documents" && permission.action === "view"))
+    )
+  );
+}
+
+export function InitialDocumentPage({ documents, pending, session }: {
+  documents: ControlledDocument[]; pending: boolean; session: ActiveSession;
+}) {
+  const [opened, setOpened] = useState<ControlledDocument | null>(null);
+  if (!canReadControlledCatalog(session)) return null;
+  const visible = documents.filter(document => getDocumentPreviewVersions(document, session).length > 0);
+  return <>
+    {pending && visible.length > 0 ? <section className="document-control-table-wrap" aria-label="Primeros documentos autorizados">
+      <p role="status">Primeros documentos disponibles. La búsqueda, los filtros y los totales requieren el catálogo completo.</p>
+      <table className="document-control-table">
+        <thead><tr><th>Código</th><th>Documento</th><th>Consulta</th></tr></thead>
+        <tbody>{visible.map(document => <tr key={document.id}>
+          <td>{document.code}</td><td>{document.name}</td>
+          <td><button type="button" className="button button-secondary" onClick={() => setOpened(document)}>Vista rápida</button></td>
+        </tr>)}</tbody>
+      </table>
+    </section> : null}
+    {opened ? <AuthorizedDocumentPreview document={opened} session={session} activeOnly onClose={() => setOpened(null)} /> : null}
+  </>;
+}
+
 export function DocumentsModule({
   controlledDocuments,
   forms,
@@ -99,12 +130,7 @@ export function DocumentsModule({
   onControlledDocumentsChange,
   session,
 }: DocumentsModuleProps) {
-  const canViewControlledDocuments = isAdministrator(session) || (
-    !isExternalUser(session) && (
-      Boolean(session.assignedModuleIds?.includes("documents")) ||
-      Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === "documents" && permission.action === "view"))
-    )
-  );
+  const canViewControlledDocuments = canReadControlledCatalog(session);
   const canReadProcess = (processId: string) => canViewControlledDocuments && getDocumentPermissions(session, processId).view;
   const authorizedProcesses = processCatalog.filter((process) =>
     !isGroupedDocumentProcess(process.id) && getAuthorizedDocumentProcessIds(process.id, canReadProcess).length > 0,

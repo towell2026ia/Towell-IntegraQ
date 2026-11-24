@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { DocumentPreviewViewer, type DocumentPreviewViewerHandle } from "@/components/modules/document-preview-viewer";
+import { triggerDownload, DocumentPreviewViewer, type DocumentPreviewViewerHandle } from "@/components/modules/document-preview-viewer";
 import { isSpreadsheetFileName } from "@/lib/spreadsheet-preview";
 import type { ProcessCatalogItem } from "@/lib/configuration-data";
 import {
@@ -165,9 +165,7 @@ export function DocumentTypeWorkspace({
     </table></div>
 
     {uploadOpen && permissions.upload ? <UploadDocumentModal process={process} documentType={documentType} session={session} onClose={() => setUploadOpen(false)} onSubmit={(document) => { if (documents.some(item => item.id === document.id)) onChangeDocument(document); else onAddDocument(document); setUploadOpen(false); announce("Documento cargado correctamente."); }} /> : null}
-    {preview ? <DocumentDetail key={preview.id} document={preview} onClose={() => setPreviewId(null)}>
-      {full => <DocumentPreviewModal document={{ ...full, versions: getDocumentPreviewVersions(full, session) }} canDownload={getDocumentPermissions(session, full.processId).download} onClose={() => setPreviewId(null)} />}
-    </DocumentDetail> : null}
+    {preview ? <AuthorizedDocumentPreview key={preview.id} document={preview} session={session} onClose={() => setPreviewId(null)} /> : null}
     {history && getDocumentPermissions(session, history.processId).history ? <DocumentHistoryModal document={history} canRestore={getDocumentPermissions(session, history.processId).restore} onClose={() => setHistoryId(null)} onRestore={async () => { await restoreStoredDocument(history.id); onChangeDocument(await loadStoredControlledDocument(history.id)); setHistoryId(null); announce("Recuperación enviada a autorización; el archivo anterior permanece retirado."); }} /> : null}
     {rejecting && getDocumentPermissions(session, rejecting.processId).validate ? <RejectDocumentModal document={rejecting} onClose={() => setRejectId(null)} onReject={(reason) => rejectPendingDocument(rejecting, reason)} /> : null}
     {editing && getDocumentPermissions(session, editing.processId).edit ? <EditDocumentModal document={editing} documentType={documentType} onClose={() => setEditId(null)} onSave={async (values) => { await editStoredDocumentMetadata({ documentId: editing.id, ...values }); onChangeDocument({ ...editing, ...values, activity: [{ id: `${editing.id}-edit-${now()}`, eventType: "DOCUMENT_EDITED", performedBy: session.name, performedAt: now() }, ...(editing.activity ?? [])] }); setEditId(null); announce("Metadata actualizada correctamente."); }} /> : null}
@@ -247,11 +245,41 @@ function LifecycleReasonModal({ mode, document, documents, onClose, onConfirm }:
 }
 
 function DocumentPreviewModal({ document, canDownload, onClose }: { document: ControlledDocument; canDownload: boolean; onClose: () => void }) {
-  const version = getWorkingVersion(document); const viewerRef = useRef<DocumentPreviewViewerHandle>(null); const [previewReady, setPreviewReady] = useState(false); const [exporting, setExporting] = useState<"image" | "pdf" | null>(null); if (!version) return null;
+  const version = getWorkingVersion(document); const viewerRef = useRef<DocumentPreviewViewerHandle>(null); const [previewReady, setPreviewReady] = useState(false); const [exporting, setExporting] = useState<"image" | "pdf" | "original" | null>(null); const [downloadError, setDownloadError] = useState(""); if (!version) return null;
   const spreadsheet = isSpreadsheetFileName(version.fileName);
   async function exportPreview(format: "image" | "pdf") { if (!viewerRef.current || exporting) return; setExporting(format); try { if (format === "image") await viewerRef.current.downloadImage(); if (format === "pdf") await viewerRef.current.downloadPdf(); } catch (error) { window.alert(error instanceof Error ? error.message : "No fue posible exportar la vista."); } finally { setExporting(null); } }
-  async function downloadOriginal() { const url = await getControlledDocumentDownloadUrl(version); if (!url) return; const anchor = window.document.createElement("a"); anchor.href = url; anchor.download = version.fileName; anchor.click(); }
-  return <ModalShell title="Vista rápida" eyebrow={`${document.code} · ${documentVersionLabel(version)}`} onClose={onClose} className="document-preview-modal"><div className="secure-document-preview-body"><div className="secure-preview-metadata"><span><strong>{document.name}</strong><small>{version.fileName}</small></span><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span><span><small>Autoriza</small><strong>{version.validator}</strong></span><span><small>Modificación</small><strong>{formatDate(version.modifiedAt)}</strong></span></div><DocumentPreviewViewer code={document.code} onReadyChange={setPreviewReady} ref={viewerRef} version={version} />{version.rejectionReason ? <div className="document-rejection-note"><XCircle size={16} /><span><strong>Observación de rechazo</strong>{version.rejectionReason}</span></div> : null}</div><footer><span className="secure-preview-protection">Solo lectura · {spreadsheet ? "Hoja de cálculo original" : "Preview PDF normalizado cuando está disponible"}</span><button className="button button-secondary" type="button" onClick={onClose}>Cerrar</button>{canDownload ? <button className="button button-secondary" type="button" onClick={() => void downloadOriginal()}><Download size={16} /> Descargar original</button> : null}{canDownload && !spreadsheet ? <button className="button button-secondary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("image")}><FileImage size={16} /> {exporting === "image" ? "Generando…" : "Descargar imagen"}</button> : null}{canDownload && !spreadsheet ? <button className="button button-primary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("pdf")}><Download size={16} /> {exporting === "pdf" ? "Generando…" : "Descargar PDF preview"}</button> : null}</footer></ModalShell>;
+  async function downloadOriginal() {
+    if (exporting) return;
+    setExporting("original");
+    setDownloadError("");
+    try {
+      const url = await getControlledDocumentDownloadUrl(version);
+      if (!url) throw new Error("El original no está disponible para esta versión.");
+      const response = await fetch(url, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
+      if (!response.ok) throw new Error(`No se pudo descargar el original (HTTP ${response.status}).`);
+      triggerDownload(await response.blob(), version.fileName);
+    } catch (cause) {
+      setDownloadError(cause instanceof Error ? cause.message : "No se pudo descargar el original.");
+    } finally {
+      setExporting(null);
+    }
+  }
+  return <ModalShell title="Vista rápida" eyebrow={`${document.code} · ${documentVersionLabel(version)}`} onClose={onClose} className="document-preview-modal"><div className="secure-document-preview-body"><div className="secure-preview-metadata"><span><strong>{document.name}</strong><small>{version.fileName}</small></span><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span><span><small>Autoriza</small><strong>{version.validator}</strong></span><span><small>Modificación</small><strong>{formatDate(version.modifiedAt)}</strong></span></div><DocumentPreviewViewer code={document.code} onReadyChange={setPreviewReady} ref={viewerRef} version={version} />{version.rejectionReason ? <div className="document-rejection-note"><XCircle size={16} /><span><strong>Observación de rechazo</strong>{version.rejectionReason}</span></div> : null}</div>{downloadError ? <p role="alert">{downloadError}</p> : null}<footer><span className="secure-preview-protection">Solo lectura · {spreadsheet ? "Hoja de cálculo original" : "Preview PDF normalizado cuando está disponible"}</span><button className="button button-secondary" type="button" onClick={onClose}>Cerrar</button>{canDownload ? <button className="button button-secondary" type="button" disabled={exporting !== null} onClick={() => void downloadOriginal()}><Download size={16} /> Descargar original</button> : null}{canDownload && !spreadsheet ? <button className="button button-secondary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("image")}><FileImage size={16} /> {exporting === "image" ? "Generando…" : "Descargar imagen"}</button> : null}{canDownload && !spreadsheet ? <button className="button button-primary" type="button" disabled={!previewReady || exporting !== null} onClick={() => void exportPreview("pdf")}><Download size={16} /> {exporting === "pdf" ? "Generando…" : "Descargar PDF preview"}</button> : null}</footer></ModalShell>;
+}
+
+export function AuthorizedDocumentPreview({ document, session, onClose, activeOnly = false }: {
+  document: ControlledDocument; session: ActiveSession; onClose: () => void; activeOnly?: boolean;
+}) {
+  return <DocumentDetail document={document} onClose={onClose}>{full => {
+    const permissions = getDocumentPermissions(session, full.processId);
+    const versions = getDocumentPreviewVersions(full, session);
+    if (!permissions.view || !versions.length || (activeOnly && (full.lifecycle?.isDeleted || full.lifecycle?.status !== "active"))) {
+      return <ModalShell title="Vista rápida" eyebrow={full.code} onClose={onClose} className="document-preview-modal">
+        <p role="status">El documento ya no está disponible para esta sesión.</p>
+      </ModalShell>;
+    }
+    return <DocumentPreviewModal document={{ ...full, versions }} canDownload={permissions.download} onClose={onClose} />;
+  }}</DocumentDetail>;
 }
 
 function DocumentDetail({ document, onClose, children }: {

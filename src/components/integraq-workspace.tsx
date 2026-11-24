@@ -39,7 +39,7 @@ import { CorrectiveActionsModule } from "@/components/modules/corrective-actions
 import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
 import { CustomersModule } from "@/components/modules/customers-module";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
-import { DocumentsModule } from "@/components/modules/documents-module";
+import { DocumentsModule, InitialDocumentPage } from "@/components/modules/documents-module";
 import { FormsModule } from "@/components/modules/forms-module";
 import { HomeModule } from "@/components/modules/home-module";
 import { useHomeProcessData } from "@/lib/use-home-process-data";
@@ -69,6 +69,7 @@ import {
 } from "@/lib/access-policy";
 import {
   buildInitialControlledDocuments,
+  getDocumentPreviewVersions,
   mergeInitialControlledDocuments,
   synchronizeAppFormDocuments,
   type ControlledDocument,
@@ -226,6 +227,7 @@ export function IntegraQWorkspace({
     () => demoMode ? buildInitialControlledDocuments() : [],
   );
   const [documentLoad, setDocumentLoad] = useState<{ sessionKey: string; error: string | null } | null>(null);
+  const [firstDocuments, setFirstDocuments] = useState<{ sessionKey: string; retry: number; rows: ControlledDocument[] } | null>(null);
   const [documentRetry, setDocumentRetry] = useState(0);
   const controlledDocuments = useMemo(
     () => demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error) ? loadedDocuments : [],
@@ -390,7 +392,9 @@ export function IntegraQWorkspace({
   useEffect(() => {
     if (!storageReady || demoMode) return;
     let active = true;
-    void loadStoredControlledDocuments()
+    void loadStoredControlledDocuments(rows => {
+      if (active) setFirstDocuments({ sessionKey, retry: documentRetry, rows });
+    })
       .then((documents) => {
         if (!active) return;
         setControlledDocuments(documents);
@@ -640,7 +644,8 @@ export function IntegraQWorkspace({
           {activeModule === "access" ? <AccessModule /> : null}
           {activeModule === "home-settings" ? <HomeSettingsModule onChangeDocument={(updated) => setControlledDocuments(current => current.map(document => document.id === updated.id ? updated : document))} documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
-          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey !== sessionKey ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
+          {activeModule === "documents" && !demoMode && firstDocuments?.sessionKey === sessionKey && firstDocuments.retry === documentRetry ? <InitialDocumentPage key={sessionKey} documents={firstDocuments.rows} pending={documentLoad?.sessionKey !== sessionKey || Boolean(documentLoad.error)} session={session} /> : null}
+          {activeModule === "documents" && !demoMode && documentLoad?.sessionKey !== sessionKey && !(firstDocuments?.sessionKey === sessionKey && firstDocuments.retry === documentRetry && firstDocuments.rows.some(row => getDocumentPreviewVersions(row, session).length > 0)) ? <p role="status">Cargando el catálogo autorizado de Supabase…</p> : null}
           {activeModule === "documents" && !demoMode && documentLoad?.sessionKey === sessionKey && documentLoad.error ? <section role="alert"><p>{documentLoad.error}</p><button type="button" onClick={() => { setDocumentLoad(null); setDocumentRetry(value => value + 1); }}>Reintentar</button></section> : null}
           {activeModule === "documents" && (demoMode || (documentLoad?.sessionKey === sessionKey && !documentLoad.error)) ? <DocumentsModule controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={`documents-${navigationTarget?.module === "documents" ? navigationTarget.id : "index"}`} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}

@@ -410,6 +410,8 @@ const detailColumns = `
   )
 `;
 
+const firstDocumentPageSize = 12;
+
 type CatalogTable = "controlled_documents" | "controlled_document_versions" | "document_lifecycle" | "profiles";
 
 async function readCatalogRows<T>(
@@ -418,25 +420,41 @@ async function readCatalogRows<T>(
   columns: string,
   key: string,
   filter?: { column: string; ids: string[] },
+  firstPage?: (rows: T[]) => Promise<void>,
 ): Promise<T[]> {
   const rows: T[] = [];
   const seen = new Set<string>();
+  function append(page: T[]) {
+    for (const row of page) {
+      const id = (row as Record<string, string>)[key];
+      if (!id || seen.has(id)) throw new Error("El catálogo cambió durante la paginación. Reintenta.");
+      seen.add(id);
+      rows.push(row);
+    }
+  }
   let total: number | null = null;
-  do {
+  if (firstPage && !filter) {
+    const { data, error } = await client.from(table).select(columns).order(key, { ascending: true }).range(0, firstDocumentPageSize - 1);
+    if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code}, ${table}): ${errorMessage(error)}`);
+    append((data ?? []) as unknown as T[]);
+    if (rows.length) await firstPage([...rows]);
+    // Count after the first usable page. This also handles an empty catalog and server-side page caps.
+    const head = await client.from(table).select(key, { count: "exact", head: true });
+    if (head.error) throw new Error(`No se pudo verificar el total (${head.error.code}): ${errorMessage(head.error)}`);
+    total = head.count;
+    if (total === null || rows.length > total) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
+  }
+  while (total === null || rows.length < total) {
     let query = client.from(table).select(columns, { count: "exact" });
     if (filter) query = query.in(filter.column, filter.ids);
     const { data, error, count } = await query.order(key, { ascending: true }).range(rows.length, rows.length + 499);
     if (error) throw new Error(`No se pudo cargar Información Documentada (${error.code ?? "consulta"}, ${table}): ${errorMessage(error)}`);
     if (count === null || (total !== null && total !== count)) throw new Error("El catálogo cambió durante la carga o no se pudo verificar su total. Reintenta.");
     total = count;
-    const page = (data ?? []) as unknown as (T & Record<string, string>)[];
+    const page = (data ?? []) as unknown as T[];
     if ((!page.length && rows.length < total) || rows.length + page.length > total) throw new Error("La consulta devolvió un catálogo incompleto. Reintenta.");
-    for (const row of page) {
-      if (!row[key] || seen.has(row[key])) throw new Error("El catálogo cambió durante la paginación. Reintenta.");
-      seen.add(row[key]);
-      rows.push(row);
-    }
-  } while (rows.length < total);
+    append(page);
+  }
   return rows;
 }
 
@@ -456,55 +474,69 @@ async function readCatalogRelations<T>(
   return rows;
 }
 
-export async function loadStoredControlledDocuments(): Promise<ControlledDocument[]> {
+
+export async function loadStoredControlledDocuments(onFirstPage?: (rows: ControlledDocument[]) => void): Promise<ControlledDocument[]> {
   const client = createClient();
-  const documents = await readCatalogRows<Omit<StoredDocumentRow, "owner" | "lifecycle" | "activity" | "versions">>(
-    client, "controlled_documents", catalogColumns, "id",
-  );
-  const documentIds = documents.map(document => document.id);
-  const lifecycleRows = await readCatalogRelations<StoredDocumentRow["lifecycle"][number] & { document_id: string }>(
-    client, "document_lifecycle", "document_id,lifecycle_status,is_deleted", documentIds,
-  );
-  const versions = await readCatalogRelations<StoredDocumentRow["versions"][number] & { document_id: string; validator_id: string | null }>(
-    client, "controlled_document_versions", catalogVersionColumns, documentIds,
-  );
-  const profileIds = new Set<string>();
-  for (const document of documents) if (document.owner_id) profileIds.add(document.owner_id);
-  for (const version of versions) {
-    if (version.uploaded_by) profileIds.add(version.uploaded_by);
-    if (version.validator_id) profileIds.add(version.validator_id);
-  }
+  type RecordRow = Omit<StoredDocumentRow, "owner" | "lifecycle" | "activity" | "versions">;
+  type LifecycleRow = StoredDocumentRow["lifecycle"][number] & { document_id: string };
+  type VersionRow = StoredDocumentRow["versions"][number] & { document_id: string; validator_id: string | null };
+  const lifecycleById = new Map<string, LifecycleRow>();
+  const versionsByDocument = new Map<string, VersionRow[]>();
   const profileById = new Map<string, { full_name: string }>();
+  const profileIds = new Set<string>();
+
+  async function loadRelations(rows: RecordRow[]) {
+    const ids = rows.map(row => row.id);
+    const [lifecycle, versions] = await Promise.all([
+      readCatalogRelations<LifecycleRow>(client, "document_lifecycle", "document_id,lifecycle_status,is_deleted", ids),
+      readCatalogRelations<VersionRow>(client, "controlled_document_versions", catalogVersionColumns, ids),
+    ]);
+    for (const item of lifecycle) lifecycleById.set(item.document_id, item);
+    for (const row of rows) if (row.owner_id) profileIds.add(row.owner_id);
+    for (const version of versions) {
+      if (version.uploaded_by) profileIds.add(version.uploaded_by);
+      if (version.validator_id) profileIds.add(version.validator_id);
+      const group = versionsByDocument.get(version.document_id) ?? [];
+      group.push(version);
+      versionsByDocument.set(version.document_id, group);
+    }
+  }
+
+  function documentSummary(row: RecordRow) {
+    const lifecycle = lifecycleById.get(row.id);
+    return mapStoredDocument({
+      ...row, activity: [],
+      lifecycle: lifecycle ? [lifecycle] : [],
+      owner: profileById.get(row.owner_id ?? "") ?? null,
+      versions: (versionsByDocument.get(row.id) ?? []).map(version => ({
+        ...version,
+        uploader: profileById.get(version.uploaded_by ?? "") ?? null,
+        validator: profileById.get(version.validator_id ?? "") ?? null,
+      })),
+    }, true);
+  }
+
+  let firstPageSize = 0;
+  const documents = await readCatalogRows<RecordRow>(client, "controlled_documents", catalogColumns, "id", undefined,
+    onFirstPage ? async rows => {
+      await loadRelations(rows);
+      firstPageSize = rows.length;
+      onFirstPage(rows.filter(row => {
+        const state = lifecycleById.get(row.id);
+        return !row.deleted_at && state?.lifecycle_status === "active" && !state.is_deleted;
+      }).map(documentSummary));
+    } : undefined,
+  );
+  await loadRelations(documents.slice(firstPageSize));
   try {
     const profiles = await readCatalogRelations<{ id: string; full_name: string }>(
       client, "profiles", "id,full_name", [...profileIds],
     );
     for (const profile of profiles) profileById.set(profile.id, profile);
   } catch {
-    // A failed name lookup must neither discard the catalog nor attribute an action to a fallback user.
     for (const id of profileIds) profileById.set(id, { full_name: "Nombre no disponible" });
   }
-  const lifecycleById = new Map(lifecycleRows.map(row => [row.document_id, row]));
-  const versionsByDocument = new Map<string, StoredDocumentRow["versions"]>();
-  for (const version of versions) {
-    const group = versionsByDocument.get(version.document_id) ?? [];
-    group.push({
-      ...version,
-      uploader: profileById.get(version.uploaded_by ?? "") ?? null,
-      validator: profileById.get(version.validator_id ?? "") ?? null,
-    });
-    versionsByDocument.set(version.document_id, group);
-  }
-  return documents.map(document => {
-    const lifecycle = lifecycleById.get(document.id);
-    return mapStoredDocument({
-      ...document,
-      owner: profileById.get(document.owner_id ?? "") ?? null,
-      lifecycle: lifecycle ? [lifecycle] : [],
-      versions: versionsByDocument.get(document.id) ?? [],
-      activity: [],
-    }, true);
-  });
+  return documents.map(documentSummary);
 }
 
 function mapStoredDocument(row: StoredDocumentRow, summary = false): ControlledDocument {
