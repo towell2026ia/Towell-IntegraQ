@@ -20,11 +20,12 @@ describe("dashboard Root2Cause y módulos vacíos", () => {
       actions: [], onActionsChange: vi.fn(), session: activeSession,
     }));
     expect(html).toContain("<h2>Root2Cause</h2>");
-    for (const tab of ["Acciones abiertas", "Externas / clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
+    for (const tab of ["Acciones abiertas", "Externas / Clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
     expect(html).toContain("Buscar acción");
-    expect(html).toContain("Filtrar por estado");
-    expect(html).toContain("Sin acciones en este listado");
-    expect(html).toContain("Acciones activas");
+    expect(html).toContain("Filtrar por etapa o vencimiento");
+    expect(html).toContain("Sin acciones para esta consulta");
+    expect(html).toContain("Todas las acciones vigentes");
+    expect(html).not.toContain("Consultar metodología");
 
     const restored = restoreInitialCorrectiveActions([]);
     expect(restored.map(action => action.folio)).toEqual(demoCorrectiveActions.map(action => action.folio));
@@ -33,7 +34,7 @@ describe("dashboard Root2Cause y módulos vacíos", () => {
     }));
     expect(detail).toContain("<h2>Root2Cause</h2>");
     expect(detail).toContain("AC-2026-014");
-    expect(detail).toContain("Externas / clientes");
+    expect(detail).toContain("Externas / Clientes");
   });
 
   it("shows the four Root2Cause lists to internal viewers without write controls", () => {
@@ -44,10 +45,11 @@ describe("dashboard Root2Cause y módulos vacíos", () => {
     const html = renderToStaticMarkup(createElement(CorrectiveActionsModule, {
       actions: [action], onActionsChange: vi.fn(), session: viewer,
     }));
-    for (const tab of ["Acciones abiertas", "Externas / clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
+    for (const tab of ["Acciones abiertas", "Externas / Clientes", "Internas", "Sistema de gestión"]) expect(html).toContain(tab);
     expect(html).toContain(action.folio);
     expect(html).toContain("Buscar acción");
-    expect(html).not.toContain("Iniciar análisis A3");
+    expect(html).not.toContain(">Análisis A3</button>");
+    expect(html).not.toContain("Registros retirados");
   });
 
   it("presenta estados vacíos en Revisión, Mejora y Formularios", () => {

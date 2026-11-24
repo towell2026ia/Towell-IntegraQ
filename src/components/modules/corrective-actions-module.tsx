@@ -1,4 +1,5 @@
 "use client";
+import "./corrective-actions.css";
 import { A3PortalPublication } from "./a3-portal-publication";
 import { A3PlanFollowup } from "./a3-plan-followup";
 import { useContinuityState } from "@/components/workspace-continuity";
@@ -6,25 +7,20 @@ import { confirmLeaving } from "@/lib/workspace-continuity";
 
 import {
   AlertTriangle,
-  BookOpen,
+  Archive,
   Bot,
-  Building2,
-  CalendarDays,
   CheckCircle2,
-  ChevronRight,
   CircleDot,
   ClipboardList,
-  ExternalLink,
-  FileCheck2,
   Filter,
+  ListChecks,
+  NotebookPen,
   LoaderCircle,
-  Plus,
   RefreshCw,
   Search,
   ShieldAlert,
   Sparkles,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -63,7 +59,6 @@ interface CorrectiveActionsModuleProps {
   claimSeed?: CustomerClaim;
   onClaimSeedClear?: () => void;
   onNavigateCustomers?: () => void;
-  onNavigateDocuments?: () => void;
   actions: CorrectiveAction[];
   focusId?: string;
   onActionsChange: (actions: CorrectiveAction[]) => void;
@@ -90,7 +85,6 @@ export function CorrectiveActionsModule({
   claimSeed,
   onClaimSeedClear,
   onNavigateCustomers,
-  onNavigateDocuments,
 }: CorrectiveActionsModuleProps) {
   const today = toIsoDate(new Date());
   const focusedAction = actions.find((action) => action.id === focusId && action.source !== "supplier");
@@ -105,8 +99,14 @@ export function CorrectiveActionsModule({
         ? "system"
         : focusedAction
           ? "internal"
-          : "open",
+          : "all",
   );
+  const [savedGroup, setGroup] = useContinuityState<"all" | "open" | "closed" | "legacy">("root2cause:state-group","legacy");
+  // Earlier sessions stored either an origin or an open/closed filter in the same key.
+  const legacyGroup = listScope === "open" || listScope === "closed" ? listScope : "all";
+  const group = savedGroup === "legacy" ? (statusFilter === "closed" ? "closed" : legacyGroup) : savedGroup;
+  const phase = statusFilter === "closed" || group === "closed" ? "all" : statusFilter;
+  const origin = listScope === "open" || listScope === "closed" ? "all" : listScope;
   const [registryView, setRegistryView] = useState<CorrectiveRegistryView>(focusedAction ? "report" : "index");
   const [isAiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
@@ -143,44 +143,30 @@ export function CorrectiveActionsModule({
     ),
     [actions, session],
   );
+  const originActions = useMemo(() => rootCauseActions.filter(action => matchesCorrectiveListScope(action, origin)), [rootCauseActions, origin]);
+  const closedCount = originActions.filter(action => action.status === "closed").length;
   const filteredActions = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase("es");
-    return rootCauseActions.filter((action) => {
+    return originActions.filter((action) => {
       const matchesQuery =
         !normalizedQuery ||
         [action.folio, action.a3?.descriptiveTitle ?? action.title, action.area, action.owner].some((value) =>
           value.toLocaleLowerCase("es").includes(normalizedQuery),
         );
       const matchesStatus =
-        statusFilter === "all" ||
-        action.status === statusFilter ||
-        (statusFilter === "overdue" &&
+        phase === "all" ||
+        action.status === phase ||
+        (phase === "overdue" &&
           isCorrectiveActionOverdue(action, today));
-      const matchesScope = matchesCorrectiveListScope(action, listScope);
+      const matchesScope = matchesCorrectiveListScope(action, group);
       return matchesQuery && matchesStatus && matchesScope;
     });
-  }, [listScope, query, rootCauseActions, statusFilter, today]);
+  }, [group, query, originActions, phase, today]);
 
-  const selected =
-    filteredActions.find((action) => action.id === selectedId) ??
-    (registryView === "report" ? undefined : filteredActions[0]);
+  const selected = rootCauseActions.find(action => action.id === selectedId);
   const canEditSelected = selected
     ? canEditCorrectiveAction(session, selected)
     : false;
-
-  const metrics = useMemo(
-    () => ({
-      active: rootCauseActions.filter((action) => action.status !== "closed").length,
-      overdue: rootCauseActions.filter((action) =>
-        isCorrectiveActionOverdue(action, today),
-      ).length,
-      effectiveness: rootCauseActions.filter(
-        (action) => action.status === "effectiveness",
-      ).length,
-      closed: rootCauseActions.filter((action) => action.status === "closed").length,
-    }),
-    [rootCauseActions, today],
-  );
 
   const updateSelected = (changes: Partial<CorrectiveAction>) => {
     if (!selected || !canEditSelected) return;
@@ -354,62 +340,28 @@ export function CorrectiveActionsModule({
     finally { setDeleting(false); }
   };
 
-  const selectListScope = (scope: CorrectiveListScope) => {
-    setStatusFilter("all");
-    setListScope(scope);
-    setRegistryView("index");
-  };
+  const views = [
+    { id: "lists", label: "Acciones correctivas", icon: ClipboardList, visible: true },
+    { id: "a3", label: "Análisis A3", icon: NotebookPen, visible: canCreate || Boolean(claimSeed?.linkedDraftIds?.length) },
+    { id: "followup", label: "Seguimiento de acciones", icon: ListChecks, visible: session.workspaceMode !== "demo" && canPerformModuleAction(session, "corrective-actions", "view") },
+    { id: "retired", label: "Registros retirados", icon: Archive, visible: isAdministrator(session) && session.workspaceMode !== "demo" },
+  ] as const;
 
   return (
     <>
-      <section className="module-heading">
-        <div>
-          <p className="module-kicker">CAPA</p>
-          <h2>Root2Cause</h2>
-          <p>
-            Listados por origen y análisis A3 desde la detección hasta la eficacia.
-          </p>
-        </div>
-        {canCreate ? <button className="button button-primary" type="button" onClick={() => setWorkspaceView("a3")}>
-          <Plus size={17} />
-          Iniciar análisis A3
-        </button> : null}
-      </section>
-
-      <section className="metric-grid" aria-label="Resumen de acciones">
-        <Metric
-          icon={<ClipboardList size={19} />}
-          label="Acciones activas"
-          value={metrics.active}
-          tone="neutral"
-        />
-        <Metric
-          icon={<AlertTriangle size={19} />}
-          label="Vencidas"
-          value={metrics.overdue}
-          tone="danger"
-        />
-        <Metric
-          icon={<FileCheck2 size={19} />}
-          label="Validando eficacia"
-          value={metrics.effectiveness}
-          tone="warning"
-        />
-        <Metric
-          icon={<CheckCircle2 size={19} />}
-          label="Cerradas"
-          value={metrics.closed}
-          tone="success"
-        />
-      </section>
-
-      {onNavigateDocuments && canPerformModuleAction(session,"documents","view") && <button type="button" className="button button-secondary" onClick={() => { if (confirmLeaving()) onNavigateDocuments(); }}>Consultar metodología en Información Documentada</button>}
-      <div className="quality-view-tabs corrective-main-tabs" aria-label="Vistas de Root2Cause">
-        <button className={workspaceView === "lists" ? "active" : ""} type="button" onClick={() => {if(confirmLeaving())setWorkspaceView("lists");}}><BookOpen size={15} /> Listados de acciones</button>
-        {canCreate ? <button className={workspaceView === "a3" ? "active" : ""} type="button" onClick={() => setWorkspaceView("a3")}><ClipboardList size={15} /> Análisis A3</button> : null}
-        {session.workspaceMode !== "demo" && canPerformModuleAction(session, "corrective-actions", "view") && <button type="button" className={workspaceView === "followup" ? "active" : ""} onClick={() => { if (confirmLeaving()) setWorkspaceView("followup"); }}>Seguimiento de acciones</button>}
-        {isAdministrator(session) && session.workspaceMode !== "demo" ? <button className={workspaceView === "retired" ? "active" : ""} type="button" onClick={() => { if (confirmLeaving()) setWorkspaceView("retired"); }}>Registros retirados</button> : null}
-      </div>
+      <section className="module-heading"><div><p className="module-kicker">CAPA</p><h2>Root2Cause</h2></div></section>
+      <nav className="quality-view-tabs rootcause-view-tabs" aria-label="Vistas de Root2Cause">
+        {views.filter(view => view.visible).map(({id, label, icon: Icon}) => (
+          <button key={id} type="button" className={workspaceView === id ? "active" : ""} aria-current={workspaceView === id ? "page" : undefined}
+            onClick={() => {
+              if (workspaceView !== id && !confirmLeaving()) return;
+              setWorkspaceView(id);
+              if (id === "lists") setRegistryView("index");
+            }}>
+            <Icon size={16} aria-hidden="true" />{label}
+          </button>
+        ))}
+      </nav>
 
       {workspaceView === "followup" && <A3PlanFollowup openPlan={id=>{
         const action = rootCauseActions.find(a=>a.a3?.plans.some(plan=>plan.id===id));
@@ -421,15 +373,27 @@ export function CorrectiveActionsModule({
       {workspaceView === "retired" && isAdministrator(session) && session.workspaceMode !== "demo" ? <RetiredCorrectiveActions onActionsChange={onActionsChange} /> : null}
       {workspaceView === "lists" ? (
         <>
-          <section className="corrective-list-menu" aria-label="Listados por origen">
-            <button className={listScope === "all" ? "active" : ""} type="button" onClick={() => selectListScope("all")}>Todas las acciones vigentes</button>
-            <button className={listScope === "closed" ? "active" : ""} type="button" onClick={() => selectListScope("closed")}>Acciones cerradas</button>
-            <button className={listScope === "open" ? "active" : ""} type="button" onClick={() => selectListScope("open")}><ClipboardList size={18} /><span><strong>Acciones abiertas</strong><small>{rootCauseActions.filter((action) => action.status !== "closed").length} registros activos</small></span></button>
-            <button className={listScope === "customer" ? "active" : ""} type="button" onClick={() => selectListScope("customer")}><ExternalLink size={18} /><span><strong>Externas / clientes</strong><small>{rootCauseActions.filter((action) => action.source === "customer").length} vinculadas al portal</small></span></button>
-            <button className={listScope === "internal" ? "active" : ""} type="button" onClick={() => selectListScope("internal")}><UserRound size={18} /><span><strong>Internas</strong><small>{rootCauseActions.filter((action) => action.source === "internal").length} del proceso</small></span></button>
-            <button className={listScope === "system" ? "active" : ""} type="button" onClick={() => selectListScope("system")}><Building2 size={18} /><span><strong>Sistema de gestión</strong><small>{rootCauseActions.filter((action) => action.source === "audit" || action.source === "sgc").length} auditorías y SGC</small></span></button>
-          </section>
-
+          {registryView === "index" && <>
+            <div className="metric-grid corrective-summary" role="group" aria-label="Filtrar acciones por estado">
+              {([
+                ["all", "Todas las acciones vigentes", originActions.length, ClipboardList, "neutral"],
+                ["open", "Acciones abiertas", originActions.length - closedCount, CircleDot, "warning"],
+                ["closed", "Acciones cerradas", closedCount, CheckCircle2, "success"],
+              ] as const).map(([id, label, count, Icon, tone]) => (
+                <button key={id} type="button" aria-pressed={group === id} className={"metric metric-action metric-" + tone}
+                  onClick={() => { setGroup(id); setStatusFilter("all"); }}>
+                  <div className="metric-icon"><Icon aria-hidden="true" size={18}/></div>
+                  <div><strong>{count}</strong><span>{label}</span></div>
+                </button>
+              ))}
+            </div>
+            <div className="corrective-origins" role="group" aria-label="Filtrar acciones por origen">
+              {([["all","Todas"],["internal","Internas"],["customer","Externas / Clientes"],["system","Sistema de gestión"]] as const).map(([id,label]) => (
+                <button type="button" key={id} aria-pressed={origin === id} className="button button-secondary"
+                  onClick={() => { setGroup(group); setListScope(id); }}>{label}</button>
+              ))}
+            </div>
+          </>}
           <section className={`corrective-registry-layout corrective-registry-${registryView}`}>
         {registryView === "index" ? <div className="records-panel">
           <div className="panel-toolbar">
@@ -442,22 +406,22 @@ export function CorrectiveActionsModule({
                 aria-label="Buscar acción"
               />
             </label>
-            <label className="filter-control">
+            {group !== "closed" && <label className="filter-control">
               <Filter size={15} />
               <select
-                aria-label="Filtrar por estado"
-                value={statusFilter}
+                aria-label="Filtrar por etapa o vencimiento"
+                value={phase}
                 onChange={(event) => setStatusFilter(event.target.value)}
               >
-                <option value="all">Todos</option>
+                <option value="all">Todas las etapas</option>
                 <option value="overdue">Vencidas</option>
-                {statusOrder.map((status) => (
+                {statusOrder.filter(status => status !== "closed").map((status) => (
                   <option key={status} value={status}>
                     {getCorrectiveActionLabel(status)}
                   </option>
                 ))}
               </select>
-            </label>
+            </label>}
           </div>
 
           <div className="records-count">
@@ -465,58 +429,28 @@ export function CorrectiveActionsModule({
             {filteredActions.length === 1 ? "registro" : "registros"}
           </div>
 
-          <div className="record-list">
-            {filteredActions.map((action) => {
-              const overdue = isCorrectiveActionOverdue(action, today);
-              return (
-                <div key={action.id} className="corrective-record-delete-row" style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
-                <button
-                  type="button"
-                  className={`record-row ${
-                    selected?.id === action.id ? "record-row-selected" : ""
-                  }`}
-                  style={{ flex: 1 }}
-                  onClick={() => {
-                    setSelectedId(action.id);
-                    setRegistryView("report");
-                  }}
-                >
-                  <div className="record-row-top">
-                    <span className="record-folio">{action.folio}</span>
-                    <span
-                      className={`status-badge ${
-                        overdue ? "status-danger" : `status-${action.status}`
-                      }`}
-                    >
-                      {overdue
-                        ? "Vencida"
-                        : getCorrectiveActionLabel(action.status)}
-                    </span>
-                  </div>
-                  <strong>{action.a3?.descriptiveTitle || action.title}</strong>
-                  <div className="record-meta">
-                    <span>{action.area}</span>
-                    <span>{action.owner}</span>
-                  </div>
-                  <div className="record-progress">
-                    <span style={{ width: `${action.progress}%` }} />
-                  </div>
-                  <div className="record-row-bottom">
-                    <span>
-                      <CalendarDays size={14} />
-                      {formatDate(action.dueDate)}
-                    </span>
-                    <ChevronRight size={16} />
-                  </div>
-                </button>
-                {hardDeleteEnabled && hasHardDeletePermission ? <button className="icon-button danger" type="button" title="Eliminar definitivamente" aria-label={`Eliminar definitivamente ${action.folio}`} onClick={() => requestHardDelete(action)}><Trash2 size={16} /></button> : null}
-                </div>
-              );
-            })}
-            {filteredActions.length === 0 ? <div className="access-empty"><ClipboardList size={24} /><h3>Sin acciones en este listado</h3><p>Usa otra pestaña o inicia un análisis A3.</p></div> : null}
-          </div>
+          {filteredActions.length ? <div className="quality-table-wrap">
+            <table className="quality-table corrective-action-table" aria-label="Acciones correctivas vigentes">
+              <thead><tr><th scope="col">Expediente</th><th scope="col">Responsable</th><th scope="col">Compromiso</th><th scope="col">Estado</th><th scope="col">Avance</th><th scope="col">Acciones</th></tr></thead>
+              <tbody>{filteredActions.map(action => {
+                const overdue = isCorrectiveActionOverdue(action, today);
+                return <tr key={action.id}>
+                  <td><code>{action.folio}</code><strong>{action.a3?.descriptiveTitle || action.title}</strong><small>{action.area}</small></td>
+                  <td data-label="Responsable">{action.owner}</td>
+                  <td data-label="Compromiso">{formatDate(action.dueDate)}</td>
+                  <td data-label="Estado"><span className={"status-badge " + (overdue ? "status-danger" : "status-" + action.status)}>{overdue ? "Vencida" : getCorrectiveActionLabel(action.status)}</span></td>
+                  <td data-label="Avance">{action.progress}%</td>
+                  <td><div className="corrective-row-actions">
+                    <button className="button button-secondary" type="button" aria-label={"Abrir " + action.folio} onClick={() => {setSelectedId(action.id); setRegistryView("report");}}>Abrir</button>
+                    {hardDeleteEnabled && hasHardDeletePermission && <button className="icon-button danger" type="button" title="Eliminar definitivamente" aria-label={"Eliminar definitivamente " + action.folio} onClick={() => requestHardDelete(action)}><Trash2 size={16}/></button>}
+                  </div></td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div> : <p className="corrective-empty" role="status">Sin acciones para esta consulta.</p>}
         </div> : null}
 
+        {registryView === "report" && !selected && <div className="access-empty"><p>El expediente ya no está disponible en tu listado.</p><button type="button" className="button button-secondary" onClick={()=>setRegistryView("index")}>Volver al listado</button></div>}
         {registryView === "report" && selected ? <article className="corrective-report-view">
           <A3ActionReport action={selected} session={session} onBack={() => setRegistryView("index")}>
             <button
@@ -621,28 +555,6 @@ export function CorrectiveActionsModule({
         <div className="modal-actions"><button className="button button-secondary" type="button" disabled={deleting} onClick={() => setHardDeleteCandidateId("")}>Cancelar</button><button className="button button-danger" type="button" disabled={deleting || !deleteReason.trim() || deleteFolioConfirmation !== hardDeleteCandidate.folio || !hardDeleteEnabled || !hasHardDeletePermission} onClick={() => void confirmHardDelete()}>{deleting ? <LoaderCircle className="spin" size={16} /> : <Trash2 size={16} />}Eliminar definitivamente</button></div>
       </section></div> : null}
     </>
-  );
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  tone: "neutral" | "danger" | "warning" | "success";
-}) {
-  return (
-    <div className={`metric metric-${tone}`}>
-      <div className="metric-icon">{icon}</div>
-      <div>
-        <strong>{value}</strong>
-        <span>{label}</span>
-      </div>
-    </div>
   );
 }
 

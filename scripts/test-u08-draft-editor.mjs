@@ -16,12 +16,14 @@ modules.react=cjs("react","react.production.js");
 modules["react/jsx-runtime"]=cjs("react","react-jsx-runtime.production.js");
 modules["react-dom"]=cjs("react-dom","react-dom.production.js");
 modules["react-dom/client"]=cjs("react-dom","react-dom-client.production.js");
+modules["lucide-react"]=readFileSync(local.resolve("lucide-react"),"utf8");
 modules.scheduler=cjs("scheduler","scheduler.production.js",dom);
 for (const [name,ext] of Object.entries({
   "components/modules/a3-analysis-workbench":"tsx","components/workspace-continuity":"tsx",
   "lib/workspace-continuity":"ts","lib/root2cause/draft-cache":"ts","lib/root2cause/action-plan":"ts",
   "lib/root2cause/cause-links":"ts","lib/root2cause/assistant":"ts","lib/root-cause-draft-storage":"ts",
-  "lib/root-cause-customers":"ts",
+  "lib/root-cause-customers":"ts","components/modules/corrective-actions-module":"tsx",
+  "lib/corrective-action-access":"ts","lib/corrective-action-list":"ts","lib/domain":"ts",
 })) modules["@/"+name]=ts.transpileModule(readFileSync("src/"+name+"."+ext,"utf8"),{
   compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}
 }).outputText;
@@ -34,7 +36,7 @@ let waitForAi;
 let aiStarted;
 const errors=[];
 const browser=await chromium.launch({channel:"msedge",headless:true});
-async function openSession(initialClaim) {
+async function openSession(initialClaim, actions) {
   const page=await browser.newPage();
   page.setDefaultTimeout(7000);
   page.on("pageerror",error=>errors.push(error.message));
@@ -63,13 +65,19 @@ async function openSession(initialClaim) {
     throw new Error("Unexpected fixture request: "+url.pathname);
   });
   await page.goto("https://a3.test/");
-  await page.evaluate(({sources,claim})=>{
+  await page.evaluate(({sources,claim,actions})=>{
     const cache=new Map();
     const noComponent=()=>null;
     const stubs={
-      "lucide-react":new Proxy({},{get:()=>noComponent}),
+      "./corrective-actions.css":{},
+      "./a3-portal-publication":{},"./a3-plan-followup":{A3PlanFollowup:noComponent},
+      "@/components/modules/a3-action-report":{A3ActionReport:({action})=>react.createElement("h3",null,action.title)},
+      "@/components/modules/retired-corrective-actions":{RetiredCorrectiveActions:noComponent},
+      "@/components/modules/ai-suggestion-result":{},"@/lib/ai-context":{},
+      "@/lib/root2cause/hard-delete":{canHardDeleteCorrectiveAction:()=>false},
+      "@/lib/root-cause-publication":{},
       "@/lib/configuration-data":{processCatalog:[{id:"PROC",name:"Proceso local"}]},
-      "@/lib/session-data":{canAccessProcess:()=>true},
+      "@/lib/session-data":{canAccessProcess:()=>true,isAdministrator:s=>s.userType==="Administrador"},
       "@/lib/module-permissions":{canPerformModuleAction:()=>true},
       "@/components/modules/a3-proposal-review":{A3ProposalReview:noComponent},
       "@/components/modules/customer-claims-panel":{ClaimEditor:noComponent},
@@ -89,9 +97,10 @@ async function openSession(initialClaim) {
     const session={userType:"Administrador",authUserId:"fixture",organizationId:"fixture-org",workspaceMode:"production"};
     const {ContinuityProvider}=load("@/components/workspace-continuity");
     const {A3AnalysisWorkbench}=load("@/components/modules/a3-analysis-workbench");
+    const {CorrectiveActionsModule}=load("@/components/modules/corrective-actions-module");
     load("react-dom/client").createRoot(window.document.querySelector("#app")).render(
-      react.createElement(ContinuityProvider,{session},react.createElement(A3AnalysisWorkbench,{session,initialClaim:claim,onCancel:()=>{},onComplete:()=>{throw new Error("Unexpected finalization");}})));
-  },{sources:modules,claim:initialClaim});
+      react.createElement(ContinuityProvider,{session},actions ? react.createElement(CorrectiveActionsModule,{actions,session,onActionsChange:()=>{}}) : react.createElement(A3AnalysisWorkbench,{session,initialClaim:claim,onCancel:()=>{},onComplete:()=>{throw new Error("Unexpected finalization");}})));
+  },{sources:modules,claim:initialClaim,actions});
   return page;
 }
 try{
@@ -146,6 +155,52 @@ try{
   const linked=await openSession(claim);
   await linked.getByText("Guardado confirmado en Supabase · revisión 2").waitFor();
   assert.equal(await linked.getByLabel("Título",{exact:true}).inputValue(),document.payload.draft.title);
+  const base={organizationId:"fixture-org",dueDate:"2099-01-01",owner:"Responsable",area:"Calidad",progress:25,title:"Expediente autorizado"};
+  const cases=[
+    ["internal","open"],["customer","implementation"],["customer","closed"],["sgc","closed"],["audit","analysis"],
+    ["customer","closed",{deletedAt:"2026-01-01"}],["internal","open",{organizationId:"otra"}],["supplier","open"],
+  ].map(([source,status,extra],i)=>({...base,source,status,...extra,id:"case-"+i,folio:"AC-"+i}));
+  const registry=await openSession(undefined,cases);
+  await registry.addStyleTag({content:readFileSync("src/app/globals.css","utf8")});
+  await registry.addStyleTag({content:readFileSync("src/components/modules/corrective-actions.css","utf8")});
+  const tabs=registry.getByRole("navigation",{name:"Vistas de Root2Cause"});
+  const cards=registry.getByRole("group",{name:"Filtrar acciones por estado"});
+  const origins=registry.getByRole("group",{name:"Filtrar acciones por origen"});
+  assert.deepEqual(await tabs.getByRole("button").allTextContents(),["Acciones correctivas","Análisis A3","Seguimiento de acciones","Registros retirados"]);
+  assert.equal(await tabs.locator('[aria-current="page"]').textContent(),"Acciones correctivas");
+  assert.deepEqual(await cards.locator("strong").allTextContents(),["5","3","2"]);
+  assert.equal(await registry.getByText(/Consultar metodología/).count(),0);
+  for(const width of [1280,768,390,320]){
+    await registry.setViewportSize({width,height:900});
+    const layout=await registry.evaluate(()=>{
+      const box=e=>e.getBoundingClientRect();
+      const cardBoxes=[...document.querySelectorAll(".corrective-summary button")].map(box);
+      const tabs=[...document.querySelectorAll(".rootcause-view-tabs button")].map(box);
+      return {overflow:document.documentElement.scrollWidth>innerWidth,
+        heights:cardBoxes.map(b=>b.height),widths:cardBoxes.map(b=>b.width),
+        tabRows:new Set(tabs.map(b=>b.top)).size,tabMin:Math.min(...tabs.map(b=>b.width))};
+    });
+    assert.equal(layout.overflow,false,"overflow at "+width);
+    assert.ok(Math.max(...layout.heights)-Math.min(...layout.heights)<1);
+    assert.ok(Math.max(...layout.widths)-Math.min(...layout.widths)<1);
+    assert.equal(layout.tabRows,width>760?1:2);
+    assert.ok(layout.tabMin>70);
+  }
+  await cards.getByRole("button",{name:/Acciones cerradas/}).click();
+  await origins.getByRole("button",{name:"Externas / Clientes"}).click();
+  assert.deepEqual(await cards.locator("strong").allTextContents(),["2","1","1"]);
+  assert.deepEqual(await registry.locator("tbody code").allTextContents(),["AC-2"]);
+  await origins.getByRole("button",{name:"Internas"}).click();
+  await registry.getByText("Sin acciones para esta consulta.").waitFor();
+  await cards.getByRole("button",{name:/Acciones abiertas/}).click();
+  await registry.getByRole("button",{name:"Abrir AC-0"}).click();
+  await registry.getByText(base.title,{exact:true}).waitFor();
+  await tabs.getByRole("button",{name:"Acciones correctivas"}).click();
+  await registry.getByRole("button",{name:"Abrir AC-0"}).waitFor();
+  await tabs.getByRole("button",{name:"Análisis A3"}).click();
+  await registry.getByRole("button",{name:"Llenar A3 con IA"}).waitFor();
+  assert.equal(await tabs.locator('[aria-current="page"]').textContent(),"Análisis A3");
+  console.log("PASS Root2Cause: cuatro vistas, contadores autorizados, intersección estado/origen, expediente, vista vacía y anchos 1280/768/390/320.");
   assert.deepEqual(errors,[]);
   console.log("PASS Edge local: ocho etapas, error 409, edición durante guardado, revisión 2, segunda sesión, evidencia, 504, cancelación sin reintento y reapertura desde reclamo.");
 } finally {await browser.close();}
