@@ -169,6 +169,8 @@ export interface HomeSearchResult {
 }
 
 export interface HomeDashboardData {
+  unavailableSources?: string[];
+  pendingSources?: string[];
   generatedAt: string;
   visibleSections: HomeSectionId[];
   processScope: {
@@ -192,6 +194,7 @@ export interface HomeDashboardData {
     processName: string;
     target: string;
     leader: string;
+    history?: Array<{ period: string; value: number }>;
   }>;
   documentMetrics: HomeDocumentMetric[];
   pendingTasks: HomeWorkItem[];
@@ -623,14 +626,6 @@ export function buildHomeDashboard(
           : "neutral",
       module: "management-review",
       sourceConnected: true,
-    },
-    {
-      id: "fcca",
-      label: "FCCA",
-      value: "Fuente pendiente",
-      detail: "Sin registros disponibles",
-      tone: "neutral",
-      sourceConnected: false,
     },
   ];
 

@@ -44,7 +44,7 @@ describe("Inicio: datos reales por proceso y responsabilidad", () => {
     const rows = data(); rows.results = [];
     const d = aggregateProcessHome(session, rows, undefined, now);
     expect(d.trends.every(t => t.series.length === 0)).toBe(true);
-    expect(d.kpis[0].value).toBe("Sin datos");
+    expect(d.kpis[0].value).toBe("Sin captura");
   });
   it("conserva la fecha y hora originales", () => {
     expect(aggregateProcessHome(session, data(), undefined, now).recentActivity[0].occurredAt).toBe("2026-07-03T09:08:07Z");
@@ -82,5 +82,14 @@ describe("Inicio: datos reales por proceso y responsabilidad", () => {
     const rows = data(); rows.lifecycle = [{ document_id: "doc", is_deleted: true }];
     expect(aggregateProcessHome(session, rows, undefined, now).pendingTasks.some(t => t.targetId === "doc")).toBe(false);
     expect(rows.documents).toHaveLength(1);
+  });
+  it("cuenta una sola revisión semanal por documento aunque existan dos decisiones", () => {
+    const rows = data();
+    rows.documentActivity = ["VERSION_APPROVED", "VERSION_REJECTED"].map((event_type, index) => ({
+      id: String(index), document_id: "doc", event_type, performed_at: now.toISOString(),
+    }));
+    const dashboard = aggregateProcessHome(session, rows, undefined, now);
+    expect(dashboard.documentMetrics.find(m => m.id === "reviewed")?.value).toBe(1);
+    expect(dashboard.documentMetrics.find(m => m.id === "current")?.detail).toBe("1 validados esta semana");
   });
 });

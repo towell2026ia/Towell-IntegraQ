@@ -122,12 +122,12 @@ export function IndicatorsModule({
 }: IndicatorsModuleProps) {
   const canManageCatalog = canManageIndicatorCatalog(session);
   const focusedIndicator = definitions.find((indicator) => indicator.id === focusId);
-  const [view, setView] = useState<IndicatorView>("dashboard");
+  const [view, setView] = useState<IndicatorView>(focusId ? "sheet" : "dashboard");
   const [year, setYear] = useState(2026);
   const [area, setArea] = useState(
     getDefaultIndicatorArea(session, focusedIndicator?.area),
   );
-  const [query, setQuery] = useState(focusedIndicator?.id ?? "");
+  const [query, setQuery] = useState(focusId ?? "");
   const [dashboardQuarter, setDashboardQuarter] = useState<Quarter>("Q2");
   const [pendingQuarter, setPendingQuarter] = useState<Quarter>("Q3");
   const [submission, setSubmission] = useState<SubmissionSelection | null>(null);
@@ -174,7 +174,6 @@ export function IndicatorsModule({
 
   function changeYear(nextYear: number) {
     setYear(nextYear);
-    void onRefresh();
   }
 
   return (
@@ -186,7 +185,7 @@ export function IndicatorsModule({
           <p>Seguimiento trimestral basado en la sábana F-SGC-29.</p>
         </div>
         <div className="indicator-heading-actions">
-          <span><Settings2 size={16} /> {accessibleDefinitions.length} indicadores</span>
+          <span><Settings2 size={16} /> {loading ? "…" : accessibleDefinitions.length} indicadores</span>
           <button className="button button-secondary" disabled={loading || saving} type="button" onClick={() => void onRefresh()}>
             <RefreshCw className={loading ? "spin" : ""} size={16} /> Actualizar
           </button>
@@ -198,7 +197,7 @@ export function IndicatorsModule({
         </div>
       </section>
 
-      {error ? <div className="form-error" role="alert">{error}</div> : null}
+      {error ? <div className="form-error" role="alert">No fue posible actualizar los indicadores. <button type="button" onClick={() => void onRefresh()}>Reintentar</button></div> : null}
       {loading ? <div className="indicator-workspace-panel"><LoaderCircle className="spin" size={20} /> Actualizando indicadores y permisos…</div> : null}
 
       {view !== "catalog" && view !== "submission" ? (
@@ -209,8 +208,8 @@ export function IndicatorsModule({
         </div>
       ) : null}
 
-      {view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={changeYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
-      {view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onEditObjective={(indicator) => { setEditingObjective(indicator); setObjectiveChoice(indicator.qualityObjective); setObjectiveError(""); }} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={changeYear} query={query} results={results} session={session} year={year} /> : null}
+      {!loading && !error && view === "dashboard" ? <IndicatorDashboard area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onQueryChange={setQuery} onQuarterChange={setDashboardQuarter} onYearChange={changeYear} query={query} quarter={dashboardQuarter} results={results} year={year} /> : null}
+      {!loading && !error && view === "sheet" ? <IndicatorSheet area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onEditObjective={(indicator) => { setEditingObjective(indicator); setObjectiveChoice(indicator.qualityObjective); setObjectiveError(""); }} onOpenSubmission={openSubmission} onQueryChange={setQuery} onYearChange={changeYear} query={query} results={results} session={session} year={year} /> : null}
       {editingObjective ? <div className="quality-modal-backdrop" role="presentation"><section className="quality-modal indicator-editor-modal" role="dialog" aria-modal="true" aria-label="Editar objetivo vinculado"><header><div><span>{editingObjective.id}</span><h3>Editar objetivo vinculado</h3></div><button className="icon-button" type="button" disabled={objectiveSaving} onClick={() => setEditingObjective(null)}><X size={17} /></button></header><p>Objetivo actual: {editingObjective.qualityObjective || "Sin vínculo definido"}</p><label><span>Objetivo de Calidad</span><select value={objectiveChoice} disabled={objectiveSaving} onChange={(event) => setObjectiveChoice(event.target.value)}><option value="">Sin objetivo vinculado</option>{QUALITY_OBJECTIVES.map((objective) => <option key={objective} value={objective}>{objective}</option>)}</select></label>{objectiveError ? <p role="alert" className="form-error">{objectiveError}</p> : null}<footer><button className="button button-secondary" type="button" disabled={objectiveSaving} onClick={() => setEditingObjective(null)}>Cancelar</button><button className="button button-primary" type="button" disabled={objectiveSaving || objectiveChoice === editingObjective.qualityObjective} onClick={() => void saveObjective()}>Guardar vínculo</button></footer></section></div> : null}
       {view === "pending" ? <PendingIndicators area={area} areas={areas} indicators={visibleIndicators} onAreaChange={setArea} onOpenSubmission={openSubmission} onQueryChange={setQuery} onQuarterChange={setPendingQuarter} onYearChange={changeYear} query={query} quarter={pendingQuarter} results={results} session={session} year={year} /> : null}
       {view === "catalog" && canManageCatalog ? <IndicatorCatalogManager captureDaysAfterClose={captureDaysAfterClose} definitions={definitions} key={`catalog-${captureDaysAfterClose}`} onBack={() => setView("dashboard")} onDefinitionDelete={onDefinitionDelete} onDefinitionSave={onDefinitionSave} onSettingsSave={onSettingsSave} saving={saving} year={year} /> : null}
@@ -244,7 +243,7 @@ interface SharedViewProps {
 function IndicatorDashboard({ area, areas, indicators, onAreaChange, onQueryChange, onQuarterChange, onYearChange, query, quarter, results, year }: SharedViewProps & { quarter: Quarter; onQuarterChange: (quarter: Quarter) => void }) {
   const statusCounts = countStatuses(indicators, results, year, quarter);
   const uploaded = indicators.length - statusCounts.not_uploaded - statusCounts.pending;
-  const compliance = uploaded === 0 ? 0 : Math.round((statusCounts.compliant / uploaded) * 100);
+  const compliance = uploaded === 0 ? "Sin captura" : Math.round((statusCounts.compliant / uploaded) * 100) + "%";
   const groups = groupIndicators(indicators);
 
   return (
@@ -253,7 +252,7 @@ function IndicatorDashboard({ area, areas, indicators, onAreaChange, onQueryChan
         <select aria-label="Trimestre del dashboard" value={quarter} onChange={(event) => onQuarterChange(event.target.value as Quarter)}>{quarters.map((item) => <option key={item} value={item}>{quarterLabels[item]}</option>)}</select>
       </IndicatorToolbar>
       <div className="indicator-summary-strip" aria-label="Resumen del trimestre">
-        <div className="indicator-summary-main"><BarChart3 size={20} /><span><strong>{compliance}%</strong><small>cumplimiento · {quarterLabels[quarter]}</small></span></div>
+        <div className="indicator-summary-main"><BarChart3 size={20} /><span><strong>{compliance}</strong><small>cumplimiento · {quarterLabels[quarter]}</small></span></div>
         <StatusSummary status="compliant" value={statusCounts.compliant} />
         <StatusSummary status="marginal" value={statusCounts.marginal} />
         <StatusSummary status="noncompliant" value={statusCounts.noncompliant} />
@@ -267,7 +266,7 @@ function IndicatorDashboard({ area, areas, indicators, onAreaChange, onQueryChan
             {group.items.map((indicator) => {
               const record = getIndicatorRecord(results, indicator.id, year, quarter);
               const rule = parseIndicatorMetric(indicator.metric);
-              const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
+              const status = record?.evaluationStatus ?? evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
               return <IndicatorGauge indicator={indicator} key={indicator.id} rule={rule} status={status} value={record?.value} />;
             })}
           </div>
@@ -311,7 +310,7 @@ function IndicatorSheet({ area, areas, indicators, onAreaChange, onEditObjective
                     <td><code>{indicator.id}</code></td><td><strong>{indicator.area}</strong><small>{indicator.processId}</small></td><td>{indicator.qualityObjective || "Sin vínculo definido"}{!isDemoSession(session) && canUpdateIndicatorResult(session, indicator) ? <button className="button button-secondary" type="button" onClick={() => onEditObjective(indicator)}>Editar objetivo vinculado</button> : null}</td><td><strong>{indicator.name}</strong></td><td>{indicator.leader}</td><td><span className="indicator-metric-cell">{indicator.metric}</span></td><td>{indicator.period}</td>
                     {quarters.map((quarter) => {
                       const record = getIndicatorRecord(results, indicator.id, year, quarter);
-                      const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
+                      const status = record?.evaluationStatus ?? evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
                       return <td className={`quarter-result-cell quarter-result-${status}`} key={quarter}><button type="button" title={`Abrir ${indicator.name}, ${quarterLabels[quarter]}`} onClick={() => onOpenSubmission(indicator.id, year, quarter)}><strong>{formatIndicatorValue(record?.value, rule)}</strong><small>{statusLabels[status]}</small></button></td>;
                     })}
                     <td>{indicator.description}</td>
@@ -338,7 +337,7 @@ function PendingIndicators({ area, areas, indicators, onAreaChange, onOpenSubmis
             <header><div><strong>{group.area}</strong><small>{group.items[0]?.processId}</small></div><span>{group.items.length}</span></header>
             {group.items.map((indicator) => {
               const record = getIndicatorRecord(results, indicator.id, year, quarter);
-              const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
+              const status = record?.evaluationStatus ?? evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
               const captureWindow = indicator.captureWindows?.[String(year)]?.[quarter];
               const windowState = getIndicatorWindowState(captureWindow);
               const denialReason = getIndicatorCaptureDenialReason(session, indicator, year, quarter);
@@ -372,7 +371,7 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const rule = parseIndicatorMetric(indicator.metric);
-  const status = evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
+  const status = record?.evaluationStatus ?? evaluateConfiguredIndicator(indicator, record?.value, year, quarter);
   const administrativeOverride = isAdministrator(session);
   const denialReason = getIndicatorCaptureDenialReason(session, indicator, year, quarter);
   const editable = denialReason === null;
@@ -438,7 +437,7 @@ function IndicatorSubmission({ indicator, onBack, onResult, quarter, record, ses
           resourceKey={`${indicator.id}:${year}:${quarter}`}
           resourceType="indicator_result"
         />
-        {record?.evidenceName && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>El registro anterior sólo conservaba el nombre; vuelve a adjuntar el binario una vez para habilitar Ver y Descargar.</small></span></div> : null}
+        {record?.evidenceName && !record.evidenceFileId && !evidence.length ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Referencia previa: {record.evidenceName}</strong><small>El histórico conserva el nombre del archivo.</small></span></div> : null}
         {record ? <div className="indicator-existing-record"><FileCheck2 size={17} /><span><strong>Último registro manual</strong><small>{record.submittedBy} · {formatTimestamp(record.submittedAt)}</small></span></div> : null}
         {saveError ? <div className="form-error" role="alert">{saveError}</div> : null}
         <footer><p>{saved ? <><CheckCircle2 size={15} /> Resultado guardado y confirmado</> : <><CircleAlert size={15} /> No se cargará información automáticamente.</>}</p><button className="button button-primary" disabled={!editable || saving} type="submit">{saving ? <LoaderCircle className="spin" size={17} /> : <Save size={17} />} Guardar resultado</button></footer>
@@ -586,7 +585,7 @@ function groupIndicators(indicators: ConfiguredIndicator[]) {
 
 function getIndicatorRecord(results: IndicatorResults, id: string, year: number, quarter: Quarter) { return results[id]?.[String(year)]?.[quarter]; }
 function countStatuses(indicators: ConfiguredIndicator[], results: IndicatorResults, year: number, quarter: Quarter) {
-  return indicators.reduce<Record<IndicatorStatus, number>>((counts, indicator) => { const status = evaluateConfiguredIndicator(indicator, getIndicatorRecord(results, indicator.id, year, quarter)?.value, year, quarter); counts[status] += 1; return counts; }, { compliant: 0, marginal: 0, noncompliant: 0, not_uploaded: 0, pending: 0 });
+  return indicators.reduce<Record<IndicatorStatus, number>>((counts, indicator) => { const record = getIndicatorRecord(results, indicator.id, year, quarter); const status = record?.evaluationStatus ?? evaluateConfiguredIndicator(indicator, record?.value, year, quarter); counts[status] += 1; return counts; }, { compliant: 0, marginal: 0, noncompliant: 0, not_uploaded: 0, pending: 0 });
 }
 
 function formatScheduleDate(value: string) { if (!value) return "Sin programar"; return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }

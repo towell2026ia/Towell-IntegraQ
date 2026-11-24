@@ -1,5 +1,5 @@
 import { HomeObjectives } from "./home-objectives";
 
-export function HomeObjectiveCatalog() {
-  return <HomeObjectives />;
+export function HomeObjectiveCatalog(props: Parameters<typeof HomeObjectives>[0]) {
+  return <HomeObjectives {...props} />;
 }

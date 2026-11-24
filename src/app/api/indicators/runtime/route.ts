@@ -53,6 +53,7 @@ export async function GET(request: Request) {
   try {
     const resolved = await resolveContext();
     if (resolved.response) return resolved.response;
+    if (!canPerformModuleAction(resolved.session!, "indicators", "view")) return NextResponse.json({ error: "Indicadores fuera de tu alcance." }, { status: 403 });
     return NextResponse.json({
       ...await loadRuntimeSnapshot(resolved.supabase!, resolved.context!, new URL(request.url).searchParams.get("includeInactive") === "true"),
       access: {
@@ -311,8 +312,8 @@ async function loadRuntimeSnapshot(
   const periodRows = periodsQuery.data ?? [];
   const resultQuery = periodRows.length
     ? await supabase.from("indicator_results")
-      .select("period_id,value,comments,evidence_file_id,submitted_at,submitter:profiles!indicator_results_submitted_by_fkey(full_name),evidence:file_objects!indicator_results_evidence_file_id_fkey(original_name,size_bytes)")
-      .in("period_id", periodRows.map((row) => row.id))
+      .select("period_id,value,evaluation_status,comments,evidence_file_id,submitted_at,period:indicator_periods!inner(indicator_id),submitter:profiles!indicator_results_submitted_by_fkey(full_name)")
+      .in("period.indicator_id", ids)
     : { data: [], error: null };
   if (resultQuery.error) throw resultQuery.error;
   const rulesByIndicator = new Map((rulesQuery.data ?? []).map((row) => [row.indicator_id, row]));
@@ -330,20 +331,18 @@ async function loadRuntimeSnapshot(
   for (const row of resultQuery.data ?? []) {
     const period = periodById.get(row.period_id);
     const definition = period ? definitionById.get(period.indicator_id) : undefined;
-    if (!period || !definition) continue;
+    if (!period || !definition || row.value == null || !Number.isFinite(Number(row.value))) continue;
     const year = String(period.year);
     const quarter = period.quarter as Quarter;
-    const evidence = relationRecord(row.evidence);
     results[definition.code] = {
       ...(results[definition.code] ?? {}),
       [year]: {
         ...(results[definition.code]?.[year] ?? {}),
         [quarter]: {
           value: Number(row.value),
+          evaluationStatus: ["compliant", "marginal", "noncompliant"].includes(row.evaluation_status) ? row.evaluation_status : undefined,
           comments: row.comments || "",
           evidenceFileId: row.evidence_file_id || undefined,
-          evidenceName: evidence?.original_name ? String(evidence.original_name) : undefined,
-          evidenceSize: evidence?.size_bytes ? Number(evidence.size_bytes) : undefined,
           submittedAt: String(row.submitted_at),
           submittedBy: String(relationRecord(row.submitter)?.full_name || "Usuario IntegraQ"),
         },

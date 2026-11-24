@@ -184,7 +184,8 @@ describe("indicator master production preflight", () => {
     expect(workspace).toContain("<IndicatorsModule");
     expect(home).toContain("<HomeObjectiveCatalog");
     const catalog = readFileSync(join(process.cwd(), "src/components/modules/home-objective-catalog.tsx"), "utf8");
-    expect(catalog).toContain("<HomeObjectives />");
+    expect(catalog).toContain("<HomeObjectives {...props}");
+    expect(home).toContain("indicators={dashboard.qualityObjectives}");
     expect(catalog).not.toContain("/api/indicators/runtime");
     const objectives = readFileSync(join(process.cwd(), "src/components/modules/home-objectives.tsx"), "utf8");
     expect(objectives).toContain("institutionalQualityObjectives");

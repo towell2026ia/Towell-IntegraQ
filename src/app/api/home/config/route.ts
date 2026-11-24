@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 
 import {
-  defaultHomeSectionConfigurations,
   homeSectionDefinitions,
   type HomeSectionConfiguration,
   type HomeSectionId,
   type HomeSectionScope,
 } from "@/lib/home-visibility";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const scopeFromDatabase: Record<string, HomeSectionScope> = {
@@ -37,7 +37,7 @@ export async function GET() {
     return NextResponse.json({ error: "Sesión no autorizada." }, { status: 401 });
   }
 
-  const admin = createAdminClient();
+  const admin = await createClient();
   const [sectionsResult, processesResult, usersResult] = await Promise.all([
     admin.from("home_sections").select("id,label,description,scope,visible_to_administrators,active").order("display_order"),
     admin.from("home_section_processes").select("home_section_id,process_id"),
@@ -46,9 +46,8 @@ export async function GET() {
 
   if (sectionsResult.error || processesResult.error || usersResult.error) {
     return NextResponse.json({
-      configurations: defaultHomeSectionConfigurations,
-      persisted: false,
-    });
+      error: "No fue posible recuperar la configuración de Inicio.",
+    }, { status: 503 });
   }
 
   const isAdmin = session.userType === "Administrador";

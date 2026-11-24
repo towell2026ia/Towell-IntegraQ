@@ -47,6 +47,7 @@ export interface IndicatorEvaluationRules {
 }
 
 export interface IndicatorResultRecord {
+  evaluationStatus?: IndicatorStatus;
   value: number;
   comments: string;
   evidenceFileId?: string;

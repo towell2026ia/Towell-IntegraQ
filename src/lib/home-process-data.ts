@@ -24,7 +24,7 @@ export function emptyOperationalHome(session: ActiveSession, now = new Date()) {
 /** Inputs have already been scoped in the server. No local or demonstration source is accepted. */
 export function aggregateProcessHome(session: ActiveSession, records: HomeRecords, filters: HomeDashboardFilters = emptyHomeDashboardFilters, now = new Date()) {
   const dashboard = emptyOperationalHome(session, now);
-  if (records.homeSections?.length) dashboard.visibleSections = homeSectionDefinitions.filter(s => ["quality-policy", "quality-objectives"].includes(s.id) || records.homeSections.some(r => r.id === s.id && r.active === true && r.visible_to_administrators === true)).map(s => s.id);
+  if (records.homeSections) dashboard.visibleSections = homeSectionDefinitions.filter(s => records.homeSections.some(r => r.id === s.id && r.active === true && (session.userType !== "Administrador" || r.visible_to_administrators === true))).map(s => s.id);
   const allProcesses = records.processes ?? [];
   const processes = allProcesses.filter(p => (filters.processId === "all" || p.id === filters.processId) && (filters.area === "all" || p.name === filters.area));
   const ids = new Set(processes.map(p => text(p, "id")));
@@ -37,8 +37,13 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
   const statusMatches = (row: HomeRow) => filters.status === "all" || row.status === filters.status;
   const dateMatches = (value: string) => (!filters.from || value.slice(0,10) >= filters.from) && (!filters.to || (Boolean(value) && value.slice(0,10) <= filters.to));
   const lifecycle = new Map((records.lifecycle ?? []).map(r => [r.document_id, r]));
+  const workingVersions = new Map<unknown, HomeRow>();
+  for (const version of records.versions ?? []) {
+    const prior = workingVersions.get(version.document_id);
+    if (!prior || Number(version.revision) > Number(prior.revision)) workingVersions.set(version.document_id, version);
+  }
   const documents = (records.documents ?? []).filter(d => {
-    const version = (records.versions ?? []).filter(v => v.document_id === d.id).sort((a,b) => Number(b.revision) - Number(a.revision))[0] ?? {};
+    const version = workingVersions.get(d.id) ?? {};
     return inScope(d) && moduleVisible("documents") && d.active === true && !d.deleted_at && !lifecycle.get(d.id)?.is_deleted && lifecycle.get(d.id)?.lifecycle_status !== "obsolete" && responsibleMatches(version) && statusMatches(version) && dateMatches(text(version, "updated_at"));
   });
   const documentIds = new Set(documents.map(d => d.id));
@@ -52,15 +57,26 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
     if (version?.status === "pending" && version.validator_id === session.authUserId && getDocumentPermissions(session, text(d, "process_id")).validate) addTask(d, "documents", `Validar ${d.code}`, text(d, "id"), text(d, "title"));
     if (version?.status === "rejected" && version.uploaded_by === session.authUserId && getDocumentPermissions(session, text(d, "process_id")).edit) addTask(d, "documents", `Corregir ${d.code}`, text(d, "id"), text(d, "title"));
   }
+  const localDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const monday = new Date(localDate + "T00:00:00-06:00");
+  monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+  const reviewEvents = (records.documentActivity ?? []).filter(event => {
+    const time = Date.parse(text(event, "performed_at"));
+    return ["VERSION_APPROVED", "VERSION_REJECTED"].includes(text(event, "event_type")) && time >= monday.getTime() && time <= now.getTime();
+  });
+  const reviewed = new Set(reviewEvents.map(event => event.document_id));
+  const approvalsThisWeek = new Set(reviewEvents.filter(event => event.event_type === "VERSION_APPROVED" && documentIds.has(event.document_id)).map(event => event.document_id));
+  const currentIds = new Set(versions.filter(version => version.status === "current").map(version => version.document_id));
   for (const metric of dashboard.documentMetrics) {
-    metric.value = documents.filter(d => {
-      const v = latest.get(text(d, "id"));
-      if (metric.id === "pending") return v?.status === "pending" && v.validator_id === session.authUserId;
-      if (metric.id === "validation") return v?.status === "pending";
-      if (metric.id === "current") return versions.some(v => v.document_id === d.id && v.status === "current");
-      if (metric.id === "rejected") return v?.status === "rejected";
-      const start = new Date(now); start.setUTCHours(0, 0, 0, 0); start.setUTCDate(start.getUTCDate() - (start.getUTCDay() + 6) % 7);
-      return (records.documentActivity ?? []).some(e => e.document_id === d.id && Date.parse(text(e, "performed_at")) >= start.getTime() && Date.parse(text(e, "performed_at")) <= now.getTime());
+    if (metric.id === "current") metric.detail = String(approvalsThisWeek.size) + " validados esta semana";
+    if (metric.id === "reviewed") metric.detail = "Documentos con decisión de validación esta semana";
+    metric.value = documents.filter(document => {
+      const version = workingVersions.get(document.id);
+      if (metric.id === "pending") return version?.status === "pending" && getDocumentPermissions(session, text(document, "process_id")).validate;
+      if (metric.id === "validation") return version?.status === "pending";
+      if (metric.id === "current") return currentIds.has(document.id);
+      if (metric.id === "rejected") return version?.status === "rejected";
+      return reviewed.has(document.id);
     }).length;
   }
   const actions = (records.actions ?? []).filter(a => inScope(a) && moduleVisible("corrective-actions") && !a.deleted_at && responsibleMatches(a) && statusMatches(a) && dateMatches(text(a, "created_at")));
@@ -87,7 +103,9 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
   const history = new Map<string, { passed: number; total: number }>();
   for (const definition of definitions) {
     const rule = rules.get(definition.id);
-    for (const period of periods.filter(p => p.indicator_id === definition.id)) {
+    const indicatorHistory: Array<{ period: string; value: number }> = [];
+    let lastStatus: "compliant" | "marginal" | "noncompliant" | undefined;
+    for (const period of periods.filter(p => p.indicator_id === definition.id).sort((a, b) => Number(a.year) - Number(b.year) || text(a, "quarter").localeCompare(text(b, "quarter")))) {
       const result = results.get(period.id);
       // Do not reinterpret monthly/annual periods as quarters or guess evaluation rules.
       if (definition.periodicity !== "quarterly" || !rule || !text(rule, "compliant_rule") || !text(rule, "marginal_rule") || !text(rule, "noncompliant_rule") || !["Q1", "Q2", "Q3", "Q4"].includes(text(period, "quarter"))) continue;
@@ -98,15 +116,26 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
       const recordedStatus = text(result, "evaluation_status");
       const status = ["compliant", "marginal", "noncompliant"].includes(recordedStatus) ? recordedStatus : evaluateConfiguredIndicator(indicator, Number(result.value), Number(period.year), text(period, "quarter") as Quarter, now);
       const key = `${period.year} ${period.quarter}`;
+      indicatorHistory.push({ period: key, value: Number(result.value) });
+      if (status === "compliant" || status === "marginal" || status === "noncompliant") lastStatus = status;
       const total = history.get(key) ?? { passed: 0, total: 0 };
       total.total++; if (status === "compliant") total.passed++; history.set(key, total);
     }
+    const last = indicatorHistory.at(-1);
+    dashboard.qualityObjectives.push({
+      active: true, id: text(definition, "code"), name: text(definition, "name"), indicatorName: text(definition, "name"),
+      objective: text(definition, "quality_objective").trim(), processId: text(definition, "process_id"),
+      processName: processes.filter(p => p.id === definition.process_id || relations.some(r => r.indicator_id === definition.id && r.process_id === p.id)).map(p => text(p, "name")).join(" · "),
+      target: text(definition, "metric_label"), leader: text(definition, "leader_name"), result: last?.value,
+      period: last?.period ?? "", status: lastStatus ?? "pending", history: indicatorHistory,
+    });
   }
   const series = [...history].sort(([a], [b]) => a.localeCompare(b));
   dashboard.trends[0].series = series.map(([label, counts]) => ({ label, value: Math.round(100 * counts.passed / counts.total), tone: "neutral" }));
   dashboard.trends[0].detail = "Cumplimiento por periodo (%) · sólo capturas reales";
   const latestPeriod = series.at(-1);
   const compliance = dashboard.kpis.find(k => k.id === "indicator-compliance")!;
+  if (definitions.length && !results.size) { compliance.value = "Sin captura"; compliance.detail = "No hay resultados en el período consultado"; }
   if (latestPeriod) { compliance.value = `${Math.round(100 * latestPeriod[1].passed / latestPeriod[1].total)}%`; compliance.detail = `${latestPeriod[0]} · ${latestPeriod[1].total} capturas evaluadas`; }
   const open = dashboard.kpis.find(k => k.id === "open-actions")!; open.value = String(actions.filter(a => a.status !== "closed").length); open.detail = "Expedientes reales autorizados";
   const current = dashboard.kpis.find(k => k.id === "current-documents")!; current.value = String(dashboard.documentMetrics.find(m => m.id === "current")!.value); current.detail = "Documentos vigentes autorizados";
@@ -129,7 +158,7 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
   dashboard.recentActivity = dashboard.recentActivity.filter(a => dateMatches(a.occurredAt));
   dashboard.filterOptions.responsibles = [...new Set([...(records.actions ?? []), ...(records.indicators ?? []), ...(records.versions ?? [])].flatMap(r => [text(r, "owner_name"), text(r, "leader_name"), text(r, "validator_id"), text(r, "uploaded_by")]).filter(Boolean))];
   dashboard.filterOptions.statuses = [...new Set([...(records.actions ?? []), ...(records.versions ?? [])].map(r => text(r, "status")).filter(Boolean))].map(s => `${s}|${s}`);
-  for (const status of dashboard.moduleStatus) if (["documents", "indicators", "corrective-actions", "audits"].includes(status.id)) { status.sourceConnected = true; status.value = `${dashboard.pendingTasks.filter(t => t.module === status.id).length} pendientes`; status.detail = "Registros autorizados de Supabase"; }
+  for (const status of dashboard.moduleStatus) if (["documents", "indicators", "corrective-actions", "audits"].includes(status.id)) { status.sourceConnected = true; status.value = `${dashboard.pendingTasks.filter(t => t.module === status.id).length} pendientes`; status.detail = "Registros dentro de tu alcance"; }
   dashboard.searchIndex = [
     ...documents.map(d => ({ id: text(d, "id"), title: `${d.code} · ${d.title}`, meta: "Documentos", module: "documents" as const, searchText: `${d.code} ${d.title} ${d.process_id}` })),
     ...actions.map(a => ({ id: text(a, "id"), title: `${a.folio} · ${a.title}`, meta: "Root2Cause", module: "corrective-actions" as const, searchText: `${a.folio} ${a.title} ${a.process_id}` })),

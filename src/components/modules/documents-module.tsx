@@ -124,7 +124,10 @@ function useCatalogRead<T>(cache: CachedRows<T>, key: string, load: (signal: Abo
       if (!fresh) cache.set(key, { value, time: Date.now() });
       setState({ key, value });
     }).catch((error: unknown) => {
-      if (!controller.signal.aborted) setState({ key, error: error instanceof Error ? error.message : "Consulta documental no disponible." });
+      if (!controller.signal.aborted) {
+        console.warn("DOCUMENT_READ_FAILED", error instanceof Error ? error.name : "READ");
+        setState({ key, error: "No fue posible consultar los documentos." });
+      }
     });
     return () => controller.abort();
   }, [cache, key, load]);
@@ -145,9 +148,10 @@ export function DocumentsModule(props: DocumentsModuleProps) {
 
 function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
   const [cache] = useState<CachedRows<ControlledDocument>>(() => new Map());
+  const [attempt, setAttempt] = useState(0);
   const load = useCallback(() => loadStoredControlledDocument(props.focusId), [props.focusId]);
-  const result = useCatalogRead(cache, props.focusId, load);
-  if (result?.error) return <p role="alert">{result.error}</p>;
+  const result = useCatalogRead(cache, props.focusId + ":" + attempt, load);
+  if (result?.error) return <p role="alert">{result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
   if (!result?.value) return <p role="status">Consultando expediente…</p>;
   return <DocumentCatalog {...props} controlledDocuments={[result.value]} />;
 }

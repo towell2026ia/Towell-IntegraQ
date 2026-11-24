@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import type { InstitutionalContentKind, InstitutionalDocumentOption, InstitutionalItem, InstitutionalPosition } from "@/lib/institutional-information-data";
 import { isAdministrator } from "@/lib/session-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const positions = new Set<InstitutionalPosition>(["POLICY_QUALITY", "CODE_ETHICS", "CONFIDENTIALITY"]);
@@ -14,7 +15,7 @@ type LifecycleRow = { document_id: string; lifecycle_status: string; is_deleted:
 export async function GET(request?: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-  const admin = createAdminClient();
+  const admin = await createClient();
   const itemsResult = await admin.from("home_institutional_items").select("position,title,content_kind,document_id,short_text,visible_to_internal,visible_to_external,active,display_order").order("display_order");
   if (itemsResult.error) return NextResponse.json({ error: "No fue posible consultar la información institucional." }, { status: 500 });
   const administrator = isAdministrator(session);

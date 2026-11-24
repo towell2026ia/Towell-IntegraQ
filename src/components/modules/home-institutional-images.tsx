@@ -9,14 +9,14 @@ import styles from "./home-institutional-images.module.css";
 import { sessionAccessKey } from "@/lib/workspace-continuity";
 import { getHomeImageUrl } from "@/lib/use-home-process-data";
 
-type ImageBundle = { key: string; documents: ControlledDocument[]; urls: Record<string, string>; error?: boolean };
+type ImageBundle = { key: string; documents: ControlledDocument[]; urls: Record<string, string>; error?: boolean; denied?: boolean; fresh?: boolean };
 const bundles = new WeakMap<ActiveSession, { bundle: ImageBundle; until: number }>();
 export function clearHomeImages(session: ActiveSession) {
   bundles.delete(session);
 }
 
-export function HomeInstitutionalImages({ documents, session, onManage, institutionalRead = false }: {
-  documents: ControlledDocument[]; session: ActiveSession; onManage: (id: string) => void; institutionalRead?: boolean;
+export function HomeInstitutionalImages({ documents, session, onManage, institutionalRead = false, sectionVisible }: {
+  documents: ControlledDocument[]; session: ActiveSession; onManage: (id: string) => void; institutionalRead?: boolean; sectionVisible?: boolean;
 }) {
   const key = sessionAccessKey(session);
   const [bundle, setBundle] = useState<ImageBundle | null>(null);
@@ -25,17 +25,19 @@ export function HomeInstitutionalImages({ documents, session, onManage, institut
     const controller = new AbortController();
     void (async () => {
       const cached = bundles.get(session);
-      if (cached?.bundle.key === key && cached.until > Date.now()) return cached.bundle;
+      if (cached?.bundle.key === key && cached.until > Date.now()) return { ...cached.bundle, fresh: false };
       const response = await fetch("/api/home/process-dashboard?view=images", { cache: "no-store", signal: controller.signal });
+      if (response.status === 403) return { key, documents: [], urls: {}, denied: true };
       if (!response.ok) throw new Error("Imágenes institucionales no disponibles.");
       const payload = await response.json();
-      const result = { key, documents: payload.imageDocuments, urls: payload.imageUrls };
+      const result = { key, documents: payload.imageDocuments, urls: payload.imageUrls, fresh: true };
       if (!controller.signal.aborted) bundles.set(session, { bundle: result, until: Date.now() + 60_000 });
       return result;
     })().then(result => { if (!controller.signal.aborted) setBundle(result); }).catch(() => { if (!controller.signal.aborted) setBundle({ key, documents: [], urls: {}, error: true }); });
     return () => controller.abort();
   }, [key, institutionalRead, session]);
   const current = bundle?.key === key ? bundle : null;
+  if (institutionalRead && (sectionVisible === false || current?.denied || (sectionVisible === undefined && !current?.fresh))) return null;
   return <section aria-label="Imágenes institucionales" className={styles.grid}>
     {findInstitutionalImages(institutionalRead ? current?.documents ?? [] : documents, session, institutionalRead).map((slot, position) => <article key={slot.title} className={styles.card}>
       <h3>{slot.title}</h3>

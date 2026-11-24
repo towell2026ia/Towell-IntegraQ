@@ -244,7 +244,7 @@ export function IntegraQWorkspace({
   );
   const [demoIndicatorCaptureDays, setDemoIndicatorCaptureDays] = useState(DEFAULT_CAPTURE_DAYS_AFTER_CLOSE);
   const indicatorRuntime = useIndicatorRuntime(
-    !demoMode && !isExternalUser(session) && canAccessModule(session, "indicators"),
+    !demoMode && ["indicators", "risks", "management-review"].includes(activeModule) && !isExternalUser(session) && canAccessModule(session, "indicators"),
   );
   const indicatorDefinitions = demoMode ? demoIndicatorDefinitions : indicatorRuntime.definitions;
   const indicatorResults = demoMode ? demoIndicatorResults : indicatorRuntime.results;
@@ -415,7 +415,7 @@ export function IntegraQWorkspace({
   }, [riskWorkspace, storageReady]);
 
   useEffect(() => {
-    if (!storageReady || externalScope) return;
+    if (!storageReady || externalScope || (!demoMode && !["risks", "management-review"].includes(activeModule))) return;
     let active = true;
     void loadRiskWorkspace()
       .then(({ state }) => {
@@ -430,7 +430,7 @@ export function IntegraQWorkspace({
         if (active) { setRiskServerReady(false); setRiskLoadError(cause instanceof Error ? cause.message : "No se pudo consultar la matriz de riesgos."); }
       });
     return () => { active = false; };
-  }, [sessionKey, externalScope, storageReady, riskRetry]);
+  }, [sessionKey, externalScope, storageReady, riskRetry, activeModule, demoMode]);
 
   useEffect(() => {
     if (!riskServerReady || externalScope) return;
@@ -634,7 +634,7 @@ export function IntegraQWorkspace({
         </header>
 
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
-          {activeModule === "home" ? <HomeModule baseDashboard={productionHome.dashboard} loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
+          {activeModule === "home" ? <HomeModule baseRetry={productionHome.retry} baseFailed={productionHome.failed} baseDashboard={productionHome.dashboard} loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}
@@ -662,7 +662,7 @@ export function IntegraQWorkspace({
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule initialCustomerId={navigationTarget?.module === "customer-portal" ? navigationTarget.id : undefined} kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}
-          {!["home", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
+          {!["home", "home-settings", "processes", "organization", "access", "documents", "forms", "risks", "indicators", "audits", "corrective-actions", "calibrations", "customers", "suppliers", "management-review", "continuous-improvement", "customer-portal", "supplier-portal", "data-traceability"].includes(activeModule) ? <ModulePlaceholder module={activeMeta} /> : null}
         </main>
       </div>
 

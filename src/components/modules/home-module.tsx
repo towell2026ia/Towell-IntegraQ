@@ -1,4 +1,5 @@
 "use client";
+import { canPerformModuleAction } from "@/lib/module-permissions";
 
 import {
   AlertOctagon,
@@ -50,6 +51,8 @@ import type { HomeSectionConfiguration } from "@/lib/home-visibility";
 import { getInstitutionalDocumentUrl, loadInstitutionalInformation, type InstitutionalItem } from "@/lib/institutional-information-data";
 
 interface HomeModuleProps {
+  baseRetry?: () => void;
+  baseFailed?: boolean;
   baseDashboard?: ReturnType<typeof useHomeProcessData>["dashboard"];
   onNavigate: (module: WorkspaceModuleId, targetId?: string) => void;
   sources: HomeDashboardSources;
@@ -98,7 +101,7 @@ const moduleIcons: Partial<Record<WorkspaceModuleId, LucideIcon>> = {
   organization: UserRound,
 };
 
-export function HomeModule({ onNavigate, sources, loading = false, baseDashboard }: HomeModuleProps) {
+export function HomeModule({ onNavigate, sources, loading = false, baseDashboard, baseRetry, baseFailed }: HomeModuleProps) {
   const [asOf] = useState(() => new Date());
   const [filters, setFilters] = useState<HomeDashboardFilters>(emptyHomeDashboardFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -113,6 +116,7 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
 
   useEffect(() => {
     let cancelled = false;
+    if (sources.session.workspaceMode !== "demo") return;
     void fetch("/api/home/config", { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((payload: { configurations?: HomeSectionConfiguration[] } | null) => {
@@ -122,7 +126,7 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
       })
       .catch(() => undefined);
     return () => { cancelled = true; };
-  }, []);
+  }, [sources.session.workspaceMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +171,8 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
     ([key, value]) => key === "from" || key === "to" ? Boolean(value) : value !== "all",
   ).length;
 
+  const incomplete = Boolean(dashboard.pendingSources?.length);
+  const incompleteText = incomplete ? "Actualizando…" : dashboard.unavailableSources?.length ? "Consulta incompleta." : undefined;
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const firstResult = searchResults[0];
@@ -262,9 +268,9 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
         </section>
       ) : null}
 
-      {!productionHome && visibleSections.has("quality-policy") && sources.documentLoadError ? <p role="alert">{sources.documentLoadError} <button type="button" onClick={() => onNavigate("documents")}>Revisar carga documental</button></p> : null}
+      {(productionHome ? (useBase ? baseFailed : serverHome.failed) : visibleSections.has("quality-policy") && sources.documentLoadError) ? <p role="alert">Una sección no pudo actualizarse. <button type="button" onClick={productionHome ? (useBase ? baseRetry : serverHome.retry) : () => onNavigate("documents")}>Reintentar</button></p> : null}
       {!productionHome && visibleSections.has("quality-policy") && sources.documentsLoading ? <p role="status">Cargando imágenes del catálogo documental…</p> : null}
-      {visibleSections.has("quality-policy") && (productionHome || (!sources.documentLoadError && !sources.documentsLoading)) ? <HomeInstitutionalImages key={sources.session.authUserId ?? sources.session.userId} documents={sources.documents} institutionalRead={productionHome} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
+      {(productionHome ? canPerformModuleAction(sources.session, "home", "view") && ["Administrador", "Usuario interno"].includes(sources.session.userType) : visibleSections.has("quality-policy") && !sources.documentLoadError && !sources.documentsLoading) ? <HomeInstitutionalImages sectionVisible={productionHome && dashboard.pendingSources ? visibleSections.has("quality-policy") : undefined} key={sources.session.authUserId ?? sources.session.userId} documents={sources.documents} institutionalRead={productionHome} session={sources.session} onManage={(id) => onNavigate("documents", id)} /> : null}
 
       {institutionalItems.length && (visibleSections.has("quality-policy") || sources.session.userType === "Cliente" || sources.session.userType === "Proveedor") ? (
         <section className="home-dashboard-section home-institutional-section" aria-label="Información institucional">
@@ -274,12 +280,12 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
         </section>
       ) : null}
 
-      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog /> : null}
+      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog indicators={dashboard.qualityObjectives} openIndicator={id => onNavigate("indicators", id)} pending={dashboard.pendingSources?.includes("indicators")} unavailable={dashboard.unavailableSources?.includes("indicators") || !canPerformModuleAction(sources.session, "indicators", "view")} /> : null}
 
       {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
       <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>
         {visibleSections.has("alerts") ? <section className="home-operation-panel home-alert-panel">
-          <SectionHeader eyebrow="Atención" title="Alertas" icon={BellRing} count={dashboard.alerts.length} />
+          <SectionHeader eyebrow="Atención" title="Alertas" icon={BellRing} count={incompleteText ? undefined : dashboard.alerts.length} />
           <div className="home-alert-list">
             {dashboard.alerts.length ? dashboard.alerts.slice(0, 5).map((alert) => (
               <button key={alert.id} className={`home-alert-row home-alert-${alert.priority}`} type="button" onClick={() => onNavigate(alert.module, alert.targetId)}>
@@ -287,12 +293,12 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
                 <span><strong>{alert.title}</strong><small>{alert.alertType} · {alert.moduleLabel}</small></span>
                 <ChevronRight size={16} />
               </button>
-            )) : <EmptyState icon={CheckCircle2} text="No hay alertas dentro del alcance seleccionado." />}
+            )) : <EmptyState icon={CheckCircle2} text={incompleteText ?? "No hay alertas dentro del alcance seleccionado."} />}
           </div>
         </section> : null}
 
         {visibleSections.has("pending-tasks") ? <section className="home-operation-panel home-pending-panel">
-          <SectionHeader eyebrow="Mi trabajo" title="Pendientes" icon={ListChecks} count={dashboard.pendingTasks.length} />
+          <SectionHeader eyebrow="Mi trabajo" title="Pendientes" icon={ListChecks} count={incompleteText ? undefined : dashboard.pendingTasks.length} />
           <div className="home-task-list">
             {dashboard.pendingTasks.length ? dashboard.pendingTasks.slice(0, 6).map((task) => {
               const Icon = moduleIcons[task.module] ?? ClipboardCheck;
@@ -304,7 +310,7 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
                   <ChevronRight size={16} />
                 </button>
               );
-            }) : <EmptyState icon={CheckCircle2} text="No tienes actividades pendientes." />}
+            }) : <EmptyState icon={CheckCircle2} text={incompleteText ?? "No tienes actividades pendientes."} />}
           </div>
         </section> : null}
       </div>) : null}
@@ -317,9 +323,9 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
             return (
               <button key={metric.id} className={`home-document-metric home-tone-${metric.tone}`} type="button" onClick={() => onNavigate("documents")}>
                 <span><Icon size={18} /></span>
-                <strong>{metric.value}</strong>
+                <strong>{dashboard.pendingSources?.includes("documents") ? "…" : dashboard.unavailableSources?.includes("documents") ? "No disponible" : !canPerformModuleAction(sources.session, "documents", "view") ? "Sin acceso" : metric.value}</strong>
                 <span>{metric.label}</span>
-                <small>{metric.detail}</small>
+                <small>{dashboard.pendingSources?.includes("documents") || dashboard.unavailableSources?.includes("documents") || !canPerformModuleAction(sources.session, "documents", "view") ? "" : metric.detail}</small>
                 <ArrowRight size={15} />
               </button>
             );

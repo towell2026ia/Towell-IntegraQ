@@ -82,7 +82,7 @@ export function HomeSettingsModule({ documents, session, onManageDocument, onCha
         setUsers(payload.users ?? []);
         setSelectedId(payload.configurations?.[0]?.id ?? "");
         if (payload.persisted === false) {
-          setError("La migración de Configuración de Inicio aún no está aplicada en Supabase.");
+          setError("No fue posible recuperar la configuración de Inicio.");
         }
       })
       .catch((caught: unknown) => {
