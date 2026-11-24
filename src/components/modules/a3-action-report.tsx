@@ -231,7 +231,7 @@ export function A3ActionReport({
           {analysis && session ? <A3StepEvidence evidenceId={analysis.evidenceId} step={7} processId={action.processId} readOnly={action.status==="closed"}/> : null}
         </ReportSection>
 
-        {analysis && session ? <><A3ReportEvidence key={action.id} analysis={analysis} onBusyChange={setPreparingEvidence}/><A3RedboothPlan key={action.id} action={action}/>{analysis.plans.map(plan=><section className="print-hidden" key={plan.id}><h4>Evidencias de acción: {plan.description}</h4><A3StepEvidence evidenceId={analysis.evidenceId} step={plan.id} processId={action.processId} readOnly={action.status==="closed"}/></section>)}</> : null}
+        {analysis && session ? <><A3ReportEvidence key={action.id} analysis={analysis} onBusyChange={setPreparingEvidence}/><A3RedboothPlan key={action.id} action={action} administer={session.userType==="Administrador"}/>{analysis.plans.map(plan=><section className="print-hidden" key={plan.id}><h4>Evidencias de acción: {plan.description}</h4><A3StepEvidence evidenceId={analysis.evidenceId} step={plan.id} processId={action.processId} readOnly={action.status==="closed"}/></section>)}</> : null}
         <footer className="a3-report-footer">
           <span><FileText size={14} /> {action.folio}</span>
           <span>Copia controlada para consulta · IntegraQ</span>
