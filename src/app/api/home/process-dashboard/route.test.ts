@@ -65,9 +65,11 @@ describe("API de Inicio: alcance en servidor", () => {
     expect(state.authenticatedTables.filter(table => table === "controlled_documents")).toHaveLength(2);
   });
   it("comparte la misma imagen vigente con internos sin permiso de edición ni proceso documental", async () => {
-    state.rows.controlled_documents = [{ id: "doc", organization_id: "org", process_id: "quality", title: "Política de Calidad", active: true, deleted_at: null }];
-    state.rows.controlled_document_versions = [{ id: "version", document_id: "doc", revision: 1, status: "current", file_id: "file", file_name: "Política de Calidad.png", updated_at: "2026-11-03T12:00:00Z" }];
+    state.rows.controlled_documents = [{ id: "217affe6-5187-4d98-a588-d1e17d2347a8", organization_id: "org", process_id: "quality", title: "Política de Calidad", active: true, deleted_at: null }];
+    state.rows.controlled_document_versions = [{ id: "version", document_id: "217affe6-5187-4d98-a588-d1e17d2347a8", revision: 1, status: "current", file_id: "file", file_name: "Política de Calidad.png", updated_at: "2026-11-03T12:00:00Z" }];
     state.rows.file_objects = [{ id: "file", bucket_id: "private", object_path: "image.png", mime_type: "image/png", deleted_at: null }];
+    state.rows.controlled_documents.push({ ...state.rows.controlled_documents[0], id: "another-document" });
+    state.rows.controlled_document_versions.push({ ...state.rows.controlled_document_versions[0], id: "another-version", document_id: "another-document", file: state.rows.file_objects[0] });
     state.rows.controlled_document_versions[0].file = state.rows.file_objects[0];
     const administrator = await (await GET(new Request("https://test?view=images"))).json();
     state.session = { ...activeSession, organizationId: "org", authUserId: "user", userType: "Usuario interno", assignedModuleIds: ["home"], assignedProcessIds: [] };
@@ -75,6 +77,8 @@ describe("API de Inicio: alcance en servidor", () => {
     const internal = await (await GET(new Request("https://test?view=images"))).json();
     expect(internal.imageDocuments).toEqual(administrator.imageDocuments);
     expect(internal.imageDocuments).toHaveLength(1);
+    expect(Object.keys(internal.imageUrls)).toEqual(["version"]);
+    expect(state.calls).not.toContain("file_objects");
     expect(internal.dashboard).toBeUndefined();
     expect(state.calls).not.toContain("indicator_definitions");
   });

@@ -16,6 +16,10 @@ export function useHomeProcessData(session: ActiveSession, filters: HomeDashboar
   const [attempt, setAttempt] = useState(0);
   const retry = useCallback(() => { cached.current.clear(); setAttempt(value => value + 1); }, []);
   useEffect(() => {
+    window.addEventListener("integraq:indicators-changed", retry);
+    return () => window.removeEventListener("integraq:indicators-changed", retry);
+  }, [retry]);
+  useEffect(() => {
     if (!enabled || session.workspaceMode === "demo" || !["Administrador", "Usuario interno"].includes(session.userType)) return;
     const controller = new AbortController();
     const saved = cached.current.get(key);

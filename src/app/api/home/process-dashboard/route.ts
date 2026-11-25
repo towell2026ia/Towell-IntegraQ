@@ -5,35 +5,42 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { aggregateProcessHome, text, type HomeRecords, type HomeRow } from "@/lib/home-process-data";
 import { emptyHomeDashboardFilters } from "@/lib/home-dashboard";
-import { findInstitutionalImages, institutionalImageTitles } from "@/lib/home-institutional-images";
+import { findInstitutionalImages } from "@/lib/home-institutional-images";
 import type { ControlledDocument } from "@/lib/document-control-data";
 
 export async function GET(request: Request) {
   try {
+    const started = performance.now();
+    function recordTime(phase: string, start: number) {
+      if (process.env.INTEGRAQ_HOME_TIMINGS === "1") console.info("HOME_TIMING", phase, Math.round(performance.now() - start));
+    }
     const session = await getAuthenticatedSession();
     if (!session?.authUserId || !["Administrador", "Usuario interno"].includes(session.userType) || !canPerformModuleAction(session, "home", "view")) return NextResponse.json({ error: "Inicio no autorizado." }, { status: 403 });
     const client = await createClient();
     const url = new URL(request.url);
     const imagesOnly = url.searchParams.has("image") || url.searchParams.get("view") === "images";
+    const configStarted = performance.now();
     const [profile, sectionRead, processRead] = await Promise.all([
       client.from("profiles").select("organization_id,user_type,status,workspace_mode").eq("id", session.authUserId).maybeSingle(),
       client.from("home_sections").select("id,active,visible_to_administrators").eq("active", true),
       client.from("processes").select("id,name,organization_id,process_owner_user_id").eq("organization_id", session.organizationId ?? "").eq("active", true).order("id"),
     ]);
+    recordTime(imagesOnly ? "image-scope" : "dashboard-scope", configStarted);
     if (profile.error || !profile.data?.organization_id || profile.data.organization_id !== session.organizationId || profile.data.status !== "active" || !["administrator","internal"].includes(profile.data.user_type) || profile.data.workspace_mode === "demo") return NextResponse.json({ error: "La cuenta no tiene un ámbito productivo válido." }, { status: 403 });
     if (sectionRead.error || processRead.error) throw new Error("HOME_SCOPE_UNAVAILABLE");
     const admin = imagesOnly && profile.data.user_type !== "administrator" ? createAdminClient() : client;
     type Filter = [string, "eq" | "in" | "is", unknown];
-    async function read(table: string, columns: string, filters: Filter[] = [], order = "id", authenticated = false, match?: string): Promise<HomeRow[]> {
+    async function read(table: string, columns: string, filters: Filter[] = [], order = "id", authenticated = false, periodRange?: { from: string; to: string }): Promise<HomeRow[]> {
       const rows: HomeRow[] = [];
       for (;;) {
         let query = (authenticated ? client : admin).from(table).select(columns);
         for (const [column, op, value] of filters) query = op === "in" ? query.in(column, value as string[]) : op === "is" ? query.is(column, value as null) : query.eq(column, value);
-        if (match) query = query.or(match);
+        if (periodRange?.from) query = query.gte("scheduled_date", periodRange.from);
+        if (periodRange?.to) query = query.lte("scheduled_date", periodRange.to);
         query = query.order(order);
         if (table === "indicator_definition_processes") query = query.order("process_id");
         const page = await query.range(rows.length, rows.length + 499).abortSignal(request.signal);
-        if (page.error) throw new Error("HOME_SOURCE_" + table + (match ? "_lookup_" : "_rows_") + (page.error?.code ?? "COUNT"));
+        if (page.error) throw new Error("HOME_SOURCE_" + table + "_rows_" + (page.error?.code ?? "COUNT"));
         const data = (page.data ?? []) as unknown as HomeRow[];
         rows.push(...data);
         const keys = rows.map(r => r.id ?? `${r.indicator_id ?? ""}:${r.process_id ?? ""}:${r.document_id ?? ""}`);
@@ -41,9 +48,10 @@ export async function GET(request: Request) {
         if (data.length < 500) return rows;
       }
     }
-    async function children(table: string, columns: string, column: string, ids: string[], order = "id", authenticated = false) {
+    async function children(table: string, columns: string, column: string, ids: string[], order = "id", authenticated = false, periodRange?: { from: string; to: string }) {
       const rows: HomeRow[] = [];
-      for (let i = 0; i < ids.length; i += 100) rows.push(...await read(table, columns, [[column, "in", ids.slice(i, i + 100)]], order, authenticated));
+      const batchSize = column === "period.indicator_id" ? 50 : 100;
+      for (let i = 0; i < ids.length; i += batchSize) rows.push(...await read(table, columns, [[column, "in", ids.slice(i, i + batchSize)]], order, authenticated, periodRange));
       return rows;
     }
     const org = profile.data.organization_id;
@@ -56,30 +64,25 @@ export async function GET(request: Request) {
     const processes = allProcesses.filter(p => administrator || session.assignedProcessIds.includes(text(p, "id")));
 
     if (imagesOnly) {
+      const metadataStarted = performance.now();
       const institutionalProcesses = administrator ? allProcesses : await read("processes", "id", [["organization_id", "eq", org], ["active", "eq", true]]);
       const scopedProcesses = institutionalProcesses.map(p => text(p, "id"));
-      const normalized = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\.[^.]+$/, "").trim().toLocaleLowerCase("es");
-      // SQL narrows candidates; exact normalized matching below retains the institutional allowlist.
-      const possible = (column: string) => institutionalImageTitles.map(title =>
-        column + ".ilike.*" + normalized(title).replace(/[aeiou]/g, "_") + "*").join(",");
-      const projection = "id,organization_id,process_id,code,title,document_type_id,active,deleted_at";
+      // Stable document identities. Their current revision, lifecycle and process scope are resolved on every read.
+      const documentIds = [
+        "217affe6-5187-4d98-a588-d1e17d2347a8", // Política de Calidad
+        "bb1c31b6-223f-4bcd-b123-050b542c3d86", // Política Ambiental
+        "0290f0c0-10b3-49f7-b88a-1e544f654961", // Seguridad e Higiene
+        "10146215-c8a7-4680-91d6-a920b0c5ce6f", // Objetivos de Calidad
+      ];
       const fileFields = "id,bucket_id,object_path,mime_type,size_bytes,deleted_at";
-      const byProcess: Filter[] = [["process_id", "in", scopedProcesses], ["active", "eq", true], ["deleted_at", "is", null]];
-      const [namedDocs, namedByVersion] = await Promise.all([
-        read("controlled_documents", projection, byProcess, "id", false, possible("title")),
-        read("file_objects", "id", [["deleted_at", "is", null]], "id", false, possible("original_name")).then(files => children("controlled_document_versions", "id,document_id,file_name", "file_id", files.map(row => text(row, "id")))),
+      const [documents, versions, lifecycle] = await Promise.all([
+        read("controlled_documents", "id,organization_id,process_id,code,title,document_type_id,active,deleted_at",
+          [["id", "in", documentIds], ["process_id", "in", scopedProcesses], ["active", "eq", true], ["deleted_at", "is", null]]),
+        read("controlled_document_versions", "id,document_id,revision,status,file_id,file_name,updated_at,file:file_objects!controlled_document_versions_file_id_fkey(" + fileFields + ")",
+          [["document_id", "in", documentIds], ["status", "eq", "current"]]),
+        children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", documentIds, "document_id"),
       ]);
-      const exactTitle = (value: string) => institutionalImageTitles.some(title => normalized(title) === normalized(value));
-      const namedIds = new Set(namedDocs.filter(d => exactTitle(text(d, "title"))).map(d => d.id));
-      const otherIds = [...new Set(namedByVersion.filter(v => exactTitle(text(v, "file_name")) && !namedIds.has(v.document_id)).map(v => text(v, "document_id")))];
-      const direct = namedDocs.filter(d => exactTitle(text(d, "title")));
-      const ids = [...new Set([...direct.map(d => text(d, "id")), ...otherIds])];
-      const [matched, versions, lifecycle] = await Promise.all([
-        children("controlled_documents", projection, "id", otherIds),
-        children("controlled_document_versions", "id,document_id,revision,status,file_id,file_name,updated_at,file:file_objects!controlled_document_versions_file_id_fkey(" + fileFields + ")", "document_id", ids),
-        children("document_lifecycle", "document_id,is_deleted,lifecycle_status", "document_id", ids, "document_id"),
-      ]);
-      const institutional = [...direct, ...matched].filter(d => (d.organization_id === org || d.organization_id === null) && scopedProcesses.includes(text(d, "process_id")) && d.active === true && !d.deleted_at);
+      const institutional = documents.filter(d => d.organization_id === org || d.organization_id === null);
       const imageDocuments: ControlledDocument[] = [];
       const imageUrls: Record<string, string> = {};
       const filesByVersion = new Map<string, HomeRow>();
@@ -109,14 +112,18 @@ export async function GET(request: Request) {
         paths.set(text(file, "object_path"), version.id);
         buckets.set(bucket, paths);
       }
+      recordTime("image-metadata", metadataStarted);
+      const signingStarted = performance.now();
       await Promise.all([...buckets].map(async ([bucket, paths]) => {
         const signed = await admin.storage.from(bucket).createSignedUrls([...paths.keys()], 300);
         if (signed.error) throw new Error("HOME_IMAGE_UNAVAILABLE");
         for (const item of signed.data) {
-          if (!item.path || !item.signedUrl || item.error || !paths.has(item.path)) throw new Error("HOME_IMAGE_UNAVAILABLE");
+          if (!item.path || !item.signedUrl || item.error || !paths.has(item.path)) continue;
           imageUrls[paths.get(item.path)!] = item.signedUrl;
         }
       }));
+      recordTime("image-sign", signingStarted);
+      recordTime("images-total", started);
       const headers = { "Cache-Control": "private, no-store" };
       if (url.searchParams.has("image")) {
         const signedUrl = imageUrls[url.searchParams.get("image")!];
@@ -133,16 +140,16 @@ export async function GET(request: Request) {
     type Loader = { module: string; run: () => Promise<HomeRecords> };
     const loaders: Loader[] = [
       { module: "indicators", run: async () => {
-        const indicators = canPerformModuleAction(session, "indicators", "view") ? await read("indicator_definitions", "id,code,name,process_id,active,leader_id,leader_name,metric_label,periodicity,quality_objective", [["organization_id", "eq", org], ["workspace_mode", "eq", "production"], ["active", "eq", true]], "id", true) : [];
-        const relations = await children("indicator_definition_processes", "indicator_id,process_id", "indicator_id", indicators.map(d => text(d, "id")), "indicator_id");
+        const indicators = canPerformModuleAction(session, "indicators", "view") ? await read("indicator_definitions", "id,code,name,process_id,active,leader_id,leader_name,metric_label,periodicity,quality_objective,links:indicator_definition_processes(indicator_id,process_id),rule:indicator_evaluation_rules(indicator_id,compliant_rule,marginal_rule,noncompliant_rule)", [["organization_id", "eq", org], ["workspace_mode", "eq", "production"], ["active", "eq", true]], "id", true) : [];
+        const relations = indicators.flatMap(d => Array.isArray(d.links) ? d.links as HomeRow[] : []);
+        const rules = indicators.flatMap(d => !d.rule ? [] : Array.isArray(d.rule) ? d.rule as HomeRow[] : [d.rule as HomeRow]);
         const scopedIndicators = indicators.filter(d => processIds.includes(text(d, "process_id")) || relations.some(r => r.indicator_id === d.id && processIds.includes(text(r, "process_id"))));
         const indicatorIds = scopedIndicators.map(d => text(d, "id"));
-        const periodsRequest = children("indicator_periods", "id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at", "indicator_id", indicatorIds);
+        const periodsRequest = children("indicator_periods", "id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at", "indicator_id", indicatorIds, "id", true, filters);
 
-        const [periods, rules, results] = await Promise.all([
+        const [periods, results] = await Promise.all([
           periodsRequest,
-          children("indicator_evaluation_rules", "indicator_id,compliant_rule,marginal_rule,noncompliant_rule", "indicator_id", indicatorIds, "indicator_id"),
-          indicatorIds.length ? read("indicator_results", "id,period_id,value,evaluation_status,submitted_by,submitted_at,period:indicator_periods!inner(indicator_id)", [["period.indicator_id", "in", indicatorIds]]) : Promise.resolve([]),
+          children("indicator_results", "id,period_id,value,evaluation_status,submitted_by,submitted_at,period:indicator_periods!inner(indicator_id)", "period.indicator_id", indicatorIds),
         ]);
         return { indicators: scopedIndicators, indicatorProcesses: relations, periods, rules, results };
       } },
@@ -265,16 +272,19 @@ export async function GET(request: Request) {
       async function worker() {
         while (next < loaders.length && !request.signal.aborted) {
           const source = loaders[next++];
+          const sourceStarted = performance.now();
           try { Object.assign(records, await source.run()); }
           catch (cause) {
             failed.add(source.module);
             console.warn("HOME_SOURCE_FAILED", source.module, cause instanceof Error ? cause.message.replace(/[^A-Za-z0-9_]/g, "").slice(0, 80) : "READ");
           }
+          recordTime(source.module, sourceStarted);
           pending.delete(source.module);
           publish?.();
         }
       }
       await Promise.all([worker(), worker(), worker()]);
+      recordTime("dashboard-total", started);
     }
     const headers = { "Cache-Control": "private, no-store" };
     if (!streamRequested) { await collect(); return NextResponse.json({ dashboard: snapshot() }, { headers }); }

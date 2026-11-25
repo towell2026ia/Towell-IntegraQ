@@ -41,7 +41,7 @@ export function HomeInstitutionalImages({ documents, session, onManage, institut
   return <section aria-label="Imágenes institucionales" className={styles.grid}>
     {findInstitutionalImages(institutionalRead ? current?.documents ?? [] : documents, session, institutionalRead).map((slot, position) => <article key={slot.title} className={styles.card}>
       <h3>{slot.title}</h3>
-      {slot.version ? <InstitutionalImage key={key + slot.version.id} priority={position < 2} initialUrl={current?.urls[slot.version.id]} version={slot.version} title={slot.title} institutionalRead={institutionalRead} /> : <p role={current?.error ? "alert" : undefined}>{institutionalRead && !current ? "Consultando imagen institucional…" : current?.error ? "No fue posible consultar la imagen institucional." : slot.ambiguous ? "Hay más de un documento candidato. Requiere revisión administrativa." : "Sin imagen vigente disponible en tu alcance autorizado."}</p>}
+      {slot.version ? <InstitutionalImage key={key + slot.version.id} priority={position < 2} initialUrl={current?.urls[slot.version.id]} version={slot.version} title={slot.title} institutionalRead={institutionalRead} /> : <p aria-label={institutionalRead && !current ? "Cargando imagen" : undefined} role={current?.error ? "alert" : undefined}>{institutionalRead && !current ? "…" : current?.error ? "No fue posible consultar la imagen institucional." : slot.ambiguous ? "Hay más de un documento candidato. Requiere revisión administrativa." : "Sin imagen vigente disponible en tu alcance autorizado."}</p>}
       {isAdministrator(session) && slot.document ? <button type="button" onClick={() => onManage(slot.document!.id)}>Actualizar / consultar versiones</button> : null}
     </article>)}
   </section>;
@@ -75,6 +75,6 @@ export function InstitutionalImage({ version, title, institutionalRead = false, 
       {/* The original is private and has a short-lived signed URL; do not proxy through Next Image. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={url} decoding="async" fetchPriority={priority ? "high" : "auto"} alt={title} onError={() => setError("No fue posible visualizar el archivo original.")} />
-    </button> : <p role="status">Cargando imagen…</p>}
+    </button> : <p role="status" aria-label="Cargando imagen">…</p>}
   </>;
 }

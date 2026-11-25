@@ -59,45 +59,34 @@ function shortNameFor(name: string) {
   return parts.length > 2 ? `${parts[0]} ${parts[1][0]}. ${parts.at(-1)}` : name;
 }
 
-export async function getAuthenticatedSession(): Promise<ActiveSession | null> {
+export async function getAuthenticatedSession(timing?: (phase: string, ms: number) => void): Promise<ActiveSession | null> {
+  const started = performance.now();
   const supabase = await createClient();
   const { data: claimData, error: claimsError } = await supabase.auth.getClaims();
+  const claimsChecked = performance.now();
+  timing?.("identity", claimsChecked - started);
   const claims = claimData?.claims;
 
   if (claimsError || !claims?.sub) return null;
 
-  const [
-    { data: profileData },
-    { data: processData },
-    { data: moduleData },
-    { data: moduleActionData },
-    { data: specificPermissionData },
-  ] =
-    await Promise.all([
-      supabase
-        .from("profiles")
-        .select("*, external_party:organizations!profiles_external_party_id_fkey(code,name,kind), external_site:external_company_sites!profiles_external_site_id_fkey(code,name)")
-        .eq("id", claims.sub)
-        .maybeSingle(),
-      supabase
-        .from("user_process_permissions")
-        .select("process_id, document_role")
-        .eq("user_id", claims.sub),
-      supabase
-        .from("user_module_permissions")
-        .select("module_id, can_view")
-        .eq("user_id", claims.sub)
-        .eq("can_view", true),
-      supabase
-        .from("user_module_action_permissions")
-        .select("module_id, action, source")
-        .eq("user_id", claims.sub),
-      supabase
-        .from("user_permission_overrides")
-        .select("allowed, permission:permissions(code)")
-        .eq("user_id", claims.sub),
-    ]);
-
+  // Resolve the verified profile and its permission rows in the same RLS snapshot.
+  const { data: profileData, error: profileError } = await supabase.from("profiles")
+    .select(`*, external_party:organizations!profiles_external_party_id_fkey(code,name,kind),
+      external_site:external_company_sites!profiles_external_site_id_fkey(code,name),
+      processes:user_process_permissions!user_process_permissions_user_id_fkey(process_id,document_role),
+      modules:user_module_permissions!user_module_permissions_user_id_fkey(module_id,can_view),
+      actions:user_module_action_permissions!user_module_action_permissions_user_id_fkey(module_id,action,source),
+      overrides:user_permission_overrides!user_permission_overrides_user_id_fkey(allowed,permission:permissions(code))`)
+    .eq("id", claims.sub)
+    .eq("modules.can_view", true)
+    .maybeSingle();
+  if (profileError) throw new Error("No fue posible verificar los permisos de la sesión.");
+  const processData: { process_id: string; document_role: string }[] | undefined = profileData?.processes;
+  const moduleData: { module_id: string }[] | undefined = profileData?.modules;
+  const moduleActionData: { module_id: string; action: string; source: string }[] | undefined = profileData?.actions;
+  type Permission = { code: string };
+  const specificPermissionData: { allowed: boolean; permission: Permission | Permission[] | null }[] | undefined = profileData?.overrides;
+  timing?.("permissions", performance.now() - claimsChecked);
   const profile = profileData as ProfileRow | null;
   if (profile?.status === "inactive") return null;
   const userMetadata = (claims.user_metadata ?? {}) as Record<string, unknown>;

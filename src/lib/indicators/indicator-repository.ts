@@ -18,8 +18,14 @@ export async function fetchIndicatorRuntime() {
   );
 }
 
+async function confirmedChange<T>(response: Response) {
+  const result = await readJson<T>(response);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("integraq:indicators-changed"));
+  return result;
+}
+
 export async function persistIndicatorDefinition(indicator: ConfiguredIndicator) {
-  return readJson<{ id: string }>(await fetch("/api/indicators/runtime", {
+  return confirmedChange<{ id: string }>(await fetch("/api/indicators/runtime", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ indicator }),
@@ -27,7 +33,7 @@ export async function persistIndicatorDefinition(indicator: ConfiguredIndicator)
 }
 
 export async function disableIndicatorDefinition(indicatorId: string) {
-  return readJson<{ id: string }>(await fetch("/api/indicators/runtime", {
+  return confirmedChange<{ id: string }>(await fetch("/api/indicators/runtime", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ indicatorId }),
@@ -35,7 +41,7 @@ export async function disableIndicatorDefinition(indicatorId: string) {
 }
 
 export async function persistIndicatorResult(input: IndicatorResultInput) {
-  return readJson<IndicatorResultConfirmation>(await fetch("/api/indicators/runtime", {
+  return confirmedChange<IndicatorResultConfirmation>(await fetch("/api/indicators/runtime", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -43,7 +49,7 @@ export async function persistIndicatorResult(input: IndicatorResultInput) {
 }
 
 export async function persistIndicatorRuntimeSettings(settings: IndicatorRuntimeSettings) {
-  return readJson<{ ok: true }>(await fetch("/api/indicators/runtime", {
+  return confirmedChange<{ ok: true }>(await fetch("/api/indicators/runtime", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
@@ -51,7 +57,7 @@ export async function persistIndicatorRuntimeSettings(settings: IndicatorRuntime
 }
 
 export async function persistIndicatorObjective(indicatorId: string, expectedUpdatedAt: string, objective: string) {
-  return readJson<{ indicatorId: string; objective: string; updatedAt: string }>(await fetch("/api/indicators/objective", {
+  return confirmedChange<{ indicatorId: string; objective: string; updatedAt: string }>(await fetch("/api/indicators/objective", {
     method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ indicatorId, expectedUpdatedAt, objective }),
   }));

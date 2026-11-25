@@ -118,6 +118,7 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
       const key = `${period.year} ${period.quarter}`;
       indicatorHistory.push({ period: key, value: Number(result.value) });
       if (status === "compliant" || status === "marginal" || status === "noncompliant") lastStatus = status;
+      if (!["compliant", "marginal", "noncompliant"].includes(status)) continue;
       const total = history.get(key) ?? { passed: 0, total: 0 };
       total.total++; if (status === "compliant") total.passed++; history.set(key, total);
     }
@@ -135,8 +136,14 @@ export function aggregateProcessHome(session: ActiveSession, records: HomeRecord
   dashboard.trends[0].detail = "Cumplimiento por periodo (%) · sólo capturas reales";
   const latestPeriod = series.at(-1);
   const compliance = dashboard.kpis.find(k => k.id === "indicator-compliance")!;
-  if (definitions.length && !results.size) { compliance.value = "Sin captura"; compliance.detail = "No hay resultados en el período consultado"; }
+  compliance.label = "Cumplimiento de metas";
+  if (definitions.length && !periods.some(period => results.has(period.id))) { compliance.value = "Sin captura"; compliance.detail = "No hay resultados en el período consultado"; }
   if (latestPeriod) { compliance.value = `${Math.round(100 * latestPeriod[1].passed / latestPeriod[1].total)}%`; compliance.detail = `${latestPeriod[0]} · ${latestPeriod[1].total} capturas evaluadas`; }
+  if (latestPeriod) {
+    const scheduled = periods.filter(p => `${p.year} ${p.quarter}` === latestPeriod[0]);
+    const captured = scheduled.filter(p => results.has(p.id)).length;
+    compliance.detail += ` · Captura: ${captured}/${scheduled.length} · ${scheduled.length - captured} pendientes`;
+  }
   const open = dashboard.kpis.find(k => k.id === "open-actions")!; open.value = String(actions.filter(a => a.status !== "closed").length); open.detail = "Expedientes reales autorizados";
   const current = dashboard.kpis.find(k => k.id === "current-documents")!; current.value = String(dashboard.documentMetrics.find(m => m.id === "current")!.value); current.detail = "Documentos vigentes autorizados";
   const completed = dashboard.kpis.find(k => k.id === "completed-audits")!; completed.value = String(audits.filter(a => a.completed_at).length); completed.detail = "Auditorías con fecha real de conclusión";

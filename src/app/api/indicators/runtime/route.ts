@@ -280,45 +280,47 @@ async function loadRuntimeSnapshot(
   context: RuntimeContext,
   includeInactive = false,
 ) {
-  const settingsQuery = await supabase.from("indicator_capture_settings")
+  const settingsRequest = supabase.from("indicator_capture_settings")
     .select("capture_days_after_close,business_timezone")
     .eq("organization_id", context.workspaceId)
     .eq("workspace_mode", context.workspaceMode)
     .maybeSingle();
-  if (settingsQuery.error) throw settingsQuery.error;
-  const settings = {
-    captureDaysAfterClose: Number(settingsQuery.data?.capture_days_after_close ?? DEFAULT_CAPTURE_DAYS_AFTER_CLOSE),
-    timezone: INDICATOR_BUSINESS_TIME_ZONE,
-  } as const;
   let definitionsRequest = supabase.from("indicator_definitions")
     .select("id,code,source_row,process_id,area,direction_objective,direction_metric,quality_objective,name,leader_name,owner_name_snapshot,metric_label,description,periodicity,active,updated_at")
     .eq("organization_id", context.workspaceId)
     .eq("workspace_mode", context.workspaceMode)
     .order("code");
   if (!includeInactive) definitionsRequest = definitionsRequest.eq("active", true);
-  const definitionsQuery = await definitionsRequest;
+  const [definitionsQuery, settingsQuery] = await Promise.all([definitionsRequest, settingsRequest]);
+  if (settingsQuery.error) throw settingsQuery.error;
+  const settings = {
+    captureDaysAfterClose: Number(settingsQuery.data?.capture_days_after_close ?? DEFAULT_CAPTURE_DAYS_AFTER_CLOSE),
+    timezone: INDICATOR_BUSINESS_TIME_ZONE,
+  } as const;
   if (definitionsQuery.error) throw definitionsQuery.error;
   const definitionRows = definitionsQuery.data ?? [];
   if (!definitionRows.length) return { definitions: [], results: {}, settings, loadedAt: new Date().toISOString(), source: "supabase" as const };
   const ids = definitionRows.map((row) => row.id);
-  const [rulesQuery, relationsQuery, periodsQuery] = await Promise.all([
-    supabase.from("indicator_evaluation_rules").select("indicator_id,compliant_rule,marginal_rule,noncompliant_rule").in("indicator_id", ids),
-    supabase.from("indicator_definition_processes").select("indicator_id,process_id").in("indicator_id", ids),
-    supabase.from("indicator_periods").select("id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at").in("indicator_id", ids).order("year"),
-  ]);
-  if (rulesQuery.error) throw rulesQuery.error;
-  if (relationsQuery.error) throw relationsQuery.error;
-  if (periodsQuery.error) throw periodsQuery.error;
-  const periodRows = periodsQuery.data ?? [];
-  const resultQuery = periodRows.length
-    ? await supabase.from("indicator_results")
+  async function forDefinitions<T>(query: (batch: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>) {
+    const rows: T[] = [];
+    for (let offset = 0; offset < ids.length; offset += 50) {
+      const result = await query(ids.slice(offset, offset + 50));
+      if (result.error) throw result.error;
+      rows.push(...(result.data ?? []));
+    }
+    return rows;
+  }
+  const [ruleRows, relationRows, periodRows, resultRows] = await Promise.all([
+    forDefinitions(batch => supabase.from("indicator_evaluation_rules").select("indicator_id,compliant_rule,marginal_rule,noncompliant_rule").in("indicator_id", batch)),
+    forDefinitions(batch => supabase.from("indicator_definition_processes").select("indicator_id,process_id").in("indicator_id", batch)),
+    forDefinitions(batch => supabase.from("indicator_periods").select("id,indicator_id,year,quarter,scheduled_date,opens_at,closes_at").in("indicator_id", batch).order("year")),
+    forDefinitions(batch => supabase.from("indicator_results")
       .select("period_id,value,evaluation_status,comments,evidence_file_id,submitted_at,period:indicator_periods!inner(indicator_id),submitter:profiles!indicator_results_submitted_by_fkey(full_name)")
-      .in("period.indicator_id", ids)
-    : { data: [], error: null };
-  if (resultQuery.error) throw resultQuery.error;
-  const rulesByIndicator = new Map((rulesQuery.data ?? []).map((row) => [row.indicator_id, row]));
+      .in("period.indicator_id", batch)),
+  ]);
+  const rulesByIndicator = new Map(ruleRows.map((row) => [row.indicator_id, row]));
   const processesByIndicator = new Map<string, string[]>();
-  for (const relation of relationsQuery.data ?? []) {
+  for (const relation of relationRows) {
     processesByIndicator.set(relation.indicator_id, [...(processesByIndicator.get(relation.indicator_id) ?? []), relation.process_id]);
   }
   const periodsByIndicator = new Map<string, typeof periodRows>();
@@ -328,7 +330,7 @@ async function loadRuntimeSnapshot(
   const definitionById = new Map(definitionRows.map((row) => [row.id, row]));
   const periodById = new Map(periodRows.map((row) => [row.id, row]));
   const results: IndicatorResults = {};
-  for (const row of resultQuery.data ?? []) {
+  for (const row of resultRows) {
     const period = periodById.get(row.period_id);
     const definition = period ? definitionById.get(period.indicator_id) : undefined;
     if (!period || !definition || row.value == null || !Number.isFinite(Number(row.value))) continue;

@@ -29,30 +29,18 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { AccessModule } from "@/components/modules/access-module";
-import { ActivityLogModule } from "@/components/modules/activity-log-module";
-import { AuditsModule } from "@/components/modules/audits-module";
-import { CalibrationsModule } from "@/components/modules/calibrations-module";
-import { CorrectiveActionsModule } from "@/components/modules/corrective-actions-module";
-import { ContinuousImprovementModule } from "@/components/modules/continuous-improvement-module";
-import { CustomersModule } from "@/components/modules/customers-module";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
 import { clearHomeImages } from "@/components/modules/home-institutional-images";
 import { createDocumentCatalogCache, DocumentsModule } from "@/components/modules/documents-module";
-import { FormsModule } from "@/components/modules/forms-module";
+
 import { HomeModule } from "@/components/modules/home-module";
 import { useHomeProcessData } from "@/lib/use-home-process-data";
-import { HomeSettingsModule } from "@/components/modules/home-settings-module";
-import { IndicatorsModule } from "@/components/modules/indicators-module";
-import { ManagementReviewModule } from "@/components/modules/management-review-module";
+
 import { ModulePlaceholder } from "@/components/modules/module-placeholder";
-import { OrganizationModule } from "@/components/modules/organization-module";
-import { ProcessesModule } from "@/components/modules/processes-module";
-import { RisksOpportunitiesModule } from "@/components/modules/risks-opportunities-module";
-import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal-module";
-import { SuppliersModule } from "@/components/modules/suppliers-module";
+
 import { useIndicatorRuntime } from "@/hooks/use-indicator-runtime";
 import { useHomeAppearance } from "@/lib/use-home-appearance";
 import { withoutKnownDemoManagementReviews, withoutUnchangedSamples } from "@/lib/demo-cleanup";
@@ -128,6 +116,23 @@ import {
   type AuditOccurrence,
 } from "@/lib/audit-data";
 
+const AccessModule = dynamic(() => import("@/components/modules/access-module").then(module => module.AccessModule));
+const ActivityLogModule = dynamic(() => import("@/components/modules/activity-log-module").then(module => module.ActivityLogModule));
+const AuditsModule = dynamic(() => import("@/components/modules/audits-module").then(module => module.AuditsModule));
+const CalibrationsModule = dynamic(() => import("@/components/modules/calibrations-module").then(module => module.CalibrationsModule));
+const CorrectiveActionsModule = dynamic(() => import("@/components/modules/corrective-actions-module").then(module => module.CorrectiveActionsModule));
+const ContinuousImprovementModule = dynamic(() => import("@/components/modules/continuous-improvement-module").then(module => module.ContinuousImprovementModule));
+const CustomersModule = dynamic(() => import("@/components/modules/customers-module").then(module => module.CustomersModule));
+const FormsModule = dynamic(() => import("@/components/modules/forms-module").then(module => module.FormsModule));
+const HomeSettingsModule = dynamic(() => import("@/components/modules/home-settings-module").then(module => module.HomeSettingsModule));
+const IndicatorsModule = dynamic(() => import("@/components/modules/indicators-module").then(module => module.IndicatorsModule));
+const ManagementReviewModule = dynamic(() => import("@/components/modules/management-review-module").then(module => module.ManagementReviewModule));
+const OrganizationModule = dynamic(() => import("@/components/modules/organization-module").then(module => module.OrganizationModule));
+const ProcessesModule = dynamic(() => import("@/components/modules/processes-module").then(module => module.ProcessesModule));
+const RisksOpportunitiesModule = dynamic(() => import("@/components/modules/risks-opportunities-module").then(module => module.RisksOpportunitiesModule));
+const StakeholderPortalModule = dynamic(() => import("@/components/modules/stakeholder-portal-module").then(module => module.StakeholderPortalModule));
+const SuppliersModule = dynamic(() => import("@/components/modules/suppliers-module").then(module => module.SuppliersModule));
+
 const navigationGroups = [
   {
     label: "General",
@@ -189,6 +194,16 @@ export function IntegraQWorkspace({
   const sessionKey=sessionAccessKey(session);
   const externalScope=isExternalUser(session);
   const demoMode = isDemoSession(session);
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_INTEGRAQ_HOME_TIMINGS !== "1") return;
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (navigation) console.info("HOME_STARTUP", JSON.stringify({
+      firstByte: Math.round(navigation.responseStart),
+      htmlComplete: Math.round(navigation.responseEnd),
+      domInteractive: Math.round(navigation.domInteractive),
+      workspaceMounted: Math.round(performance.now()),
+    }));
+  }, []);
   const { appearance, error: appearanceError, refresh: refreshAppearance } = useHomeAppearance();
   const [claimSeed, setClaimSeed] = useState<CustomerClaim | null>(null);
   const [claimSeedId,setClaimSeedId]=useContinuityState("navigation:claim-seed","");
@@ -315,13 +330,13 @@ export function IntegraQWorkspace({
           : appFormCatalog).map(form => ({ ...form,
           records: withoutUnchangedSamples(form.records, appFormCatalog.find(sample => sample.id === form.id)?.records ?? []),
         })));
-        const hydratedDocuments = savedDocuments
-          ? mergeInitialControlledDocuments(JSON.parse(savedDocuments) as ControlledDocument[])
-          : buildInitialControlledDocuments();
         setForms(hydratedForms);
-        if (demoMode) setControlledDocuments(
-          synchronizeAppFormDocuments(hydratedDocuments, hydratedForms),
-        );
+        if (demoMode) {
+          const hydratedDocuments = savedDocuments
+            ? mergeInitialControlledDocuments(JSON.parse(savedDocuments) as ControlledDocument[])
+            : buildInitialControlledDocuments();
+          setControlledDocuments(synchronizeAppFormDocuments(hydratedDocuments, hydratedForms));
+        }
         if (savedRiskWorkspace) {
           const saved = JSON.parse(savedRiskWorkspace) as RiskWorkspaceState;
           const samples = buildInitialRiskWorkspace();
@@ -364,8 +379,9 @@ export function IntegraQWorkspace({
     }
   }, [actions, storageReady, demoMode]);
 
+  const needsActions = ["corrective-actions", "customers", "management-review", "customer-portal", "supplier-portal"].includes(activeModule);
   useEffect(() => {
-    if (!storageReady || demoMode || externalScope) return;
+    if (!storageReady || demoMode || externalScope || !needsActions) return;
     let active = true;
     void loadStoredCorrectiveActions()
       .then(stored => {
@@ -376,7 +392,7 @@ export function IntegraQWorkspace({
       })
       .catch(cause => { if (active) { setActionLoadedSession(null); setActionLoadError(cause instanceof Error ? cause.message : "No fue posible consultar Root2Cause."); } });
     return () => { active = false; };
-  }, [storageReady, demoMode, sessionKey, externalScope, actionRetry]);
+  }, [storageReady, demoMode, sessionKey, externalScope, actionRetry, needsActions]);
 
   useEffect(() => {
     if (storageReady) {
@@ -508,11 +524,11 @@ export function IntegraQWorkspace({
     [actions, assets, controlledDocuments, indicatorDefinitions, indicatorResults, session],
   );
   const localHomeDashboard = useMemo(
-    () => buildHomeDashboard(homeSources),
-    [homeSources],
+    () => demoMode ? buildHomeDashboard(homeSources) : null,
+    [demoMode, homeSources],
   );
   const productionHome = useHomeProcessData(session, undefined, activeModule === "home" || notificationsOpen);
-  const homeDashboard = demoMode ? localHomeDashboard : productionHome.dashboard;
+  const homeDashboard = localHomeDashboard ?? productionHome.dashboard;
 
   const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
     if(!confirmLeaving())return;
@@ -634,7 +650,7 @@ export function IntegraQWorkspace({
         </header>
 
         <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
-          {activeModule === "home" ? <HomeModule baseRetry={productionHome.retry} baseFailed={productionHome.failed} baseDashboard={productionHome.dashboard} loading={!storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
+          {activeModule === "home" ? <HomeModule baseRetry={productionHome.retry} baseFailed={productionHome.failed} baseDashboard={productionHome.dashboard} loading={demoMode && !storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
           {activeModule === "access" ? <AccessModule /> : null}

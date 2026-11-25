@@ -60,6 +60,7 @@ interface HomeModuleProps {
 }
 
 const dateFormatter = new Intl.DateTimeFormat("es-MX", {
+  timeZone: "America/Mexico_City",
   weekday: "long",
   day: "numeric",
   month: "long",
@@ -153,13 +154,13 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
   }, [selectedInstitutionalText]);
 
   const localDashboard = useMemo(
-    () => buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf),
+    () => sources.session.workspaceMode === "demo" ? buildHomeDashboard({ ...sources, sectionConfigurations }, filters, asOf) : null,
     [asOf, filters, sectionConfigurations, sources],
   );
   const useBase = Boolean(baseDashboard) && Object.entries(emptyHomeDashboardFilters).every(([name, value]) => filters[name as keyof HomeDashboardFilters] === value);
   const serverHome = useHomeProcessData(sources.session, filters, !useBase);
   const productionHome = sources.session.workspaceMode !== "demo";
-  const dashboard = productionHome ? (useBase ? baseDashboard! : serverHome.dashboard) : localDashboard;
+  const dashboard = productionHome ? (useBase ? baseDashboard! : serverHome.dashboard) : localDashboard!;
   const searchResults = useMemo(
     () => searchHomeDashboard(dashboard.searchIndex, searchQuery),
     [dashboard.searchIndex, searchQuery],
@@ -173,6 +174,10 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
 
   const incomplete = Boolean(dashboard.pendingSources?.length);
   const incompleteText = incomplete ? "Actualizando…" : dashboard.unavailableSources?.length ? "Consulta incompleta." : undefined;
+  function changeDate(field: "from" | "to", value: string) {
+    setFilters(current => current[field] === value ? current : { ...current, [field]: value });
+  }
+
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const firstResult = searchResults[0];
@@ -260,8 +265,8 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
               <label>Responsable<select value={filters.responsible} onChange={(event) => setFilters((current) => ({ ...current, responsible: event.target.value }))}><option value="all">Todos</option>{dashboard.filterOptions.responsibles.map((responsible) => <option key={responsible} value={responsible}>{responsible}</option>)}</select></label>
               <label>Estado<select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="all">Todos</option>{dashboard.filterOptions.statuses.map((status) => { const [value, label] = status.split("|"); return <option key={status} value={value}>{label}</option>; })}</select></label>
               <label>Módulo<select value={filters.module} onChange={(event) => setFilters((current) => ({ ...current, module: event.target.value }))}><option value="all">Todos</option>{["documents", "corrective-actions", "audits", "indicators", "calibrations"].map((module) => <option key={module} value={module}>{workspaceModuleMeta[module as WorkspaceModuleId].label}</option>)}</select></label>
-              <label>Desde<input type="date" value={filters.from} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
-              <label>Hasta<input type="date" value={filters.to} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
+              <label>Desde<input type="date" value={filters.from} onInput={event => changeDate("from", event.currentTarget.value)} onChange={event => changeDate("from", event.currentTarget.value)} /></label>
+              <label>Hasta<input type="date" value={filters.to} onInput={event => changeDate("to", event.currentTarget.value)} onChange={event => changeDate("to", event.currentTarget.value)} /></label>
               <button className="icon-button" type="button" title="Restablecer filtros" aria-label="Restablecer filtros" onClick={() => setFilters(emptyHomeDashboardFilters)}><RotateCcw size={17} /></button>
             </div>
           ) : null}
@@ -485,7 +490,7 @@ function HomeDashboardSkeleton() {
 }
 
 function getGreeting(date: Date) {
-  const hour = date.getHours();
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Mexico_City", hour: "2-digit", hourCycle: "h23" }).format(date));
   if (hour < 12) return "Buenos días";
   if (hour < 19) return "Buenas tardes";
   return "Buenas noches";

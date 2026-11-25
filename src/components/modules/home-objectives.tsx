@@ -1,6 +1,6 @@
 "use client";
 
-import { Target, X } from "lucide-react";
+import { LoaderCircle, Target, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { statusLabels } from "@/lib/indicator-data";
 import { institutionalQualityObjectives, type HomeObjectiveIndicator } from "@/lib/home-objective-groups";
@@ -33,7 +33,7 @@ export function HomeObjectives({ indicators = [], openIndicator, pending = false
       <div className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="home-objective-title">
         <header><h2 id="home-objective-title">Objetivo de Calidad {selected + 1}</h2><button type="button" autoFocus aria-label="Cerrar" onClick={() => setSelected(null)}><X size={20} /></button></header>
         <div className={styles.dialogBody}><p>{institutionalQualityObjectives[selected]}</p>
-        {pending ? <p role="status">Cargando indicadores…</p> : unavailable ? <p role="status">La consulta de indicadores no está disponible.</p> :
+        {pending ? <p role="status" aria-label="Cargando indicadores"><LoaderCircle className="spin" size={16} /></p> : unavailable ? <p role="status">La consulta de indicadores no está disponible.</p> :
           members.length === 0
             ? <p>Sin indicadores vinculados en el alcance consultado.</p>
             : <ul>{members.map(item => <li key={item.id}>
