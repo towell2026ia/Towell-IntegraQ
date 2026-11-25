@@ -18,7 +18,7 @@ export class MatrixListCache {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   };
-  globalMetrics = () => this.entry?.scope === "" ? this.entry.base.metrics : null;
+  getSnapshot = () => this.entry;
   countsFor(entry: Entry) { return this.entry === entry ? this.counts : undefined; }
   loadCounts(entry: Entry, ids: string[]) {
     if (this.entry !== entry) return Promise.reject(new Error("La consulta cambió."));
@@ -62,9 +62,12 @@ export function filterMatrix(base: MatrixResult, filters: MatrixFilters) {
     options: base.options, sourceCount: base.sourceCount }, needsAlerts };
 }
 
-export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", tablePage = { query: "", index: 0 }, openReportId = "") {
+export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", tablePage = { query: "", index: 0 }, openReportId = "", year = "") {
   const [filters, changeFilters] = useState({ ...emptyMatrixFilters, supplierId: initialSupplierId });
-  const scopedFilters = useMemo(() => ({ ...filters, supplierId: initialSupplierId || filters.supplierId }), [filters, initialSupplierId]);
+  const scopedFilters = useMemo(() => {
+    const days = year && filters.month ? new Date(Number(year), Number(filters.month), 0).getDate() : 0;
+    return { ...filters, year, day: Number(filters.day) <= days ? filters.day : "", supplierId: initialSupplierId || filters.supplierId };
+  }, [filters, initialSupplierId, year]);
   const activeRequest = useRef<AbortController | null>(null);
   const [entry, setEntry] = useState(() => { const stored = cache.get(initialSupplierId); return stored && Date.now() - stored.loadedAt < 60_000 ? stored : null; });
   const [error, setError] = useState("");
@@ -99,7 +102,7 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", ta
     const onVisible = () => { if (!document.hidden) void refresh(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { mounted = false; document.removeEventListener("visibilitychange", onVisible); activeRequest.current?.abort(); };
-  }, [refresh, requestList]);
+  }, [refresh, requestList, year]);
   const setFilters = (next: Parameters<typeof changeFilters>[0]) => {
     if (current && Date.now() - current.loadedAt >= 60_000) void refresh();
     changeFilters(next);
@@ -111,7 +114,8 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", ta
   const page = tablePage.query === queryKey ? Math.max(0, Math.min(tablePage.index, pages - 1)) : 0;
   const visibleReports = view?.result.reports.slice(page * pageSize, (page + 1) * pageSize) ?? [];
   const pageIds = visibleReports.map(report => report.id).join(",");
-  const showingDetail = Boolean(openReportId && view?.result.reports.some(report => report.id === openReportId));
+  const openReport = openReportId ? current?.base.reports.find(report => report.id === openReportId && !report.deletedAt) : undefined;
+  const showingDetail = Boolean(openReport);
   useEffect(() => {
     if (!current || !pageIds || showingDetail) return;
     let active = true;
@@ -134,7 +138,7 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", ta
   }, [view]);
   const resolved = remote?.view === view?.result ? remote : null;
   const data = useMemo(() => view ? (resolved?.alerts ? { ...view.result, ...resolved.alerts } : view.result) : null, [resolved, view]);
-  return { data, visibleReports, page, pages, queryKey, filters: scopedFilters, setFilters, refresh, error, loading: !data && !error,
+  return { data, openReport, visibleReports, page, pages, queryKey, filters: scopedFilters, setFilters, refresh, error, loading: !data && !error,
     pdfCounts: current ? cache.countsFor(current) ?? null : null, countsUnavailable: Boolean(current && counts?.entry === current && !counts.values),
     alertsPending: Boolean(view?.needsAlerts && !resolved), alertsError: Boolean(resolved && !resolved.alerts) };
 }

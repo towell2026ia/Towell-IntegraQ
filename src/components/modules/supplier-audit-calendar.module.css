@@ -3,3 +3,9 @@
 @media(min-width:1500px){.annual{grid-template-columns:repeat(6,minmax(0,1fr))}}@media(max-width:1000px){.annual{grid-template-columns:repeat(3,minmax(0,1fr))}.day{min-height:95px;padding:4px}.event{font-size:.67em;padding:4px}}@media(max-width:650px){.panel{padding:12px}.annual{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.month{padding:10px}.counts{grid-template-columns:1fr}.grid{grid-template-columns:1fr}.wide{grid-column:auto}.backdrop{padding:6px}.body{padding:14px}.facts{grid-template-columns:1fr 1fr}.day{min-height:46px;padding:0}.daySelect{justify-content:center;min-height:46px;padding:3px}.daySelect svg{display:none}.dayNumber{padding:14px 4px;text-align:center}.day .event{display:none}.week span{padding:8px 0;font-size:.72em}.eventRow{align-items:flex-start}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.fileRow{align-items:flex-start;flex-direction:column}.toolbar{gap:14px}.rubric{grid-template-columns:1fr 82px}.contactDetails{grid-template-columns:1fr}.eventList::before{content:'Agenda del mes';font-size:.85em;font-weight:700}.state{white-space:normal}}
 
 .withdrawal{margin:14px 0;padding:16px;border:1px solid #c7d3cc;border-radius:8px;background:#f7f8f6;overflow-wrap:anywhere}.withdrawal .field textarea{min-height:90px;resize:vertical}.withdrawal .check input{width:16px;height:16px;min-height:0;flex-shrink:0}
+
+.contactCards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; }
+.contactCards article { display: grid; align-content: start; gap: 5px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
+.contactCards dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; margin: 4px 0; }
+.contactCards dt, .contactCards small { color: var(--muted); }
+.contactCards dd { margin: 0; }

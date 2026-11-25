@@ -4,7 +4,6 @@ import { ChevronLeft, ChevronRight, Download, Eye, FileSpreadsheet, Plus, Upload
 import type { SupplierAuditDirectory } from "@/hooks/use-supplier-audits";
 import { auditCommand, auditFileUrl, auditRequest } from "@/lib/supplier-audits/client";
 import { auditDayMatch, auditStates, emptyContacts, monthDays, monthSummary, questionnaires, type AuditWorkspace, type AuditSupplier, type Questionnaire, type SupplierAudit, type SupplierAuditFile, type SupplierContacts } from "@/lib/supplier-audits/model";
-import type { RncpReport } from "@/lib/rncp-data";
 import { SupplierAuditDocument } from "./supplier-audit-document";
 import { SupplierAuditManual } from "./supplier-audit-manual";
 import { auditStateLabel, isAuditWithdrawn } from "@/lib/supplier-audits/withdrawal";
@@ -30,7 +29,7 @@ function Dialog({ title, onClose, children }: { title: string; onClose: () => vo
   return <div className={styles.backdrop} role="presentation"><section ref={section} role="dialog" aria-modal="true" aria-label={title} className={styles.dialog}><header><h3>{title}</h3><button className="icon-button" type="button" aria-label="Cerrar" onClick={close}><X size={18} /></button></header><div className={styles.body}>{children}</div></section></div>;
 }
 function DirectoryStatus({ directory }: { directory: SupplierAuditDirectory }) {
-  return <div className={styles.panel}>{directory.error ? <p className={styles.error} role="alert">{directory.error}</p> : <p role="status">Consultando auditorías autorizadas…</p>}<button type="button" className="button button-secondary" onClick={() => void directory.refresh()}>Reintentar</button></div>;
+  return <div className={styles.panel}>{directory.error ? <p className={styles.error} role="alert">No se pudieron consultar las auditorías.</p> : <span role="status" aria-label="Cargando auditorías">…</span>}<button type="button" className="button button-secondary" onClick={() => void directory.refresh()}>Reintentar</button></div>;
 }
 export function SupplierAuditCalendar({ directory, onOpen }: { directory: SupplierAuditDirectory; onOpen: (focus: AuditFocus) => void }) {
   const [year, setYear] = useState(currentYear), [month, setMonth] = useState(currentMonth);
@@ -164,17 +163,32 @@ function AuditHistoryImport({ onClose, onChanged }: { onClose: () => void; onCha
   return <Dialog title="Importar histórico F-CA-58" onClose={() => { if (!busy) onClose(); }}><p>Se conservarán las tres hojas, fechas P/R, cancelaciones, pendientes y valores originales. No se inventan informes ni evaluaciones y no se generan correos.</p><label className={styles.field}>Archivo oficial<input type="file" accept=".xlsx" disabled={busy} onChange={e => { setFile(e.target.files?.[0] ?? null); setPreview(null); setConfirmed(false); }} /></label><button className="button button-secondary" type="button" disabled={busy || !file} onClick={() => void run("preview")}>Revisar sin importar</button>{preview ? <><p>{preview.total} eventos · {preview.matched} coincidencias exactas · {preview.pending} pendientes de conciliación</p><div className={styles.importRows}>{preview.rows.map(row => <p key={`${row.sourceSheet}:${row.sourceRow}`}>{row.supplierName} · {row.sourceSheet}, fila {row.sourceRow}<br />P: {dateLabel(row.plannedDate)} · R: {dateLabel(row.actualDate)} · {auditStates[row.state]} · {row.supplierId ? "Proveedor conciliado" : "Sin asociación automática"}</p>)}</div><label className={styles.check}><input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />Confirmo la importación, con proveedores ambiguos pendientes y sin duplicar auditorías existentes.</label><button type="button" className="button button-primary" disabled={!confirmed || busy} onClick={() => void run("commit")}>{busy ? "Importando…" : "Importar 22 auditorías"}</button></> : null}{error ? <p className={styles.error} role="alert">{error}</p> : null}</Dialog>;
 }
 
-export function SupplierAuditProfile({ supplierId, directory, reports, onOpen, onRncp }: { supplierId: string; directory: SupplierAuditDirectory; reports: RncpReport[]; onOpen: (focus: AuditFocus) => void; onRncp: () => void }) {
+export function SupplierAuditProfile({ supplierId, directory, onOpen }: { supplierId: string; directory: SupplierAuditDirectory; onOpen: (focus: AuditFocus) => void }) {
   const [editing, setEditing] = useState(false), data = directory.data, supplier = data?.suppliers.find(s => s.id === supplierId);
   if (!data) return <DirectoryStatus directory={directory} />;
   const contacts = { ...emptyContacts, email: supplier?.contact_email ?? "", ...(supplier?.metadata.supplierQualityContacts as Partial<SupplierContacts> | undefined) };
   const audits = data.events.filter(e => e.supplier_id === supplierId).sort((a, b) => (b.actual_date ?? b.planned_date ?? "").localeCompare(a.actual_date ?? a.planned_date ?? ""));
-  const own = reports.filter(r => r.supplierId === supplierId && !r.deletedAt), summary = monthSummary(audits);
+  const summary = monthSummary(audits);
+  const entries = visibleSupplierContacts({ ...contacts, email: contacts.email || supplier?.contact_email || "" });
   const latest = data.files.filter(f => f.resource_type === "supplier_audit_report" && audits.some(e => e.id === f.resource_id && !isAuditWithdrawn(e))).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
   return <section className="party-detail-section"><div className={styles.toolbar}><h4>Expediente del proveedor</h4>{data.contactsPending ? <span>Edición de contactos pendiente de activación.</span> : null}{supplier && !data.contactsPending && (data.canManage || data.administrator) ? <button type="button" className="button button-secondary" onClick={() => setEditing(true)}>Editar contactos</button> : null}</div>
-    <dl className={styles.contactDetails}><div><dt>Contacto principal de Calidad</dt><dd>{contacts.qualityName || "No registrado"}</dd></div><div><dt>Receptor de notificaciones futuras</dt><dd>{contacts.notificationName || "No registrado"}</dd></div><div><dt>Correo confirmado manualmente</dt><dd>{contacts.email || supplier?.contact_email || "No registrado"} · {contacts.emailVerified ? "Confirmado" : "Sin confirmar"}</dd></div><div><dt>Teléfono</dt><dd>{contacts.phone || "No registrado"}</dd></div><div><dt>Contacto alterno</dt><dd>{contacts.alternateName || "No registrado"} {contacts.alternateEmail} {contacts.alternatePhone}</dd></div></dl>
-    <div className={styles.contactDetails}><h5>Contactos registrados</h5>{visibleSupplierContacts(contacts).map(entry => <p key={entry.id}><strong>{entry.name || "Nombre pendiente"}</strong> · {entry.position || entry.purpose || "Sin puesto"} · {entry.email} · {entry.phone || "Sin teléfono"}{entry.retired ? " · Retirado" : ""}{entry.notifyRncp ? " · Seleccionado para RNCP (correo sin verificar)" : ""}</p>)}</div>
-    <p className={styles.note}>Los contactos no crean cuentas externas ni activan notificaciones.</p><div className={styles.metrics}>{[["RNCP totales", own.length], ["Abiertos", own.filter(r => r.status === "submitted" && !r.late).length], ["Tardíos", own.filter(r => r.late).length], ["Cerrados", own.filter(r => r.status === "closed").length], ["En proceso", own.filter(r => r.status === "in_progress" && !r.late).length], ["Auditorías programadas", summary.scheduled], ["Auditorías realizadas", summary.performed]].map(([label, value]) => <div key={label}><strong>{value}</strong><small>{label}</small></div>)}</div><button className="button button-secondary" type="button" onClick={onRncp}>Abrir historial RNCP</button>
+    <div className={styles.contactCards} aria-label="Contactos registrados">
+      {entries.map(entry => <article key={entry.id}>
+        <strong>{entry.name && entry.name !== entry.email ? entry.name : "Nombre no registrado"}</strong>
+        <span>{[entry.position, entry.purpose].filter(Boolean).join(" · ")}</span>
+        <dl><dt>Correo</dt><dd>{entry.email || "No registrado"}</dd><dt>Teléfono</dt><dd>{entry.phone || "No registrado"}</dd></dl>
+        {(entry.email === contacts.email || entry.id === "legacy-primary") && <small>{entry.email === contacts.email && contacts.emailVerified ? "Correo confirmado" : "Correo sin confirmar"}</small>}
+        {entry.notifyRncp && <small>Seleccionado para RNCP</small>}{entry.retired && <small>Retirado</small>}
+      </article>)}
+    </div>
+    <dl className={styles.contactDetails}>
+      {contacts.qualityName && <div><dt>Contacto de Calidad</dt><dd>{contacts.qualityName}</dd></div>}
+      {contacts.notificationName && contacts.notificationName !== contacts.qualityName && <div><dt>Receptor de notificaciones</dt><dd>{contacts.notificationName}</dd></div>}
+      {contacts.alternateName && !entries.some(entry => entry.name === contacts.alternateName) && <div><dt>Contacto alterno</dt><dd>{contacts.alternateName}</dd></div>}
+      {[contacts.phone, contacts.alternatePhone].filter((phone, i, phones) => phone && phones.indexOf(phone) === i && !entries.some(entry => entry.phone === phone)).map(phone => <div key={phone}><dt>Teléfono registrado</dt><dd>{phone}</dd></div>)}
+    </dl>
+    {!entries.length && <p>Sin correos de contacto registrados.</p>}
+    <div className={styles.metrics}><div><strong>{summary.scheduled}</strong><small>Auditorías programadas</small></div><div><strong>{summary.performed}</strong><small>Auditorías realizadas</small></div></div>
     <section className={styles.section}><h4>Histórico de auditorías y calificaciones</h4>{latest ? <p>Último informe cargado: <button className="evidence-link" type="button" onClick={() => { const e = audits.find(a => a.id === latest.resource_id)!; onOpen({ id: e.id, year: e.calendar_year, month: e.calendar_month }); }}>{latest.original_name}</button></p> : <p className={styles.note}>Informe pendiente de carga.</p>}{audits.map(event => { const result = data.results.find(r => r.audit_event_id === event.id); return <button className={styles.record} type="button" key={event.id} onClick={() => onOpen({ id: event.id, year: event.calendar_year, month: event.calendar_month })}><strong>{dateDescription(event)} · {auditStateLabel(event) ?? auditStates[event.state]}</strong><small>R: {dateLabel(event.actual_date)} · {result ? `${result.score}% · ${dateLabel(result.assessment_date)}` : "Sin calificaciones capturadas"}</small></button>; })}{!audits.length ? <p className={styles.note}>Sin auditorías asociadas a este proveedor.</p> : null}</section>
     {editing && supplier ? data.contactsV2Enabled ? <SupplierContactsForm supplier={supplier} contacts={contacts} onClose={() => setEditing(false)} onChanged={directory.refresh} /> : <LegacySupplierContactsForm supplier={supplier} contacts={contacts} onClose={() => setEditing(false)} onChanged={directory.refresh} /> : null}
   </section>;

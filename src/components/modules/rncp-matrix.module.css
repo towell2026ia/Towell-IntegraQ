@@ -32,3 +32,24 @@
 .reportModal { overflow-x: hidden; }
 
 .reportModal:global(.quality-modal) { max-width: min(1100px,calc(100vw - 30px)); width: min(1100px,calc(100vw - 30px)); }
+
+.year, .profileActions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.year { font-size: .85rem; font-weight: 600; color: var(--muted); }
+.year select { font: inherit; color: var(--ink); background: white; border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 10px; }
+.profileActions { margin-top: 10px; }
+.profileActions button { min-height: 32px; }
+.profileActions .danger { color: var(--red); }
+.supplierFacts { align-items: stretch; }
+.supplierFacts > div { align-content: space-between; gap: 8px; min-width: 0; }
+.formLegend { color: var(--ink); font-size: .95rem; font-weight: 700; padding: 0; margin: 12px 0; }
+.recordSummary, .actionRecord, .disclosure { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.recordSummary p, .actionRecord dd { margin: 4px 0 8px; }
+.disclosure summary { cursor: pointer; font-weight: 600; }
+.disclosure[open] summary { margin-bottom: 12px; }
+.kpis { gap: 8px; background: transparent; border: 0; }
+.kpis > div { align-content: space-between; border: 1px solid var(--line); border-radius: 8px; }
+.modalBody input[type=file]::file-selector-button { font: inherit; color: var(--blue); background: white; border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; cursor: pointer; margin-right: 8px; }
+
+.moreActions { position: relative; }
+.moreActions summary { cursor: pointer; padding: 6px 10px; font-size: .8rem; font-weight: 600; color: var(--muted); }
+.moreActions > div { position: absolute; z-index: 4; inset-inline-end: 0; display: grid; gap: 6px; width: max-content; background: white; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }

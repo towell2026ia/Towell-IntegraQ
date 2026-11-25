@@ -104,12 +104,23 @@ describe("session-scoped RNCP filters", () => {
       expect(result.options).toEqual(base.options);
     }
   });
+  it("reconciles issue years before pagination and retains undated reports only in the complete history", () => {
+    const records = Array.from({ length: 35 }, (_, i) => history(String(i), { reportDate: "2025-12-31" }));
+    records.push(history("older", { reportDate: "2024-01-01" }), history("undated", { reportDate: null }));
+    const base = { ...baseline(), ...buildMatrixDashboard(records, emptyMatrixFilters, now) };
+    const year = (value: string) => filterMatrix(base, { ...emptyMatrixFilters, year: value }).result;
+    expect(year("2025").metrics.total).toBe(35);
+    expect(year("2024").reports.map(r => r.id)).toEqual(["older"]);
+    expect(year("").reports).toHaveLength(37);
+    expect(year("").options.years).toEqual(["2025", "2024"]);
+    expect(year("2026").metrics.total).toBe(0);
+  });
   it("deduplicates visible-page counts, preserves unknowns and discards results after a scope change", async () => {
     const cache = new MatrixListCache();
     const entry = { scope: "", base: baseline(), loadedAt: Date.now() };
     cache.put(entry);
     expect(cache.get("supplier-a")).toBe(entry);
-    expect(cache.globalMetrics()).toBe(entry.base.metrics);
+    expect(cache.getSnapshot()).toBe(entry);
     const fetcher = vi.spyOn(globalThis, "fetch");
     try {
       fetcher.mockResolvedValueOnce(Response.json({ counts: { a: 0, b: 2 } }));
