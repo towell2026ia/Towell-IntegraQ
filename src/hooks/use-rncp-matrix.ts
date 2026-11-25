@@ -1,51 +1,111 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { matrixQuery, rncpRequest, type MatrixResult } from "@/lib/rncp/client";
-import { emptyMatrixFilters } from "@/lib/rncp/model";
+import { emptyMatrixFilters, type MatrixFilters } from "@/lib/rncp/model";
+import { buildMatrixDashboard, matchesFilters } from "@/lib/rncp/analytics";
+import { generateSupplierAlerts } from "@/lib/rncp/alerts";
+import { selectedAlertPeriod } from "@/lib/rncp/alert-period";
 
-export function useRncpMatrix(initialSupplierId = "") {
-  const [filters, setFilters] = useState({ ...emptyMatrixFilters, supplierId: initialSupplierId });
-  const [data, setData] = useState<MatrixResult | null>(null);
-  const [error, setError] = useState(""); const [loading, setLoading] = useState(true);
-  const [pdfCounts, setPdfCounts] = useState<Record<string, number> | null>(null);
-  const [countsUnavailable, setCountsUnavailable] = useState(false);
-  const sequence = useRef(0); const abort = useRef<AbortController | null>(null);
-  const scopedFilters = { ...filters, supplierId: initialSupplierId || filters.supplierId };
-  const query = matrixQuery(scopedFilters);
-  const load = useCallback(async () => {
-    const request = ++sequence.current;
-    abort.current?.abort(); const controller = new AbortController(); abort.current = controller;
-    setLoading(true);
-    try {
-      const result = await rncpRequest<MatrixResult>(`/matrix?part=list&${query}`, { signal: controller.signal });
-      if (request !== sequence.current || controller.signal.aborted) return;
-      setData(result);
-      setError("");
-    } catch (error) {
-      if (request === sequence.current && !controller.signal.aborted) setError(error instanceof Error ? error.message : "No fue posible actualizar RNCP.");
-    } finally { if (request === sequence.current && !controller.signal.aborted) setLoading(false); }
-  }, [query]);
-  useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 200);
-    return () => { window.clearTimeout(timer); abort.current?.abort(); };
-  }, [load]);
-  // Filters only change which rows are displayed. Counts belong to the authorized
-  // directory and are refreshed after explicit reloads or document changes.
-  const [countsRevision, setCountsRevision] = useState(0);
-  const hasReports = Boolean(data?.sourceCount);
-  useEffect(() => {
-    if (!hasReports) return;
+type Alerts = Pick<MatrixResult, "alerts" | "aiStatus">;
+type Counts = Record<string, number>;
+type Entry = { scope: string; base: MatrixResult; loadedAt: number };
+export class MatrixListCache {
+  private entry: Entry | null = null;
+  private countRequest?: Promise<Counts>;
+  private counts?: Counts;
+  countsFor(entry: Entry) { return this.entry === entry ? this.counts : undefined; }
+  loadCounts(entry: Entry) {
+    if (this.entry !== entry) return Promise.reject(new Error("La consulta cambió."));
+    if (this.countRequest) return this.countRequest;
+    const request = rncpRequest<{ counts: Counts }>("/matrix?part=pdfCounts")
+      .then(({ counts }) => { if (this.entry === entry) this.counts = counts; return counts; })
+      .catch(error => { if (this.entry === entry) this.countRequest = undefined; throw error; });
+    this.countRequest = request;
+    return request;
+  }
+  get(scope: string) { return this.entry?.scope === scope ? this.entry : null; }
+  put(entry: Entry) { this.clear(); this.entry = entry; }
+  clear() { this.entry = null; this.counts = undefined; this.countRequest = undefined; }
+}
+
+export function filterMatrix(base: MatrixResult, filters: MatrixFilters) {
+  if (matrixQuery(base.filters) === matrixQuery(filters)) return { result: base, needsAlerts: false };
+  const dashboard = buildMatrixDashboard(base.reports, filters, base.now);
+  const dateFree = { ...filters, year: "", month: "", day: "", from: "", to: "" };
+  const candidates = base.reports.filter(report => matchesFilters(report, dateFree, base.now));
+  const range = selectedAlertPeriod(filters, dashboard.reports, base.now);
+  const rules = generateSupplierAlerts(candidates, base.now, base.settings.alertRules, {}, range);
+  const signed = new Map(base.alerts.map(alert => [alert.key, alert]));
+  const needsAlerts = (base.aiConfigured && base.settings.semanticAiApproved) || rules.some(alert => !signed.has(alert.key));
+  const alerts = needsAlerts ? [] : rules.map(alert => ({ ...alert, review: signed.get(alert.key)?.review, reviewToken: signed.get(alert.key)?.reviewToken }));
+  return { result: { ...base, ...dashboard, alerts, aiStatus: base.aiStatus, deletedReports: base.deletedReports,
+    options: base.options, sourceCount: base.sourceCount }, needsAlerts };
+}
+
+export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "") {
+  const [filters, changeFilters] = useState({ ...emptyMatrixFilters, supplierId: initialSupplierId });
+  const scopedFilters = useMemo(() => ({ ...filters, supplierId: initialSupplierId || filters.supplierId }), [filters, initialSupplierId]);
+  const activeRequest = useRef<AbortController | null>(null);
+  const [entry, setEntry] = useState(() => { const stored = cache.get(initialSupplierId); return stored && Date.now() - stored.loadedAt < 60_000 ? stored : null; });
+  const [error, setError] = useState("");
+  const [counts, setCounts] = useState<{ entry: Entry; values?: Counts } | null>(null);
+  const [remote, setRemote] = useState<{ view: MatrixResult; alerts?: Alerts } | null>(null);
+  const current = entry && entry === cache.get(initialSupplierId) && entry.scope === initialSupplierId ? entry : null;
+  const load = useCallback(async (signal: AbortSignal) => {
+    const stored = cache.get(initialSupplierId);
+    if (stored && stored.scope === initialSupplierId && Date.now() - stored.loadedAt < 60_000) {
+      setEntry(stored); return;
+    }
+    const base = await rncpRequest<MatrixResult>("/matrix?part=list&" + matrixQuery({ ...emptyMatrixFilters, supplierId: initialSupplierId }), { signal });
+    if (signal.aborted) return;
+    const next = { base, scope: initialSupplierId, loadedAt: Date.now() };
+    cache.put(next); setEntry(next); setError("");
+  }, [cache, initialSupplierId]);
+  const requestList = useCallback(async (invalidate: boolean) => {
+    activeRequest.current?.abort();
     const controller = new AbortController();
-    rncpRequest<{ counts: Record<string, number> }>("/matrix?part=pdfCounts", { signal: controller.signal })
-      .then(({ counts }) => { if (!controller.signal.aborted) setPdfCounts(counts); })
-      .catch(() => { if (!controller.signal.aborted) setCountsUnavailable(true); });
-    return () => controller.abort();
-  }, [hasReports, countsRevision]);
-  const refresh = useCallback(async () => {
-    setPdfCounts(null);
-    setCountsUnavailable(false);
-    setCountsRevision(previous => previous + 1);
-    await load();
-  }, [load]);
-  return { data, pdfCounts, countsUnavailable, filters: scopedFilters, setFilters, refresh, loading, error };
+    activeRequest.current = controller;
+    if (invalidate) { cache.clear(); setEntry(null); }
+    try {
+      await load(controller.signal);
+    } catch {
+      if (!controller.signal.aborted) { cache.clear(); setEntry(null); setError("No se pudo consultar el dashboard."); }
+    }
+  }, [cache, load]);
+  const refresh = useCallback(() => requestList(true), [requestList]);
+  useEffect(() => {
+    let mounted = true;
+    queueMicrotask(() => { if (mounted) void requestList(false); });
+    const onVisible = () => { if (!document.hidden) void refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { mounted = false; document.removeEventListener("visibilitychange", onVisible); activeRequest.current?.abort(); };
+  }, [refresh, requestList]);
+  const setFilters = (next: Parameters<typeof changeFilters>[0]) => {
+    if (current && Date.now() - current.loadedAt >= 60_000) void refresh();
+    changeFilters(next);
+  };
+  const view = useMemo(() => current ? filterMatrix(current.base, scopedFilters) : null, [current, scopedFilters]);
+  useEffect(() => {
+    if (!current || cache.countsFor(current) || !current.base.sourceCount) return;
+    let active = true;
+    cache.loadCounts(current)
+      .then(values => { if (active) setCounts({ entry: current, values }); })
+      .catch(() => { if (active) setCounts({ entry: current }); });
+    return () => { active = false; };
+  }, [cache, current]);
+  useEffect(() => {
+    if (!view?.needsAlerts) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      rncpRequest<Alerts>("/matrix?part=alerts&" + matrixQuery(view.result.filters), { signal: controller.signal })
+        .then(alerts => { if (!controller.signal.aborted) setRemote({ view: view.result, alerts }); })
+        .catch(() => { if (!controller.signal.aborted) setRemote({ view: view.result }); });
+    }, 180);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [view]);
+  const resolved = remote?.view === view?.result ? remote : null;
+  const data = useMemo(() => view ? (resolved?.alerts ? { ...view.result, ...resolved.alerts } : view.result) : null, [resolved, view]);
+  return { data, filters: scopedFilters, setFilters, refresh, error, loading: !data && !error,
+    pdfCounts: current ? cache.countsFor(current) ?? null : null, countsUnavailable: Boolean(current && counts?.entry === current && !counts.values),
+    alertsPending: Boolean(view?.needsAlerts && !resolved), alertsError: Boolean(resolved && !resolved.alerts) };
 }

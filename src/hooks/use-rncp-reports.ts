@@ -31,10 +31,13 @@ export function useRncpReports(enabled = true, view: "detail" | "directory" = "d
   useEffect(() => {
     if (!enabled) return;
     void Promise.resolve().then(refresh);
+    // The internal directory refreshes after confirmed edits. Keep the portal's
+    // established focus refresh for responses made outside its current view.
+    if (view === "directory") return;
     const refreshOnFocus = () => { void refresh(); };
     window.addEventListener("focus", refreshOnFocus);
     return () => window.removeEventListener("focus", refreshOnFocus);
-  }, [enabled, refresh]);
+  }, [enabled, refresh, view]);
 
   return { reports, loading, error, refresh, flowReady };
 }

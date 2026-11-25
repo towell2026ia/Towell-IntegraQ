@@ -5,7 +5,7 @@ import { listenForBackgroundRefresh, traceContinuity } from "@/lib/workspace-con
 
 import { loadExternalCompanies, type ExternalCompany } from "@/lib/external-company-data";
 
-export function useExternalCompanies() {
+export function useExternalCompanies(kind?: "supplier") {
   const [companies, setCompanies] = useState<ExternalCompany[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -19,7 +19,7 @@ export function useExternalCompanies() {
     traceContinuity("refetch-start","companies");
     const task=(async()=>{
     try {
-      const result = await loadExternalCompanies();
+      const result = await loadExternalCompanies(kind);
       setCompanies(current=>JSON.stringify(current)===JSON.stringify(result.companies)?current:result.companies);
       loaded.current=true;setHasLoaded(true);setError("");
       return result.companies;
@@ -34,7 +34,7 @@ export function useExternalCompanies() {
     }
     })();
     inFlight.current=task;return task;
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     void Promise.resolve().then(refresh);

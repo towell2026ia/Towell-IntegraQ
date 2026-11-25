@@ -84,6 +84,14 @@ describe("external company directory separation", () => {
     expect((await response.json()).companies).toBeUndefined();
   });
 
+  it("restricts the supplier directory to the intersection with the current user's readable kinds", async () => {
+    state.profile = { user_type: "customer", status: "active", organization_id: null, external_party_id: customerA.id, external_site_id: null };
+    const response = await GET(new Request("https://test.invalid/api/admin/external-companies?kind=supplier"));
+    expect(response.status).toBe(200);
+    expect((await response.json()).companies).toEqual([]);
+    expect(state.calls.filter(call => call.table === "organizations")).toEqual([]);
+  });
+
   it("lets an external supplier see only its own supplier company", async () => {
     state.profile = { user_type: "supplier", status: "active", organization_id: null,
       external_party_id: supplier.id, external_site_id: null };

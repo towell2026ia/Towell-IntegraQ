@@ -84,9 +84,11 @@ async function listCompanies(actor: Actor) {
     companies = (result.data ?? []) as CompanyRow[];
   } else {
     if (!actor.organizationId) return [];
-    if (!await isActiveInternalOrganization(admin, actor.organizationId)) return [];
-    const canReadLegacySuppliers = actor.readableKinds.includes("supplier")
-      && await isOnlyActiveInternalOrganization(admin, actor.organizationId);
+    const [active, canReadLegacySuppliers] = await Promise.all([
+      isActiveInternalOrganization(admin, actor.organizationId),
+      actor.readableKinds.includes("supplier") ? isOnlyActiveInternalOrganization(admin, actor.organizationId) : false,
+    ]);
+    if (!active) return [];
     const [customersResult, ownedSuppliersResult, legacySuppliersResult] = await Promise.all([
       actor.readableKinds.includes("customer")
         ? admin.from("organizations").select(select).eq("kind", "customer").eq("owning_organization_id", actor.organizationId).order("name")
@@ -126,11 +128,13 @@ async function listCompanies(actor: Actor) {
   return companies.map((company) => mapCompany(company, sites.filter((site) => site.company_id === company.id), categories.get(company.id)));
 }
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     const actor = await getActor();
     if (!actor) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-    return NextResponse.json({ companies: await listCompanies(actor) });
+    const supplierOnly = request && new URL(request.url).searchParams.get("kind") === "supplier";
+    const scope = supplierOnly ? { ...actor, readableKinds: actor.readableKinds.filter(kind => kind === "supplier") } : actor;
+    return NextResponse.json({ companies: await listCompanies(scope) });
   } catch (error) {
     console.error("No fue posible consultar el maestro de empresas externas.", error);
     if (hasCode(error, "42703")) return ownershipMigrationRequired();

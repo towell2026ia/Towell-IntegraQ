@@ -62,8 +62,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload;
 }
 
-export async function loadExternalCompanies() {
-  const response = await fetch("/api/admin/external-companies", { cache: "no-store" });
+export async function loadExternalCompanies(kind?: "supplier") {
+  const response = await fetch(kind ? "/api/admin/external-companies?kind=supplier" : "/api/admin/external-companies", { cache: "no-store" });
   return parseResponse<{ companies: ExternalCompany[] }>(response);
 }
 

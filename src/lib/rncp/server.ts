@@ -7,10 +7,11 @@ import { isDemoSession } from "@/lib/session-data";
 import { defaultAlertRules, type MatrixReport, type OriginalFile, type RncpSettings } from "./model";
 
 export class RncpError extends Error { constructor(message: string, public status = 400) { super(message); } }
-export async function rncpContext(action: "view" | "update" | "admin" = "view", allowSupplier = false) {
-  const session = await getAuthenticatedSession();
+export async function rncpContext(action: "view" | "update" | "admin" = "view", allowSupplier = false, timing?: (phase: string, ms: number) => void) {
+  const session = await getAuthenticatedSession(timing);
   if (!session?.authUserId) throw new RncpError("Sesión no válida.", 401);
   const supabase = await createClient();
+  const scopeStart = performance.now();
   const live = await supabase.from("profiles").select("id,organization_id,user_type,status,external_party_id,workspace_mode").eq("id", session.authUserId).maybeSingle();
   if (live.error || !live.data || live.data.status !== "active" || isDemoSession(session) || live.data.workspace_mode === "demo") throw new RncpError("Acceso RNCP no autorizado.", 403);
   const profile = live.data as { id: string; organization_id: string | null; user_type: string; external_party_id: string | null };
@@ -18,13 +19,15 @@ export async function rncpContext(action: "view" | "update" | "admin" = "view", 
   if (supplier ? !allowSupplier || action === "admin" : !["administrator", "internal"].includes(profile.user_type) || !profile.organization_id || !canPerformModuleAction(session, "suppliers", action === "view" ? "view" : "update")) throw new RncpError("No tienes permiso para consultar o modificar RNCP.", 403);
   if (action === "admin" && profile.user_type !== "administrator") throw new RncpError("Operación exclusiva de administradores activos.", 403);
   const admin = createAdminClient();
-  const owner = await admin.from("organizations").select("kind,active").eq("id", supplier ? profile.external_party_id : profile.organization_id).maybeSingle();
+  const ownerRead = admin.from("organizations").select("kind,active").eq("id", supplier ? profile.external_party_id : profile.organization_id).maybeSingle();
+  const [owner, scope] = await Promise.all([ownerRead, supplier ? null : supabase.rpc("iq_rncp_actor_org", { p_admin: action === "admin" })]);
   if (owner.error || !owner.data?.active || owner.data.kind !== (supplier ? "supplier" : "internal")) throw new RncpError("Organización no autorizada o inactiva.", 403);
   if (!supplier) {
-    const scope = await supabase.rpc("iq_rncp_actor_org", { p_admin: action === "admin" });
+    if (!scope) throw new RncpError("Permisos RNCP no autorizados.", 403);
     if (scope.error) throw new RncpError(scope.error.code === "PGRST202" ? "Activación RNCP pendiente: falta la migración específica revisada." : "Permisos RNCP no autorizados.", scope.error.code === "PGRST202" ? 503 : 403);
     if (scope.data !== profile.organization_id) throw new RncpError("La organización no coincide con la sesión.", 403);
   }
+  timing?.("scope", performance.now() - scopeStart);
   return { session, profile, supabase, admin, supplier, organizationId: profile.organization_id! };
 }
 export type RncpContext = Awaited<ReturnType<typeof rncpContext>>;
@@ -126,7 +129,7 @@ export async function loadMatrixOriginalCounts(context: RncpContext) {
   return Object.fromEntries(rows.map(row => [row.id, counts.get(row.id) ?? 0]));
 }
 
-export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false) {
+export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false, timing?: (phase: string, ms: number) => void) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
   let allowedId: string | undefined;
   if (context.supplier) {
@@ -134,6 +137,7 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     if (result.error || !result.data || result.data.supplier_id !== context.profile.external_party_id || !result.data.portal_visible || result.data.deleted_at) throw new RncpError("Expediente no autorizado.", 403);
     allowedId = result.data.id;
   }
+  const listStart = performance.now();
   const rows = await paginatedRows<ReportRow>((from, to) => {
     let query = context.supabase.from("supplier_rncp_reports").select("id,folio,organization_id,supplier_id,report_date,material_or_service,description,finding_type,source_kind,source_row,source_sha256,historical_status,historical_supplier_name,historical_supplier_code,action_type,notified_at,response_deadline,first_valid_progress_at,complete_submitted_at,validated_at,closed_at,validation_outcome,deleted_at,status,classification", { count: "exact" }).order("id");
     query = context.supplier ? query.eq("id", allowedId!) : query.eq("organization_id", context.organizationId);
@@ -141,13 +145,16 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     if (requestedId) query = query.eq("id", requestedId);
     return query.range(from, to);
   });
+  timing?.("reports", performance.now() - listStart);
   if (requestedId && rows.length !== 1) throw new RncpError("RNCP no localizado en tu organización.", 404);
   const detail = Boolean(requestedId);
+  const relatedStart = performance.now();
   const [originals, names, requirements] = await Promise.all([
     detail || !deferOriginalCounts ? readOriginals(context, rows.map(row => row.id), detail) : null,
     readSupplierNames(context, rows),
-    readRequirements(context, rows, detail),
+    readRequirements(context, rows, detail).then(result => { timing?.("requirements", performance.now() - relatedStart); return result; }),
   ]);
+  timing?.("related", performance.now() - relatedStart);
   return rows.map((row): MatrixReport => {
     const missing = requirements.get(row.id);
     return { id: row.id, folio: row.folio, organizationId: row.organization_id, supplierId: row.supplier_id,

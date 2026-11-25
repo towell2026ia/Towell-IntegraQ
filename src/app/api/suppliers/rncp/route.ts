@@ -79,33 +79,26 @@ type EvidenceFileRow = { id: string; original_name: string; mime_type: string | 
 type EvidenceLinkRow = { id: string; action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
 
 export async function GET(request?: Request) {
-  const session = await getAuthenticatedSession();
-  if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-  const supabase = await createClient();
   try {
     const context = await rncpContext("view",true);
+    const { supabase } = context;
+    const directory = request && new URL(request.url).searchParams.get("view") === "directory" && !context.supplier;
+    const flowContract = directory && process.env.RNCP_FLOW_ENABLED === "true"
+      ? requireRncpFlow(context).then(() => true, () => false) : Promise.resolve(false);
     const rows = await paginatedRows<ReportRow>((from,to) => supabase.from("supplier_rncp_reports")
       .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)", { count: "exact" })
       .eq(context.supplier ? "supplier_id" : "organization_id", context.supplier ? context.profile.external_party_id! : context.organizationId)
       .order("report_date", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).order("id").range(from,to));
     if (rows.some(row => context.supplier ? row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
     const requirements: Record<string,boolean> = {};
-    const nativeIds=rows.filter(r=>r.source_kind==="native").map(r=>r.id);
+    const nativeIds=rows.filter(r=>r.source_kind==="native" && (!directory || (r.notified_at && r.complete_submitted_at && r.validation_outcome !== "rejected"))).map(r=>r.id);
     for(let offset=0;offset<nativeIds.length;offset+=500){
       const ids=nativeIds.slice(offset,offset+500), result=await supabase.rpc("iq_rncp_requirements_summary",{p_report_ids:ids});
       if(result.error || ids.some(id=>!Array.isArray(result.data?.[id]))) throw new RncpError("No se pudo comprobar el seguimiento documental.",503);
       for(const id of ids)requirements[id]=result.data[id].length===0;
     }
-    if (request && new URL(request.url).searchParams.get("view") === "directory" && !context.supplier) {
-      let flowReady = false;
-      if (process.env.RNCP_FLOW_ENABLED === "true") {
-        try {
-          await requireRncpFlow(context);
-          flowReady = true;
-        } catch {
-          // Historical records remain available while the contract is unavailable.
-        }
-      }
+    if (directory) {
+      const flowReady = await flowContract;
       const reports = rows.sort(compareRncpFolios).map(row => ({
         ...mapReport(row, [], []),
         requirementsComplete: requirements[row.id] === true,

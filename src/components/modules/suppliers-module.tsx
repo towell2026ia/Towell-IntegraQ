@@ -25,6 +25,7 @@ import { useRncpInitialPhotos } from "@/hooks/use-rncp-initial-photos";
 import { RncpInitialPhotos } from "./rncp-initial-photos";
 import { RncpGeneratedPreview } from "./rncp-generated-preview";
 import { buildRncpPdf, photoForPdf, loadRncpLogo } from "@/lib/rncp/generated-pdf";
+import { MatrixListCache } from "@/hooks/use-rncp-matrix";
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
 import { useSupplierAudits } from "@/hooks/use-supplier-audits";
@@ -52,6 +53,10 @@ import { createSupplierAssessment, getSupplierAssessmentFileUrl, supplierAssessm
 type SupplierView = "directory" | "audits" | "dashboard" | "rncp" | "results";
 
 export function SuppliersModule({ session }: { session: ActiveSession }) {
+  // The module owns its in-memory data for exactly one session and permission scope.
+  return <SupplierWorkspace key={JSON.stringify(session)} session={session} />;
+}
+function SupplierWorkspace({ session }: { session: ActiveSession }) {
   const [view, setView] = useState<SupplierView>(() => typeof window !== "undefined" && rncpIdFromSearch(window.location.search) ? "dashboard" : "directory");
   const [query, setQuery] = useState("");
   const [matrixSupplierId, setMatrixSupplierId] = useState("");
@@ -67,9 +72,10 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const canCreateSupplier = isAdministrator(session) && !demo;
   const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
-  const companyDirectory = useExternalCompanies();
+  const companyDirectory = useExternalCompanies("supplier");
   const rncpDirectory = useRncpReports(!demo, "directory");
-  const activeRncp = rncpDirectory.reports.filter((report) => !report.deletedAt);
+  const activeRncp = useMemo(() => rncpDirectory.reports.filter(report => !report.deletedAt), [rncpDirectory.reports]);
+  const [matrixCache] = useState(() => new MatrixListCache());
   const suppliers = useMemo(
     () => demo
       ? supplierQualityCatalog
@@ -77,7 +83,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
     [activeRncp, companyDirectory.companies, demo],
   );
   const editingReport = rncpDirectory.reports.find(item => item.id === editingRncpId);
-  const rncpMetrics = summarizeRncp(activeRncp);
+  const rncpMetrics = useMemo(() => summarizeRncp(activeRncp), [activeRncp]);
 
   const filteredSuppliers = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
@@ -107,6 +113,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
     setSupplierError(""); setSupplierNotice("");
     try {
       const saved = await saveExternalCompany({ id: company.id, code: company.code, name: company.name, kind: "supplier", category: company.category, active: false, reason });
+      matrixCache.clear();
       companyDirectory.setCompanies(saved.companies);
       setSelectedId("");
       setSupplierNotice(`${company.code} se desactivó. Su historial y sus relaciones se conservaron.`);
@@ -114,9 +121,6 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       setSupplierError(cause instanceof Error ? cause.message : "No fue posible desactivar el proveedor.");
     }
   };
-
-  if (!demo && companyDirectory.loading) return <div className="access-empty"><ShieldCheck size={24} /><p>Cargando maestro de proveedores…</p></div>;
-  if (!demo && companyDirectory.error) return <div className="access-empty"><AlertTriangle size={24} /><h3>No fue posible consultar proveedores</h3><p>{companyDirectory.error}</p><button className="button button-secondary" onClick={() => void companyDirectory.refresh()} type="button">Reintentar</button></div>;
 
   return (
     <>
@@ -135,6 +139,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
       {supplierError ? <p role="alert">{supplierError}</p> : null}
       {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog company={editingSupplier} onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
+        matrixCache.clear();
         companyDirectory.setCompanies(companies);
         setSelectedId(company.id); setQuery(""); setView("directory"); setCreateSupplierOpen(false);
         setSupplierNotice(`${company.code} · ${company.name} · ${editingSupplier ? "Cambios guardados" : "Proveedor registrado"}.`);
@@ -142,7 +147,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       }} /> : null}
 
       <section className="metric-grid" aria-label="Resumen de proveedores">
-        <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={suppliers.length} tone="neutral" />
+        <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={!demo && (companyDirectory.loading || companyDirectory.error) ? "—" : suppliers.length} tone="neutral" />
         <SupplierMetric icon={<FileText size={18} />} label="RNCP vigentes" value={demo ? rncpDashboardSummary.total : effectivenessUnavailable ? "—" : rncpMetrics.total} tone="success" />
         <SupplierMetric icon={<CalendarClock size={18} />} label="Acciones tardías" value={demo ? rncpDashboardSummary.late : effectivenessUnavailable ? "—" : rncpMetrics.late} tone="warning" />
         <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={demo ? rncpDashboardSummary.inProcess : effectivenessUnavailable ? "—" : rncpMetrics.inProgress} tone="danger" />
@@ -156,7 +161,9 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
         <button className={view === "results" ? "active" : ""} type="button" onClick={() => setView("results")}>Resultados y planes</button>
       </div>
 
-      {view === "directory" ? (
+      {!demo && view !== "dashboard" && (companyDirectory.loading || companyDirectory.error) ?
+        <div className="access-empty">{companyDirectory.error ? <><h3>No fue posible consultar proveedores</h3><button type="button" className="button button-secondary" onClick={() => void companyDirectory.refresh()}>Reintentar</button></> : <span role="status" aria-label="Cargando proveedores">…</span>}</div> : null}
+      {view === "directory" && (demo || companyDirectory.hasLoaded) ? (
         <section className="party-directory-layout">
           <div className="party-list-panel">
             <label className="panel-search party-search">
@@ -203,8 +210,8 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
-        : <RncpMatrixDashboard key={JSON.stringify([session.authUserId, session.organizationId, matrixSupplierId])} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
-      {view === "rncp" && editingRncpId && !editingReport ? <p role="status">El expediente seleccionado aún no está disponible. <button className="button button-secondary" type="button" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></p> : view === "rncp" ? <RncpForm flowReady={rncpDirectory.flowReady} administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={editingReport} /> : null}
+        : <RncpMatrixDashboard cache={matrixCache} key={JSON.stringify([session.authUserId, session.organizationId, matrixSupplierId])} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
+      {view === "rncp" && editingRncpId && !editingReport ? <p role="status">El expediente seleccionado aún no está disponible. <button className="button button-secondary" type="button" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></p> : view === "rncp" && (demo || companyDirectory.hasLoaded) ? <RncpForm flowReady={rncpDirectory.flowReady} administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { matrixCache.clear(); await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={editingReport} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
         : <><SupplierAuditResults directory={auditDirectory} onOpen={setAuditFocus} /><SupplierAssessmentResults canUpdate={canUpdateRncp} companies={companyDirectory.companies} /></> : null}

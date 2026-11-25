@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import * as XLSX from "xlsx";
+import { filterMatrix, MatrixListCache } from "@/hooks/use-rncp-matrix";
 import { buildMatrixDashboard, deriveLifecycle, responseDeadline } from "./analytics";
 import { generateSupplierAlerts, minimizeDefectText, semanticAlerts } from "./alerts";
 import { canonicalSupplierCode, parseHistoricalMatrix, reconcileSupplier } from "./import";
@@ -82,4 +83,32 @@ describe("explainable supplier alerts with isolated AI suggestions", () => {
   it("does not infer equivalence across different materials", async () => { const group=vi.fn().mockResolvedValue([]); await semanticAlerts([history("1"),history("2",{material:"Colorantes"})],{group},true,period);expect(group).not.toHaveBeenCalled(); });
   it("AI failure leaves deterministic calculations available", async () => { expect((await semanticAlerts(rows, { group: async () => { throw Error("offline"); } }, true, period)).status).toBe("unavailable"); expect(buildMatrixDashboard(rows).metrics.total).toBe(3); });
   it("minimizes emails and numeric references before any authorized AI call", () => expect(minimizeDefectText("Defecto contacto test@example.test teléfono 5551234567")).not.toMatch(/test@|5551234567/));
+});
+
+describe("session-scoped RNCP filters", () => {
+  const all = [history("01"), history("02"), history("03", { material: "Avíos", historicalStatus: "Tarde" })];
+  function baseline() {
+    return { ...buildMatrixDashboard(all, emptyMatrixFilters, now),
+      settings: { alertRules: defaultAlertRules, inspectorIds: [], emailEnabled: false, semanticAiApproved: false, followupEnabled: false },
+      settingsRevision: 1, reviewsRevision: 1, isInspector: false, aiConfigured: false, notificationsEnabled: false };
+  }
+  it("keeps the global options and exactly the same filtered rows, metrics and series as the server", () => {
+    const base = baseline();
+    for (const filters of [{...emptyMatrixFilters, search: "RNCP03"}, {...emptyMatrixFilters, year: "2026", material: "Hilo"}, {...emptyMatrixFilters, state: "closed"}]) {
+      const expected = buildMatrixDashboard(all, filters, now);
+      const { result } = filterMatrix(base, filters);
+      expect(result.reports).toEqual(expected.reports);
+      expect(result.metrics).toEqual(expected.metrics);
+      expect([result.byStatus,result.byMaterial,result.bySupplier,result.byDate]).toEqual([expected.byStatus,expected.byMaterial,expected.bySupplier,expected.byDate]);
+      expect(result.sourceCount).toBe(all.length);
+      expect(result.options).toEqual(base.options);
+    }
+  });
+  it("leaves newly derived alert reviews to the server and isolates the list by scope", () => {
+    const base=baseline(); base.settings.alertRules={...defaultAlertRules,recurrenceCount:2};
+    const {needsAlerts,result}=filterMatrix(base,{...emptyMatrixFilters,material:"Hilo"});
+    expect(needsAlerts).toBe(true); expect(result.alerts).toEqual([]);
+    const cache=new MatrixListCache(); cache.put({scope:"supplier-a",base,loadedAt:Date.now()});
+    expect(cache.get("supplier-b")).toBeNull(); cache.clear(); expect(cache.get("supplier-a")).toBeNull();
+  });
 });
