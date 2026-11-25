@@ -18,7 +18,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { FormEvent, useMemo, useState, useRef, useEffect } from "react";
+import { FormEvent, useMemo, useState, useRef, useEffect, useSyncExternalStore } from "react";
 
 import { useExternalCompanies } from "@/hooks/use-external-companies";
 import { useRncpInitialPhotos } from "@/hooks/use-rncp-initial-photos";
@@ -70,10 +70,12 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
   const [auditFocus, setAuditFocus] = useState<AuditFocus | null>(null);
   const demo = isDemoSession(session);
   const canCreateSupplier = isAdministrator(session) && !demo;
-  const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
   const companyDirectory = useExternalCompanies("supplier");
-  const rncpDirectory = useRncpReports(!demo, "directory");
+  const globalDashboard = view === "dashboard" && !matrixSupplierId;
+  const rncpDirectory = useRncpReports(!demo && !globalDashboard, "directory");
+  const needsAudits = view === "audits" || view === "results" || (view === "directory" && companyDirectory.hasLoaded);
+  const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo && needsAudits);
   const activeRncp = useMemo(() => rncpDirectory.reports.filter(report => !report.deletedAt), [rncpDirectory.reports]);
   const [matrixCache] = useState(() => new MatrixListCache());
   const suppliers = useMemo(
@@ -83,7 +85,11 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
     [activeRncp, companyDirectory.companies, demo],
   );
   const editingReport = rncpDirectory.reports.find(item => item.id === editingRncpId);
-  const rncpMetrics = useMemo(() => summarizeRncp(activeRncp), [activeRncp]);
+  const directoryMetrics = useMemo(() => summarizeRncp(activeRncp), [activeRncp]);
+  const dashboardMetrics = useSyncExternalStore(matrixCache.subscribe, matrixCache.globalMetrics, () => null);
+  const rncpMetrics = globalDashboard
+    ? dashboardMetrics && { total: dashboardMetrics.total, late: dashboardMetrics.late, inProgress: dashboardMetrics.in_process }
+    : directoryMetrics;
 
   const filteredSuppliers = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase("es");
@@ -102,6 +108,8 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
 
   const effectivenessDetails = supplierRncpEffectiveness(activeRncp, selected?.id ?? "");
   const effectivenessUnavailable = !demo && (rncpDirectory.loading || Boolean(rncpDirectory.error));
+
+  const totalsUnavailable = !rncpMetrics || (!globalDashboard && effectivenessUnavailable);
 
   const deactivateSupplier = async () => {
     if (!isAdministrator(session) || demo || !selected) return;
@@ -135,7 +143,7 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
           {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}><Plus size={17} /> Nuevo RNCP</button> : null}
         </div>
       </section>
-      {rncpDirectory.error ? <div role="alert">No se pudieron consultar los reportes de los proveedores. <button type="button" className="button button-secondary" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></div> : null}
+      {!globalDashboard && rncpDirectory.error ? <div role="alert">No se pudieron consultar los reportes de los proveedores. <button type="button" className="button button-secondary" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></div> : null}
       {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
       {supplierError ? <p role="alert">{supplierError}</p> : null}
       {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog company={editingSupplier} onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
@@ -148,9 +156,9 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
 
       <section className="metric-grid" aria-label="Resumen de proveedores">
         <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={!demo && (companyDirectory.loading || companyDirectory.error) ? "—" : suppliers.length} tone="neutral" />
-        <SupplierMetric icon={<FileText size={18} />} label="RNCP vigentes" value={demo ? rncpDashboardSummary.total : effectivenessUnavailable ? "—" : rncpMetrics.total} tone="success" />
-        <SupplierMetric icon={<CalendarClock size={18} />} label="Acciones tardías" value={demo ? rncpDashboardSummary.late : effectivenessUnavailable ? "—" : rncpMetrics.late} tone="warning" />
-        <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={demo ? rncpDashboardSummary.inProcess : effectivenessUnavailable ? "—" : rncpMetrics.inProgress} tone="danger" />
+        <SupplierMetric icon={<FileText size={18} />} label="RNCP vigentes" value={demo ? rncpDashboardSummary.total : totalsUnavailable ? "—" : rncpMetrics.total} tone="success" />
+        <SupplierMetric icon={<CalendarClock size={18} />} label="Acciones tardías" value={demo ? rncpDashboardSummary.late : totalsUnavailable ? "—" : rncpMetrics.late} tone="warning" />
+        <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={demo ? rncpDashboardSummary.inProcess : totalsUnavailable ? "—" : rncpMetrics.inProgress} tone="danger" />
       </section>
 
       <div className="quality-view-tabs supplier-tabs" aria-label="Vistas de calidad de proveedores">

@@ -104,8 +104,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload;
 }
 
-export async function loadRncpReports(view: "detail" | "directory" = "detail") {
-  const response = await fetch(view === "directory" ? "/api/suppliers/rncp?view=directory" : "/api/suppliers/rncp", { cache: "no-store" });
+export async function loadRncpReports(view: "detail" | "directory" = "detail", signal?: AbortSignal) {
+  const response = await fetch(view === "directory" ? "/api/suppliers/rncp?view=directory" : "/api/suppliers/rncp", { cache: "no-store", signal });
   return parseResponse<{ reports: RncpReport[]; flowReady?: boolean }>(response);
 }
 

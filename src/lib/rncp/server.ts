@@ -1,30 +1,42 @@
 import "server-only";
-import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
+import { getVerifiedSessionContext } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { isDemoSession } from "@/lib/session-data";
 import { defaultAlertRules, type MatrixReport, type OriginalFile, type RncpSettings } from "./model";
 
 export class RncpError extends Error { constructor(message: string, public status = 400) { super(message); } }
+function requireReadable(result: { error: { code?: string } | null }) {
+  if (!result.error) return;
+  if (result.error.code === "42501") throw new RncpError("Acceso RNCP no autorizado.", 403);
+  throw new RncpError("No fue posible verificar el acceso a RNCP. Reintenta.", 503);
+}
 export async function rncpContext(action: "view" | "update" | "admin" = "view", allowSupplier = false, timing?: (phase: string, ms: number) => void) {
-  const session = await getAuthenticatedSession(timing);
-  if (!session?.authUserId) throw new RncpError("Sesión no válida.", 401);
-  const supabase = await createClient();
+  const verified = await getVerifiedSessionContext(timing).catch(() => {
+    throw new RncpError("No fue posible verificar el acceso a RNCP. Reintenta.", 503);
+  });
+  if (!verified) throw new RncpError("Sesión no válida.", 401);
+  if (!verified.session) {
+    if (verified.failure === "unavailable") throw new RncpError("No fue posible verificar la sesión. Reintenta.", 503);
+    throw new RncpError("Acceso RNCP no autorizado.", 403);
+  }
+  const { session, supabase, profile } = verified;
   const scopeStart = performance.now();
-  const live = await supabase.from("profiles").select("id,organization_id,user_type,status,external_party_id,workspace_mode").eq("id", session.authUserId).maybeSingle();
-  if (live.error || !live.data || live.data.status !== "active" || isDemoSession(session) || live.data.workspace_mode === "demo") throw new RncpError("Acceso RNCP no autorizado.", 403);
-  const profile = live.data as { id: string; organization_id: string | null; user_type: string; external_party_id: string | null };
+  if (!profile || profile.status !== "active" || isDemoSession(session) || profile.workspace_mode === "demo") {
+    throw new RncpError("Acceso RNCP no autorizado.", 403);
+  }
   const supplier = profile.user_type === "supplier";
   if (supplier ? !allowSupplier || action === "admin" : !["administrator", "internal"].includes(profile.user_type) || !profile.organization_id || !canPerformModuleAction(session, "suppliers", action === "view" ? "view" : "update")) throw new RncpError("No tienes permiso para consultar o modificar RNCP.", 403);
   if (action === "admin" && profile.user_type !== "administrator") throw new RncpError("Operación exclusiva de administradores activos.", 403);
   const admin = createAdminClient();
   const ownerRead = admin.from("organizations").select("kind,active").eq("id", supplier ? profile.external_party_id : profile.organization_id).maybeSingle();
   const [owner, scope] = await Promise.all([ownerRead, supplier ? null : supabase.rpc("iq_rncp_actor_org", { p_admin: action === "admin" })]);
-  if (owner.error || !owner.data?.active || owner.data.kind !== (supplier ? "supplier" : "internal")) throw new RncpError("Organización no autorizada o inactiva.", 403);
+  requireReadable(owner);
+  if (!owner.data?.active || owner.data.kind !== (supplier ? "supplier" : "internal")) throw new RncpError("Organización no autorizada o inactiva.", 403);
   if (!supplier) {
     if (!scope) throw new RncpError("Permisos RNCP no autorizados.", 403);
-    if (scope.error) throw new RncpError(scope.error.code === "PGRST202" ? "Activación RNCP pendiente: falta la migración específica revisada." : "Permisos RNCP no autorizados.", scope.error.code === "PGRST202" ? 503 : 403);
+    if (scope.error?.code === "PGRST202") throw new RncpError("Activación RNCP pendiente: falta la migración específica revisada.", 503);
+    requireReadable(scope);
     if (scope.data !== profile.organization_id) throw new RncpError("La organización no coincide con la sesión.", 403);
   }
   timing?.("scope", performance.now() - scopeStart);
@@ -47,6 +59,25 @@ export async function paginatedRows<T extends { id: string }>(page: (from: numbe
   } while (rows.length < expected);
   return rows;
 }
+// A short page can also mean the REST row cap was reached. Check for one more
+// authorized ID using the same predicates before accepting the first snapshot.
+export async function reportListRows<T extends { id: string }>(
+  first: () => PromiseLike<{ data: unknown[] | null; error: { code?: string } | null }>,
+  nextId: (lastId: string) => PromiseLike<{ data: unknown[] | null; error: { code?: string } | null }>,
+  complete: () => Promise<T[]>,
+): Promise<T[]> {
+  const result = await first();
+  requireReadable(result);
+  if (!result.data) throw new RncpError("No se pudo consultar la lista de RNCP.", 503);
+  const rows = result.data as T[];
+  if (!rows.length) return [];
+  if (new Set(rows.map(row => row.id)).size !== rows.length) throw new RncpError("El catálogo cambió. Reintenta.", 409);
+  const tail = await nextId(rows[rows.length - 1].id);
+  requireReadable(tail);
+  if (!tail.data) throw new RncpError("No se pudo comprobar la lista completa.", 503);
+  return tail.data.length ? complete() : rows;
+}
+
 export interface ReportRow {
   status?: MatrixReport["legacyStatus"];
   classification?: string | null;
@@ -56,7 +87,7 @@ export interface ReportRow {
   historical_status: string | null; historical_supplier_name: string | null; historical_supplier_code: string | null;
   action_type: string | null; notified_at: string | null; response_deadline: string | null; first_valid_progress_at: string | null;
   complete_submitted_at: string | null; validated_at: string | null; closed_at: string | null; validation_outcome: MatrixReport["validationOutcome"];
-  response_requirements: { containment?: boolean; documents?: string[] } | null; deleted_at: string | null;
+  deleted_at: string | null;
 }
 interface FileRow { is_current: boolean; resource_key: string | null; id: string; original_name: string; sha256: string | null; size_bytes: number | null; created_at: string; version: number; resource_id: string | null; resource_type: string; deleted_at: string | null; }
 // File metadata is private. Both projections use only IDs obtained through report RLS.
@@ -118,10 +149,11 @@ async function readRequirements(context: RncpContext, rows: ReportRow[], detail:
   return requirements;
 }
 
-export async function loadMatrixOriginalCounts(context: RncpContext) {
+export async function loadMatrixOriginalCounts(context: RncpContext, ids?: string[]) {
   if (context.supplier) throw new RncpError("Acceso no autorizado.", 403);
   const rows = await paginatedRows<{ id: string }>((from, to) => {
     let query = context.supabase.from("supplier_rncp_reports").select("id", { count: "exact" }).eq("organization_id", context.organizationId);
+    if (ids) query = query.in("id", ids);
     if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
     return query.order("id").range(from, to);
   });
@@ -129,24 +161,48 @@ export async function loadMatrixOriginalCounts(context: RncpContext) {
   return Object.fromEntries(rows.map(row => [row.id, counts.get(row.id) ?? 0]));
 }
 
+const reportFields = "portal_visible,id,folio,organization_id,supplier_id,report_date,material_or_service,description,finding_type,source_kind,source_row,source_sha256,historical_status,historical_supplier_name,historical_supplier_code,action_type,notified_at,response_deadline,first_valid_progress_at,complete_submitted_at,validated_at,closed_at,validation_outcome,deleted_at,status,classification";
+function reportQuery<T extends string>(context: RncpContext, selection: T, withCount = false) {
+  let query = context.supabase.from("supplier_rncp_reports").select(selection, withCount ? { count: "exact" } : {});
+  if (context.supplier) {
+    query = query.eq("supplier_id", context.profile.external_party_id!).eq("portal_visible", true);
+  } else {
+    query = query.eq("organization_id", context.organizationId);
+  }
+  if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
+  return query;
+}
+
+export async function readAuthorizedReport(context: RncpContext, id: string) {
+  const result = await reportQuery(context, reportFields).eq("id", id).maybeSingle();
+  requireReadable(result);
+  const row = result.data;
+  if (context.supplier && (!row || !context.profile.external_party_id || row.supplier_id !== context.profile.external_party_id || !row.portal_visible || row.deleted_at)) {
+    throw new RncpError("Expediente no autorizado.", 403);
+  }
+  if (!row) throw new RncpError("RNCP no localizado en tu organización.", 404);
+  if (row.id !== id || (!context.supplier && row.organization_id !== context.organizationId) ||
+      (row.deleted_at && context.profile.user_type !== "administrator")) throw new RncpError("Expediente no autorizado.", 403);
+  return row;
+}
+
 export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false, timing?: (phase: string, ms: number) => void) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
-  let allowedId: string | undefined;
-  if (context.supplier) {
-    const result = await context.supabase.from("supplier_rncp_reports").select("id,supplier_id,organization_id,portal_visible,deleted_at").eq("id", requestedId!).maybeSingle();
-    if (result.error || !result.data || result.data.supplier_id !== context.profile.external_party_id || !result.data.portal_visible || result.data.deleted_at) throw new RncpError("Expediente no autorizado.", 403);
-    allowedId = result.data.id;
-  }
   const listStart = performance.now();
-  const rows = await paginatedRows<ReportRow>((from, to) => {
-    let query = context.supabase.from("supplier_rncp_reports").select("id,folio,organization_id,supplier_id,report_date,material_or_service,description,finding_type,source_kind,source_row,source_sha256,historical_status,historical_supplier_name,historical_supplier_code,action_type,notified_at,response_deadline,first_valid_progress_at,complete_submitted_at,validated_at,closed_at,validation_outcome,deleted_at,status,classification", { count: "exact" }).order("id");
-    query = context.supplier ? query.eq("id", allowedId!) : query.eq("organization_id", context.organizationId);
-    if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
-    if (requestedId) query = query.eq("id", requestedId);
-    return query.range(from, to);
-  });
+  let rows: ReportRow[];
+  if (requestedId) {
+    rows = [await readAuthorizedReport(context, requestedId)];
+  } else {
+    rows = await reportListRows<ReportRow>(
+      () => reportQuery(context, reportFields).order("id").limit(500),
+      last => reportQuery(context, "id").gt("id", last).order("id").limit(1),
+      () => paginatedRows<ReportRow>((from, to) => reportQuery(context, reportFields, true).order("id").range(from, to)),
+    );
+  }
   timing?.("reports", performance.now() - listStart);
-  if (requestedId && rows.length !== 1) throw new RncpError("RNCP no localizado en tu organización.", 404);
+  if (!requestedId && rows.some(row => row.organization_id !== context.organizationId)) {
+    throw new RncpError("Expediente no autorizado.", 403);
+  }
   const detail = Boolean(requestedId);
   const relatedStart = performance.now();
   const [originals, names, requirements] = await Promise.all([

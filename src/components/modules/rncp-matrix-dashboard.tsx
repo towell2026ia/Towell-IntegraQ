@@ -14,13 +14,13 @@ import { RncpOfficialCharts } from "./rncp-official-charts";
 import styles from "./rncp-matrix.module.css";
 
 export function RncpMatrixDashboard({ cache, session, onEdit, onChanged, initialSupplierId, initialReportId }: { cache: MatrixListCache; session: ActiveSession; onEdit: (id: string) => void; onChanged: () => Promise<unknown>; initialSupplierId?: string; initialReportId?: string }) {
-  const matrix = useRncpMatrix(cache, initialSupplierId), admin = isAdministrator(session);
+  const [tablePage, setTablePage] = useState({ query: "", index: 0 });
   const [tool, setTool] = useState<"import" | "pdf" | "settings" | null>(null);
   const [selected, setSelected] = useState<MatrixReport | null>(null), [error, setError] = useState("");
   const [linkedReportId, setLinkedReportId] = useState(initialReportId ?? "");
+  const matrix = useRncpMatrix(cache, initialSupplierId, tablePage, selected?.id ?? linkedReportId), admin = isAdministrator(session);
   const [review, setReview] = useState<{ alert: SupplierAlert; decision: "confirmed" | "dismissed" } | null>(null);
   const [reason, setReason] = useState(""), [saving, setSaving] = useState(false);
-  const [tablePage, setTablePage] = useState({ query: "", index: 0 });
   const [showDeleted, setShowDeleted] = useState(false);
   async function changed() { await Promise.all([matrix.refresh(), onChanged()]); }
   async function retire(report: MatrixReport) {
@@ -51,11 +51,7 @@ export function RncpMatrixDashboard({ cache, session, onEdit, onChanged, initial
   const period = [data.filters.year, data.filters.month, data.filters.day].filter(Boolean).join("-") || "Todos los períodos";
   const update = (key: keyof typeof matrix.filters, value: string) => matrix.setFilters(current => ({ ...current, [key]: value, ...(key === "year" || key === "month" ? { day: "" } : {}) }));
   const days = matrix.filters.year && matrix.filters.month ? new Date(Number(matrix.filters.year), Number(matrix.filters.month), 0).getDate() : 31;
-  const queryKey = matrixQuery(matrix.filters);
-  const pageSize = 30;
-  const pages = Math.ceil(data.reports.length / pageSize);
-  const page = tablePage.query === queryKey ? Math.max(0, Math.min(tablePage.index, pages - 1)) : 0;
-  const visibleReports = data.reports.slice(page * pageSize, (page + 1) * pageSize);
+  const { page, pages, queryKey, visibleReports } = matrix;
   const selectedLive = selected ? data.reports.find(r => r.id === selected.id) ?? null : data.reports.find(r => r.id === linkedReportId) ?? null;
   const selectors = <><h4>Fecha</h4><label>Año<select value={matrix.filters.year} onChange={e => update("year", e.target.value)}><option value="">Todos</option>{data.options.years.map(year => <option key={year}>{year}</option>)}</select></label>
     <label>Mes<select value={matrix.filters.month} onChange={e => update("month", e.target.value)}><option value="">Todos</option>{Array.from({ length: 12 }, (_, i) => <option key={i} value={String(i + 1).padStart(2, "0")}>{new Intl.DateTimeFormat("es-MX", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, i, 1)))}</option>)}</select></label>

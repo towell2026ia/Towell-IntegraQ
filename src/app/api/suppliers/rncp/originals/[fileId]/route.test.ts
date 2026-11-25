@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({ context: vi.fn(), reports: vi.fn(), sign: vi.fn(), file: null as Record<string, unknown> | null }));
-vi.mock("@/lib/rncp/server", () => ({ rncpContext: state.context, loadMatrixReports: state.reports, RncpError: class extends Error { constructor(message: string, public status = 400) { super(message); } } }));
+vi.mock("@/lib/rncp/server", () => ({ rncpContext: state.context, readAuthorizedReport: state.reports, RncpError: class extends Error { constructor(message: string, public status = 400) { super(message); } } }));
 import { GET } from "./route";
 const org = "00000000-0000-4000-8000-000000000001", other = "00000000-0000-4000-8000-000000000002";
 const fileId = "00000000-0000-4000-8000-000000000003";
@@ -10,11 +10,18 @@ beforeEach(() => {
   state.file = { id: fileId, workspace_id: org, resource_id: "report", resource_type: "supplier_rncp_original", bucket_id: "integraq-private", object_path: `rncp-originals/${org}/original.pdf`, original_name: "original.pdf", deleted_at: null };
   const query = { select: () => query, eq: () => query, in: () => query, maybeSingle: async () => ({ data: state.file, error: null }) };
   state.context.mockResolvedValue({ organizationId: org, profile: { user_type: "internal" }, admin: { from: () => query, storage: { from: () => ({ createSignedUrl: state.sign }) } } });
-  state.reports.mockResolvedValue([{ organizationId: org }]);
+  state.reports.mockResolvedValue({ organization_id: org });
   state.sign.mockResolvedValue({ data: { signedUrl: "https://private.test/temporary" }, error: null });
 });
 describe("private RNCP original access before inline rendering", () => {
   it("does not sign when the live session is unauthorized", async () => { state.context.mockRejectedValue(new Error("Session denied")); await call(); expect(state.sign).not.toHaveBeenCalled(); });
+  it("returns 503 for an unavailable dependency without signing or exposing internal details", async () => {
+    state.context.mockRejectedValue(new Error("private configuration detail"));
+    const response = await call();
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("private configuration detail");
+    expect(state.sign).not.toHaveBeenCalled();
+  });
   it("denies a report outside authorized RLS scope before signing", async () => { const { RncpError } = await import("@/lib/rncp/server"); state.reports.mockRejectedValue(new RncpError("Denied", 403)); expect((await call()).status).toBe(403); expect(state.sign).not.toHaveBeenCalled(); });
   it("denies another organization even when the requested file exists", async () => { state.file!.workspace_id = other; expect((await call()).status).toBe(403); expect(state.sign).not.toHaveBeenCalled(); });
   it.each(["deleted", "wrong bucket", "wrong path", "pending without administrator"])("does not sign %s files", async kind => {

@@ -3,7 +3,7 @@ import { isRncpClassification } from "@/lib/rncp/flow";
 import { compareRncpFolios } from "@/lib/rncp/folio";
 import { NextResponse } from "next/server";
 import { photoFailure, photoRpcError, requirePhotoV2 } from "@/lib/rncp/initial-photo-server";
-import { paginatedRows, rncpContext, RncpError } from "@/lib/rncp/server";
+import { paginatedRows, reportListRows, rncpContext, RncpError } from "@/lib/rncp/server";
 
 import type { RncpHistoryEvent, RncpReport, RncpResponseAction, RncpResponseStatus, RncpStatus } from "@/lib/rncp-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -85,10 +85,16 @@ export async function GET(request?: Request) {
     const directory = request && new URL(request.url).searchParams.get("view") === "directory" && !context.supplier;
     const flowContract = directory && process.env.RNCP_FLOW_ENABLED === "true"
       ? requireRncpFlow(context).then(() => true, () => false) : Promise.resolve(false);
-    const rows = await paginatedRows<ReportRow>((from,to) => supabase.from("supplier_rncp_reports")
-      .select("*,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)", { count: "exact" })
-      .eq(context.supplier ? "supplier_id" : "organization_id", context.supplier ? context.profile.external_party_id! : context.organizationId)
-      .order("report_date", { ascending: false, nullsFirst: false }).order("created_at", { ascending: false }).order("id").range(from,to));
+    const fields = "id,organization_id,folio,supplier_id,site_id,report_date,material_or_service,finding_type,rejected_quantity,description,immediate_disposition,response_due_date,responsible_name,status,portal_visible,submitted_at,closed_at,created_at,updated_at,deleted_at,delete_reason,classification,first_valid_progress_at,source_kind,historical_status,notified_at,response_deadline,complete_submitted_at,validated_at,validation_outcome,response_requirements,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)";
+    const reportQuery = <T extends string>(selection: T, withCount = false) => supabase.from("supplier_rncp_reports")
+      .select(selection, withCount ? { count: "exact" } : {})
+      .eq(context.supplier ? "supplier_id" : "organization_id", context.supplier ? context.profile.external_party_id! : context.organizationId);
+    const complete = () => paginatedRows<ReportRow>((from, to) => reportQuery(fields, true).order("id").range(from, to));
+    const rows = directory ? await reportListRows<ReportRow>(
+      () => reportQuery(fields).order("id").limit(500),
+      last => reportQuery("id").gt("id", last).order("id").limit(1),
+      complete,
+    ) : await complete();
     if (rows.some(row => context.supplier ? row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
     const requirements: Record<string,boolean> = {};
     const nativeIds=rows.filter(r=>r.source_kind==="native" && (!directory || (r.notified_at && r.complete_submitted_at && r.validation_outcome !== "rejected"))).map(r=>r.id);

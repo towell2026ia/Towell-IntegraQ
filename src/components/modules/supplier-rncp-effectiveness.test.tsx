@@ -5,7 +5,7 @@ import type { RncpReport } from "@/lib/rncp-data";
 import type { ActiveSession } from "@/lib/session-data";
 const fixture = vi.hoisted(() => ({ reports: [] as RncpReport[], loading: false, error: "" }));
 vi.mock("@/hooks/use-rncp-reports", () => ({ useRncpReports: () => ({ ...fixture, refresh: vi.fn() }) }));
-vi.mock("@/hooks/use-external-companies", () => ({ useExternalCompanies: () => ({ companies: [
+vi.mock("@/hooks/use-external-companies", () => ({ useExternalCompanies: () => ({ hasLoaded: true, companies: [
   { id: "supplier-a", code: "TEST-A", name: "Synthetic supplier", kind: "supplier", active: true },
 ], loading: false, error: "", refresh: vi.fn() }) }));
 vi.mock("@/hooks/use-supplier-audits", () => ({ useSupplierAudits: () => ({ data: null, loading: false, error: "", refresh: vi.fn() }) }));

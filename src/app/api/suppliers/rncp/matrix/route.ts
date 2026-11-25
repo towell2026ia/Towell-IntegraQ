@@ -18,7 +18,11 @@ export async function GET(request: Request) {
     const context = await rncpContext("view", false, record);
     const query = new URL(request.url).searchParams;
     if (query.get("part") === "pdfCounts") {
-      return NextResponse.json({ counts: await loadMatrixOriginalCounts(context) }, { headers: headers() });
+      const ids = query.has("ids") ? query.get("ids")!.split(",") : undefined;
+      if (ids && (ids.length > 30 || ids.some(id => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)))) {
+        throw new RncpError("Selecciona una página válida.");
+      }
+      return NextResponse.json({ counts: await loadMatrixOriginalCounts(context, ids) }, { headers: headers() });
     }
     const reportId = query.get("reportId");
     if (reportId !== null) {
@@ -30,7 +34,13 @@ export async function GET(request: Request) {
     for (const key of Object.keys(filters) as Array<keyof MatrixFilters>) filters[key] = query.get(key) ?? "";
     if (filters.year && !/^20\d{2}$/.test(filters.year) || filters.month && !/^(0?[1-9]|1[012])$/.test(filters.month) || filters.day && !/^(0?[1-9]|[12]\d|3[01])$/.test(filters.day)) throw new RncpError("Segmentación de fecha inválida.");
     if ([filters.from, filters.to].some(value => value && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value)))) || filters.from && filters.to && filters.from > filters.to) throw new RncpError("Rango de fechas inválido.");
-    const [reports, configuration] = await Promise.all([loadMatrixReports(context, undefined, ["alerts", "list"].includes(query.get("part") ?? ""), record), readRncpSettings(context)]);
+    const alertsOnly = query.get("part") === "alerts";
+    const exporting = ["csv", "xlsx"].includes(query.get("format") ?? "");
+    const [reports, configuration, inspector] = await Promise.all([
+      loadMatrixReports(context, undefined, alertsOnly || query.get("part") === "list", record),
+      readRncpSettings(context),
+      alertsOnly || exporting ? null : context.supabase.rpc("iq_rncp_is_inspector", { p_organization_id: context.organizationId }),
+    ]);
     const now = new Date().toISOString();
     const computation = performance.now();
     const dashboard = buildMatrixDashboard(reports, filters, now);
@@ -54,9 +64,8 @@ export async function GET(request: Request) {
     dashboard.alerts.push(...semantic.alerts.map(alert => ({ ...alert, review: configuration.reviews[alert.key] })));
     dashboard.alerts = dashboard.alerts.map(alert => ({ ...alert, reviewToken: signAlertReview(context.organizationId, alert.key) }));
     if (query.get("part") === "alerts") return NextResponse.json({ alerts: dashboard.alerts, aiStatus: dashboard.aiStatus }, { headers: headers() });
-    const inspector = await context.supabase.rpc("iq_rncp_is_inspector", { p_organization_id: context.organizationId });
     return NextResponse.json({ ...dashboard, settings: configuration.settings, settingsRevision: configuration.settingsRevision,
-      reviewsRevision: configuration.reviewsRevision, isInspector: inspector.data === true,
+      reviewsRevision: configuration.reviewsRevision, isInspector: inspector?.data === true,
       aiConfigured: Boolean(provider), notificationsEnabled: false }, { headers: headers() });
-  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "No fue posible consultar RNCP." }, { status: error instanceof RncpError ? error.status : 500 }); }
+  } catch (error) { return NextResponse.json({ error: error instanceof RncpError ? error.message : "No se pudo consultar el dashboard. Reintenta." }, { status: error instanceof RncpError ? error.status : 503 }); }
 }

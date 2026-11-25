@@ -104,6 +104,30 @@ describe("session-scoped RNCP filters", () => {
       expect(result.options).toEqual(base.options);
     }
   });
+  it("deduplicates visible-page counts, preserves unknowns and discards results after a scope change", async () => {
+    const cache = new MatrixListCache();
+    const entry = { scope: "", base: baseline(), loadedAt: Date.now() };
+    cache.put(entry);
+    expect(cache.get("supplier-a")).toBe(entry);
+    expect(cache.globalMetrics()).toBe(entry.base.metrics);
+    const fetcher = vi.spyOn(globalThis, "fetch");
+    try {
+      fetcher.mockResolvedValueOnce(Response.json({ counts: { a: 0, b: 2 } }));
+      const first = cache.loadCounts(entry, ["a", "b"]);
+      expect(cache.loadCounts(entry, ["b", "a"])).toBe(first);
+      expect(await first).toEqual({ a: 0, b: 2 });
+      await cache.loadCounts(entry, ["b"]);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      fetcher.mockResolvedValueOnce(Response.json({ counts: {} }));
+      await expect(cache.loadCounts(entry, ["private"])).rejects.toThrow();
+      expect(cache.countsFor(entry)).not.toHaveProperty("private");
+      fetcher.mockResolvedValueOnce(Response.json({ counts: { c: 1 } }));
+      const late = cache.loadCounts(entry, ["c"]);
+      cache.clear();
+      await expect(late).rejects.toThrow();
+      expect(cache.countsFor(entry)).toBeUndefined();
+    } finally { fetcher.mockRestore(); }
+  });
   it("leaves newly derived alert reviews to the server and isolates the list by scope", () => {
     const base=baseline(); base.settings.alertRules={...defaultAlertRules,recurrenceCount:2};
     const {needsAlerts,result}=filterMatrix(base,{...emptyMatrixFilters,material:"Hilo"});

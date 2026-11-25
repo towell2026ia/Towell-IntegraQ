@@ -60,6 +60,11 @@ function shortNameFor(name: string) {
 }
 
 export async function getAuthenticatedSession(timing?: (phase: string, ms: number) => void): Promise<ActiveSession | null> {
+  return (await getVerifiedSessionContext(timing))?.session ?? null;
+}
+
+// Only server callers receive this request's RLS-verified profile and client.
+export async function getVerifiedSessionContext(timing?: (phase: string, ms: number) => void) {
   const started = performance.now();
   const supabase = await createClient();
   const { data: claimData, error: claimsError } = await supabase.auth.getClaims();
@@ -67,6 +72,9 @@ export async function getAuthenticatedSession(timing?: (phase: string, ms: numbe
   timing?.("identity", claimsChecked - started);
   const claims = claimData?.claims;
 
+  if (claimsError && ((claimsError.status ?? 0) >= 500 || claimsError.name === "AuthRetryableFetchError")) {
+    return { session: null, supabase, profile: null, failure: "unavailable" as const };
+  }
   if (claimsError || !claims?.sub) return null;
 
   // Resolve the verified profile and its permission rows in the same RLS snapshot.
@@ -88,7 +96,7 @@ export async function getAuthenticatedSession(timing?: (phase: string, ms: numbe
   const specificPermissionData: { allowed: boolean; permission: Permission | Permission[] | null }[] | undefined = profileData?.overrides;
   timing?.("permissions", performance.now() - claimsChecked);
   const profile = profileData as ProfileRow | null;
-  if (profile?.status === "inactive") return null;
+  if (profile?.status === "inactive") return { session: null, supabase, profile: null, failure: "inactive" as const };
   const userMetadata = (claims.user_metadata ?? {}) as Record<string, unknown>;
   const appMetadata = (claims.app_metadata ?? {}) as Record<string, unknown>;
   const fullName =
@@ -132,7 +140,7 @@ export async function getAuthenticatedSession(timing?: (phase: string, ms: numbe
     }),
   );
 
-  return {
+  const session: ActiveSession = {
     userId: profile?.external_id || claims.sub,
     authUserId: claims.sub,
     organizationId: profile?.organization_id ?? undefined,
@@ -172,4 +180,8 @@ export async function getAuthenticatedSession(timing?: (phase: string, ms: numbe
           }
         : undefined,
   };
+  return { session, supabase, profile: profile && {
+    id: claims.sub, organization_id: profile.organization_id, user_type: profile.user_type,
+    status: profile.status, workspace_mode: profile.workspace_mode, external_party_id: profile.external_party_id,
+  } };
 }

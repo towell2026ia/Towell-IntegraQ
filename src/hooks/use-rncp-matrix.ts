@@ -11,21 +11,41 @@ type Counts = Record<string, number>;
 type Entry = { scope: string; base: MatrixResult; loadedAt: number };
 export class MatrixListCache {
   private entry: Entry | null = null;
-  private countRequest?: Promise<Counts>;
-  private counts?: Counts;
+  private requests = new Map<string, Promise<Counts>>();
+  private counts: Counts = {};
+  private listeners = new Set<() => void>();
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+  globalMetrics = () => this.entry?.scope === "" ? this.entry.base.metrics : null;
   countsFor(entry: Entry) { return this.entry === entry ? this.counts : undefined; }
-  loadCounts(entry: Entry) {
+  loadCounts(entry: Entry, ids: string[]) {
     if (this.entry !== entry) return Promise.reject(new Error("La consulta cambió."));
-    if (this.countRequest) return this.countRequest;
-    const request = rncpRequest<{ counts: Counts }>("/matrix?part=pdfCounts")
-      .then(({ counts }) => { if (this.entry === entry) this.counts = counts; return counts; })
-      .catch(error => { if (this.entry === entry) this.countRequest = undefined; throw error; });
-    this.countRequest = request;
+    const missing = ids.filter(id => !(id in this.counts)).sort();
+    if (!missing.length) return Promise.resolve(this.counts);
+    const key = missing.join(",");
+    const pending = this.requests.get(key);
+    if (pending) return pending;
+    const request = rncpRequest<{ counts: Counts }>("/matrix?part=pdfCounts&ids=" + key)
+      .then(({ counts }) => {
+        if (this.entry !== entry) throw new Error("La consulta cambió.");
+        this.counts = { ...this.counts, ...counts };
+        if (missing.some(id => !(id in counts))) throw new Error("Conteo no disponible.");
+        return this.counts;
+      }).finally(() => { if (this.entry === entry) this.requests.delete(key); });
+    this.requests.set(key, request);
     return request;
   }
-  get(scope: string) { return this.entry?.scope === scope ? this.entry : null; }
-  put(entry: Entry) { this.clear(); this.entry = entry; }
-  clear() { this.entry = null; this.counts = undefined; this.countRequest = undefined; }
+  get(scope: string) { return this.entry?.scope === scope || this.entry?.scope === "" ? this.entry : null; }
+  private replace(entry: Entry | null) {
+    this.entry = entry;
+    this.counts = {};
+    this.requests.clear();
+    this.listeners.forEach(listener => listener());
+  }
+  put(entry: Entry) { this.replace(entry); }
+  clear() { this.replace(null); }
 }
 
 export function filterMatrix(base: MatrixResult, filters: MatrixFilters) {
@@ -42,7 +62,7 @@ export function filterMatrix(base: MatrixResult, filters: MatrixFilters) {
     options: base.options, sourceCount: base.sourceCount }, needsAlerts };
 }
 
-export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "") {
+export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "", tablePage = { query: "", index: 0 }, openReportId = "") {
   const [filters, changeFilters] = useState({ ...emptyMatrixFilters, supplierId: initialSupplierId });
   const scopedFilters = useMemo(() => ({ ...filters, supplierId: initialSupplierId || filters.supplierId }), [filters, initialSupplierId]);
   const activeRequest = useRef<AbortController | null>(null);
@@ -50,10 +70,10 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "") {
   const [error, setError] = useState("");
   const [counts, setCounts] = useState<{ entry: Entry; values?: Counts } | null>(null);
   const [remote, setRemote] = useState<{ view: MatrixResult; alerts?: Alerts } | null>(null);
-  const current = entry && entry === cache.get(initialSupplierId) && entry.scope === initialSupplierId ? entry : null;
+  const current = entry && entry === cache.get(initialSupplierId) ? entry : null;
   const load = useCallback(async (signal: AbortSignal) => {
     const stored = cache.get(initialSupplierId);
-    if (stored && stored.scope === initialSupplierId && Date.now() - stored.loadedAt < 60_000) {
+    if (stored && Date.now() - stored.loadedAt < 60_000) {
       setEntry(stored); return;
     }
     const base = await rncpRequest<MatrixResult>("/matrix?part=list&" + matrixQuery({ ...emptyMatrixFilters, supplierId: initialSupplierId }), { signal });
@@ -85,14 +105,23 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "") {
     changeFilters(next);
   };
   const view = useMemo(() => current ? filterMatrix(current.base, scopedFilters) : null, [current, scopedFilters]);
+  const queryKey = matrixQuery(scopedFilters);
+  const pageSize = 30;
+  const pages = Math.ceil((view?.result.reports.length ?? 0) / pageSize);
+  const page = tablePage.query === queryKey ? Math.max(0, Math.min(tablePage.index, pages - 1)) : 0;
+  const visibleReports = view?.result.reports.slice(page * pageSize, (page + 1) * pageSize) ?? [];
+  const pageIds = visibleReports.map(report => report.id).join(",");
+  const showingDetail = Boolean(openReportId && view?.result.reports.some(report => report.id === openReportId));
   useEffect(() => {
-    if (!current || cache.countsFor(current) || !current.base.sourceCount) return;
+    if (!current || !pageIds || showingDetail) return;
     let active = true;
-    cache.loadCounts(current)
-      .then(values => { if (active) setCounts({ entry: current, values }); })
-      .catch(() => { if (active) setCounts({ entry: current }); });
-    return () => { active = false; };
-  }, [cache, current]);
+    const timer = window.setTimeout(() => {
+      cache.loadCounts(current, pageIds.split(","))
+        .then(values => { if (active) setCounts({ entry: current, values }); })
+        .catch(() => { if (active) setCounts({ entry: current }); });
+    }, 150);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [cache, current, pageIds, showingDetail]);
   useEffect(() => {
     if (!view?.needsAlerts) return;
     const controller = new AbortController();
@@ -105,7 +134,7 @@ export function useRncpMatrix(cache: MatrixListCache, initialSupplierId = "") {
   }, [view]);
   const resolved = remote?.view === view?.result ? remote : null;
   const data = useMemo(() => view ? (resolved?.alerts ? { ...view.result, ...resolved.alerts } : view.result) : null, [resolved, view]);
-  return { data, filters: scopedFilters, setFilters, refresh, error, loading: !data && !error,
+  return { data, visibleReports, page, pages, queryKey, filters: scopedFilters, setFilters, refresh, error, loading: !data && !error,
     pdfCounts: current ? cache.countsFor(current) ?? null : null, countsUnavailable: Boolean(current && counts?.entry === current && !counts.values),
     alertsPending: Boolean(view?.needsAlerts && !resolved), alertsError: Boolean(resolved && !resolved.alerts) };
 }
