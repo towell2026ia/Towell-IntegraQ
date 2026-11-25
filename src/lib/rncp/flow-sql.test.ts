@@ -12,6 +12,11 @@ describe("proposed SQL contract only (not database execution)",()=>{
   expect(sql).toContain("|| proof");
   expect(sql.slice(sql.indexOf("create function public.iq_rncp_register_generated_pdf"),sql.indexOf("-- Runs after"))).not.toMatch(/set notified_at\s*=/);
  });
+ it("rejects single-dollar delimiters in SQL function and anonymous block definitions throughout the release",()=>{
+  const bundle = readFileSync("docs/database/proposals/IQ-PROV-U07-R2.sql", "utf8");
+  const invalidDelimiter = /(?:\b(?:as|do|end)[ \t]+|^[ \t]*)\$;?[ \t]*\r?$/im;
+  expect(bundle).not.toMatch(invalidDelimiter);
+ });
  it("ships the eight reviewed contracts in dependency order and one transaction",()=>{
   const bundle=readFileSync("docs/database/proposals/IQ-PROV-U07-R2.sql","utf8").replace(/\r\n/g,"\n");
   const contracts=["CONTACTOS-LEGACY-GUARD","CONTACTOS-MULTIPLES","MEJORAS-02-audit-withdrawal","AUDITORIAS-MANUALES","MEJORAS-02-initial-photos","RNCP-PHOTO-KEY","RNCP-AUDIT-SECURITY","RNCP-FLUJO-FINAL"];

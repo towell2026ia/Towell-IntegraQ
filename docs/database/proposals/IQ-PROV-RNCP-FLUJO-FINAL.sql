@@ -296,12 +296,12 @@ end $$;
 revoke all on function public.iq_rncp_flow_guard() from public,anon,authenticated;
 create trigger zz_iq_rncp_flow_guard before insert or update on public.supplier_rncp_reports for each row execute function public.iq_rncp_flow_guard();
 -- Preserve grants and all existing delivery, validation and reconciliation branches.
-do $
+do $$
 begin
   if (select md5(prosrc) from pg_proc where oid='public.iq_rncp_followup_command(uuid,text,jsonb)'::regprocedure) is distinct from 'e16c46a870b35422b6b494436fc10d67' then
     raise exception 'RNCP_FOLLOWUP_DEFINITION_CHANGED';
   end if;
-end $;
+end $$;
 CREATE OR REPLACE FUNCTION public.iq_rncp_followup_command(p_report_id uuid, p_command text, p_payload jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql

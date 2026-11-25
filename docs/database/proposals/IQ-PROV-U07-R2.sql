@@ -68,7 +68,7 @@ execute function public.iq_supplier_audit_contact_log_guard();
 revoke all on function public.iq_supplier_audit_contact_collection_guard() from public, anon, authenticated;
 revoke all on function public.iq_supplier_audit_contact_log_guard() from public, anon, authenticated;
 
--- IQ-PROV-CONTACTOS-MULTIPLES.sql | SHA-256 55ddf820cacf61fd479c6a0d53410ceda15220b0d532a17390f27598252667c5
+-- IQ-PROV-CONTACTOS-MULTIPLES.sql | SHA-256 05586ddaac78d96c7b65918ec06caadf0524cea31366af353396c83de43d771e
 
 create function public.iq_supplier_audit_contacts_v2(
   p_supplier uuid, p_contacts jsonb, p_expected_updated_at timestamptz, p_reason text
@@ -166,13 +166,13 @@ end $$;
 revoke all on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) from public, anon;
 grant execute on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) to authenticated;
 create function public.iq_supplier_contacts_ready() returns boolean
-language sql stable security invoker set search_path = '' as $
+language sql stable security invoker set search_path = '' as $$
   select has_function_privilege('authenticated', 'public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text)', 'EXECUTE')
     and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.organizations'::regclass
       and tgname='supplier_audit_contact_collection_guard' and tgenabled in ('O','A'))
     and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.audit_log'::regclass
       and tgname='supplier_audit_contact_log_guard' and tgenabled in ('O','A'));
-$;
+$$;
 revoke all on function public.iq_supplier_contacts_ready() from public, anon;
 grant execute on function public.iq_supplier_contacts_ready() to authenticated;
 
@@ -1335,7 +1335,7 @@ CREATE TRIGGER zz_iq_rncp_audit_integrity BEFORE INSERT OR UPDATE OR DELETE ON p
  FOR EACH ROW EXECUTE FUNCTION public.iq_rncp_audit_integrity();
 NOTIFY pgrst,'reload schema';
 
--- IQ-PROV-RNCP-FLUJO-FINAL.sql | SHA-256 51542056b578740d973577add3046b83710b56652e9256cd502226fd3a06c7e7
+-- IQ-PROV-RNCP-FLUJO-FINAL.sql | SHA-256 5c214c57a4d6f4b7a8d9215a8851adb9be932c752760bb8a3b11c16f07d05d9d
 
 -- Fail before any DDL if the reviewed dependencies or private storage guard are absent.
 do $$
@@ -1631,12 +1631,12 @@ end $$;
 revoke all on function public.iq_rncp_flow_guard() from public,anon,authenticated;
 create trigger zz_iq_rncp_flow_guard before insert or update on public.supplier_rncp_reports for each row execute function public.iq_rncp_flow_guard();
 -- Preserve grants and all existing delivery, validation and reconciliation branches.
-do $
+do $$
 begin
   if (select md5(prosrc) from pg_proc where oid='public.iq_rncp_followup_command(uuid,text,jsonb)'::regprocedure) is distinct from 'e16c46a870b35422b6b494436fc10d67' then
     raise exception 'RNCP_FOLLOWUP_DEFINITION_CHANGED';
   end if;
-end $;
+end $$;
 CREATE OR REPLACE FUNCTION public.iq_rncp_followup_command(p_report_id uuid, p_command text, p_payload jsonb DEFAULT '{}'::jsonb)
  RETURNS jsonb
  LANGUAGE plpgsql

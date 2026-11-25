@@ -98,13 +98,13 @@ end $$;
 revoke all on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) from public, anon;
 grant execute on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) to authenticated;
 create function public.iq_supplier_contacts_ready() returns boolean
-language sql stable security invoker set search_path = '' as $
+language sql stable security invoker set search_path = '' as $$
   select has_function_privilege('authenticated', 'public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text)', 'EXECUTE')
     and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.organizations'::regclass
       and tgname='supplier_audit_contact_collection_guard' and tgenabled in ('O','A'))
     and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.audit_log'::regclass
       and tgname='supplier_audit_contact_log_guard' and tgenabled in ('O','A'));
-$;
+$$;
 revoke all on function public.iq_supplier_contacts_ready() from public, anon;
 grant execute on function public.iq_supplier_contacts_ready() to authenticated;
 commit;
