@@ -20,6 +20,7 @@ export function photoRpcError(error: {code?:string;message?:string}|null) {
 // Readiness probes intentionally use NULL identities: V2 rejects BEFORE writes/locks.
 // No successful/missing/unexpected response may enable the legacy upload protocol.
 export async function requirePhotoV2(context:Pick<RncpContext,"supabase"|"admin">) {
+ if (process.env.RNCP_FLOW_ENABLED !== "true") throw new RncpError("Las fotografías iniciales están pendientes de activación.",503);
  const reserve=await context.supabase.rpc("iq_rncp_initial_photo_reserve",{p_report:null,p_file:null});
  if(reserve.error?.code!=="42501" || reserve.error.message!=="PHOTO_FORBIDDEN") {
   if(reserve.error)photoRpcError(reserve.error);

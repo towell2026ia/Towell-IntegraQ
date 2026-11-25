@@ -10,6 +10,7 @@ import {GET,POST,PUT} from "@/app/api/suppliers/rncp/photos/route";
 import {GET as downloadPhoto} from "@/app/api/suppliers/rncp/photos/[fileId]/route";
 const id="11111111-1111-4111-a111-111111111111",fid="22222222-2222-4222-a222-222222222222";
 beforeEach(()=>{
+ vi.stubEnv("RNCP_FLOW_ENABLED","true");
  vi.clearAllMocks();state.report={id,organization_id:"org-a",source_kind:"native",status:"draft",deleted_at:null};state.files=[];state.manifestError=null;
  const query={select:()=>query,eq:()=>query,is:()=>query,maybeSingle:async()=>({data:state.report,error:null})};
  const fileQuery={select:()=>fileQuery,eq:()=>fileQuery,is:()=>fileQuery,maybeSingle:async()=>({data:state.file,error:null})};

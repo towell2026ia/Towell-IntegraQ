@@ -16,7 +16,7 @@ export function deriveLifecycle(report: MatrixReport, now: string): LifecycleRes
   }
   if (historical || !report.notifiedAt) {
     const state = historical ? ({ Cerrado: "closed", Tarde: "late", "En Proceso": "in_process" } as const)[report.historicalStatus ?? ""] ?? "draft" : "draft";
-    return { state, chartStatus: historical ? report.historicalStatus ?? "Sin estado histórico" : stateLabels.draft,
+    return { state, chartStatus: historical ? report.historicalStatus ?? "Sin estado histórico" : report.legacyStatus === "draft" ? "Borrador" : stateLabels.draft,
       timeliness: "unknown", deadline: null, remainingDays: null, historical,
       lateReason: historical && state === "late" ? "historical_category" : null };
   }

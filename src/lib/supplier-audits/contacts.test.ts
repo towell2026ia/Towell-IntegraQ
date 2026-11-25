@@ -5,6 +5,10 @@ const first = { id: "legacy-primary", name: "Calidad", position: "Inspectora", e
 const second = { id: "legacy-alternate", name: "Compras", position: "", email: "compras@example.test", phone: "456", purpose: "Alterno", notifyRncp: false };
 
 describe("multiple supplier contacts", () => {
+  it("keeps retired contacts identifiable and excludes them from active RNCP selection", () => {
+    expect(validateSupplierContacts([{ ...first, retired: true, notifyRncp: false }])[0]).toMatchObject({ id: first.id, retired: true, notifyRncp: false });
+    expect(() => validateSupplierContacts([{ ...first, retired: true, notifyRncp: true }])).toThrow(/retirado/);
+  });
   it("presents both historical addresses without changing the source object", () => {
     const historical = { qualityName: "Calidad", notificationName: "Calidad", email: first.email, phone: first.phone, alternateName: second.name, alternateEmail: second.email, alternatePhone: second.phone };
     expect(visibleSupplierContacts(historical).map(entry => entry.id)).toEqual(["legacy-primary", "legacy-alternate"]);

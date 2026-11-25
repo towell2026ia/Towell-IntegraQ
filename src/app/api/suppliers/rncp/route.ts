@@ -78,7 +78,7 @@ type ActionRow = {
 type EvidenceFileRow = { id: string; original_name: string; mime_type: string | null; size_bytes: number | null; uploaded_by: string; created_at: string };
 type EvidenceLinkRow = { id: string; action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
 
-export async function GET() {
+export async function GET(request?: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const supabase = await createClient();
@@ -95,6 +95,22 @@ export async function GET() {
       const ids=nativeIds.slice(offset,offset+500), result=await supabase.rpc("iq_rncp_requirements_summary",{p_report_ids:ids});
       if(result.error || ids.some(id=>!Array.isArray(result.data?.[id]))) throw new RncpError("No se pudo comprobar el seguimiento documental.",503);
       for(const id of ids)requirements[id]=result.data[id].length===0;
+    }
+    if (request && new URL(request.url).searchParams.get("view") === "directory" && !context.supplier) {
+      let flowReady = false;
+      if (process.env.RNCP_FLOW_ENABLED === "true") {
+        try {
+          await requireRncpFlow(context);
+          flowReady = true;
+        } catch {
+          // Historical records remain available while the contract is unavailable.
+        }
+      }
+      const reports = rows.sort(compareRncpFolios).map(row => ({
+        ...mapReport(row, [], []),
+        requirementsComplete: requirements[row.id] === true,
+      }));
+      return NextResponse.json({ reports, flowReady }, { headers: { "Cache-Control": "private, no-store" } });
     }
     const actions: ActionRow[] = [], audits: AuditRow[] = [], evidenceLinks: EvidenceLinkRow[] = [];
     const admin = createAdminClient();
@@ -132,7 +148,7 @@ export async function POST(request: Request) {
   // Retired field: never accept changes from a client, including older clients.
   delete values.purchaseOrder;
   delete values.purchase_order;
-  if (keyedDraft && !flowEnabled) return NextResponse.json({error:"Fotografías RNCP pendientes de activación autorizada."},{status:503});
+  if (!flowEnabled && !payload.reportId) return NextResponse.json({error:"El alta de RNCP está pendiente de activación. Los reportes existentes siguen disponibles."},{status:503});
   if (flowEnabled && ((!payload.reportId && !isRncpClassification(values.classification)) || (values.classification !== undefined && !isRncpClassification(values.classification)))) return NextResponse.json({error:"Selecciona la clasificación QAC, Hilo o Avíos."},{status:400});
   if (flowEnabled) { try { await requireRncpFlow({supabase}); } catch(error) { return photoFailure(error); } }
   // Until the reviewed flow SQL is installed, retain the production RPC contract.
@@ -148,7 +164,9 @@ export async function POST(request: Request) {
     if (keyedDraft && result.error.code === "PGRST202") return NextResponse.json({error:"La recuperación de borradores con fotografías requiere la propuesta SQL específica revisada."},{status:503});
     return rncpError(result.error.message);
   }
-  return NextResponse.json({ report: mutationIdentity(result.data), ...(keyedDraft?{requiresReload:true}:{}) });
+  const report = mutationIdentity(result.data);
+  if (!report) return NextResponse.json({ error: "No se pudo confirmar el folio y el estado guardados. Consulta el expediente antes de reintentar." }, { status: 502 });
+  return NextResponse.json({ report, ...(keyedDraft?{requiresReload:true}:{}) });
 }
 
 export async function PATCH(request: Request) {
@@ -165,7 +183,9 @@ export async function PATCH(request: Request) {
     requested_reason: typeof payload.reason === "string" ? payload.reason : "",
   });
   if (result.error) return rncpError(result.error.message);
-  return NextResponse.json({ report: mutationIdentity(result.data) });
+  const report = mutationIdentity(result.data);
+  if (!report) return NextResponse.json({ error: "No se pudo confirmar el cambio del expediente." }, { status: 502 });
+  return NextResponse.json({ report });
 }
 
 function mapReport(row: ReportRow, audits: AuditRow[], actions: RncpResponseAction[]): RncpReport {
@@ -219,7 +239,8 @@ function mapAction(row: ActionRow, evidenceLinks: EvidenceLinkRow[]): RncpRespon
 function first<T>(value: T | T[] | null) { return Array.isArray(value) ? value[0] : value; }
 function mutationIdentity(value: unknown) {
   const record = (Array.isArray(value) ? value[0] : value) as Record<string, unknown> | null;
-  return { id: String(record?.id ?? ""), folio: String(record?.folio ?? ""), status: String(record?.status ?? "draft") };
+  if (typeof record?.id !== "string" || !record.id.trim() || typeof record.folio !== "string" || !record.folio.trim() || typeof record.status !== "string" || !record.status.trim()) return null;
+  return { id: record.id, folio: record.folio, status: record.status };
 }
 
 function rncpError(message: string) {

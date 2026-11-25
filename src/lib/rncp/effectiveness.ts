@@ -1,12 +1,17 @@
 import type { RncpReport } from "@/lib/rncp-data";
 
 type Category = "historicalClosed" | "historicalLate" | "nativeClosed" | "nativeLate";
-function timestamp(value?: string) {
+type EfficacyRecord = {
+  id: string; supplierId?: string | null; deletedAt?: string | null; status?: string;
+  origin?: string; historicalStatus?: string | null; validationOutcome?: string | null;
+  notifiedAt?: string | null; responseDeadline?: string | null; completeSubmittedAt?: string | null; validatedAt?: string | null;
+};
+function timestamp(value?: string | null) {
   if (!value || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
 }
-function category(report: RncpReport, now: number): Category | null {
+function category(report: EfficacyRecord, now: number): Category | null {
   if (report.status === "draft") return null;
   if (report.origin === "historical") {
     return report.historicalStatus === "Cerrado" ? "historicalClosed"
@@ -21,10 +26,13 @@ function category(report: RncpReport, now: number): Category | null {
   return response <= deadline ? "nativeClosed" : "nativeLate";
 }
 export function supplierRncpEffectiveness(reports: readonly RncpReport[], supplierId: string, now = Date.now()) {
+  return rncpEffectiveness(reports.filter(report => report.supplierId === supplierId), now);
+}
+export function rncpEffectiveness(reports: readonly EfficacyRecord[], now: number) {
   const result = { historicalClosed: 0, historicalLate: 0, nativeClosed: 0, nativeLate: 0, excluded: 0 };
   const groups = new Map<string, Set<Category | null>>();
   for (const report of reports) {
-    if (report.deletedAt || report.supplierId !== supplierId) continue;
+    if (report.deletedAt) continue;
     const categories = groups.get(report.id) ?? new Set<Category | null>();
     categories.add(category(report, now));
     groups.set(report.id, categories);

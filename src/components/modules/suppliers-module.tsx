@@ -60,6 +60,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const [editingRncpId, setEditingRncpId] = useState<string | undefined>();
   const [supplierNotice, setSupplierNotice] = useState("");
   const [supplierError, setSupplierError] = useState("");
+  const [editingSupplier, setEditingSupplier] = useState<ExternalCompany>();
   const [createSupplierOpen, setCreateSupplierOpen] = useState(false);
   const [auditFocus, setAuditFocus] = useState<AuditFocus | null>(null);
   const demo = isDemoSession(session);
@@ -67,7 +68,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
   const auditDirectory = useSupplierAudits(`${session.authUserId}:${session.organizationId}`, !demo);
   const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
   const companyDirectory = useExternalCompanies();
-  const rncpDirectory = useRncpReports(!demo);
+  const rncpDirectory = useRncpReports(!demo, "directory");
   const activeRncp = rncpDirectory.reports.filter((report) => !report.deletedAt);
   const suppliers = useMemo(
     () => demo
@@ -75,6 +76,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       : companyDirectory.companies.filter((company) => company.kind === "supplier" && company.active).map((company) => toSupplierQualityRecord(company, activeRncp)),
     [activeRncp, companyDirectory.companies, demo],
   );
+  const editingReport = rncpDirectory.reports.find(item => item.id === editingRncpId);
   const rncpMetrics = summarizeRncp(activeRncp);
 
   const filteredSuppliers = useMemo(() => {
@@ -90,8 +92,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
 
   const selected =
     filteredSuppliers.find((supplier) => supplier.id === selectedId) ??
-    filteredSuppliers[0] ??
-    suppliers[0];
+    filteredSuppliers[0];
 
   const effectivenessDetails = supplierRncpEffectiveness(activeRncp, selected?.id ?? "");
   const effectivenessUnavailable = !demo && (rncpDirectory.loading || Boolean(rncpDirectory.error));
@@ -126,24 +127,25 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
           <p>RNCP, calendario de auditorías, evaluaciones y seguimiento por proveedor.</p>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {canCreateSupplier ? <button className="button button-primary" type="button" onClick={() => { setSupplierError(""); setSupplierNotice(""); setCreateSupplierOpen(true); }}><Plus size={17} /> Nuevo proveedor</button> : null}
+          {canCreateSupplier ? <button className="button button-primary" type="button" onClick={() => { setSupplierError(""); setSupplierNotice(""); setEditingSupplier(undefined); setCreateSupplierOpen(true); }}><Plus size={17} /> Nuevo proveedor</button> : null}
           {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}><Plus size={17} /> Nuevo RNCP</button> : null}
         </div>
       </section>
+      {rncpDirectory.error ? <div role="alert">No se pudieron consultar los reportes de los proveedores. <button type="button" className="button button-secondary" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></div> : null}
       {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
       {supplierError ? <p role="alert">{supplierError}</p> : null}
-      {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
+      {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog company={editingSupplier} onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
         companyDirectory.setCompanies(companies);
         setSelectedId(company.id); setQuery(""); setView("directory"); setCreateSupplierOpen(false);
-        setSupplierNotice(`${company.code} · ${company.name} se registró correctamente.`);
+        setSupplierNotice(`${company.code} · ${company.name} · ${editingSupplier ? "Cambios guardados" : "Proveedor registrado"}.`);
         void auditDirectory.refresh();
       }} /> : null}
 
       <section className="metric-grid" aria-label="Resumen de proveedores">
         <SupplierMetric icon={<ShieldCheck size={18} />} label="Proveedores identificados" value={suppliers.length} tone="neutral" />
-        <SupplierMetric icon={<FileText size={18} />} label="RNCP históricos" value={demo ? rncpDashboardSummary.total : rncpMetrics.total} tone="success" />
-        <SupplierMetric icon={<CalendarClock size={18} />} label="Acciones tardías" value={demo ? rncpDashboardSummary.late : rncpMetrics.late} tone="warning" />
-        <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={demo ? rncpDashboardSummary.inProcess : rncpMetrics.inProgress} tone="danger" />
+        <SupplierMetric icon={<FileText size={18} />} label="RNCP vigentes" value={demo ? rncpDashboardSummary.total : effectivenessUnavailable ? "—" : rncpMetrics.total} tone="success" />
+        <SupplierMetric icon={<CalendarClock size={18} />} label="Acciones tardías" value={demo ? rncpDashboardSummary.late : effectivenessUnavailable ? "—" : rncpMetrics.late} tone="warning" />
+        <SupplierMetric icon={<AlertTriangle size={18} />} label="En proceso" value={demo ? rncpDashboardSummary.inProcess : effectivenessUnavailable ? "—" : rncpMetrics.inProgress} tone="danger" />
       </section>
 
       <div className="quality-view-tabs supplier-tabs" aria-label="Vistas de calidad de proveedores">
@@ -164,19 +166,22 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
             <div className="configuration-count">{filteredSuppliers.length} proveedores</div>
             <div className="party-list supplier-party-list">
               {filteredSuppliers.map((supplier) => (
-                <button className={supplier.id === selected.id ? "selected" : ""} key={supplier.id} type="button" onClick={() => setSelectedId(supplier.id)}>
+                <button className={supplier.id === selected?.id ? "selected" : ""} key={supplier.id} type="button" onClick={() => setSelectedId(supplier.id)}>
                   <span><strong>{supplier.name}</strong><small>{supplier.code} · {supplier.category}</small></span>
-                  <span className={supplier.rncpOpen > 0 || supplier.rncpLate > 0 ? "quality-state warning" : "quality-state success"}>{supplier.rncpTotal} RNCP</span>
+                  <span className={supplier.rncpOpen > 0 || supplier.rncpLate > 0 ? "quality-state warning" : "quality-state success"}>{effectivenessUnavailable ? "—" : supplier.rncpTotal} RNCP</span>
                 </button>
               ))}
             </div>
           </div>
           {selected ? <div className="party-detail-panel">
-            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · Expediente de desempeño del proveedor</p>{!demo ? <button className="button button-secondary" type="button" onClick={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }}>Consultar expediente RNCP</button> : null}{isAdministrator(session) && !demo ? <button className="button button-secondary" type="button" onClick={() => void deactivateSupplier()}>Desactivar proveedor</button> : null}</header>
+            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · Expediente de desempeño del proveedor</p>{!demo ? <button className="button button-secondary" type="button" onClick={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }}>Consultar expediente RNCP</button> : null}{canCreateSupplier ? <button className="button button-secondary" type="button" onClick={() => {
+              const company = companyDirectory.companies.find(item => item.id === selected.id && item.kind === "supplier");
+              if (company) { setEditingSupplier(company); setCreateSupplierOpen(true); }
+            }}>Editar proveedor</button> : null}{isAdministrator(session) && !demo ? <button className="button button-secondary" type="button" onClick={() => void deactivateSupplier()}>Desactivar proveedor</button> : null}</header>
             <div className="party-detail-facts supplier-facts">
-              <div><small>RNCP</small><strong>{selected.rncpTotal}</strong></div>
-              <div><small>Cerrados</small><strong>{selected.rncpClosed}</strong></div>
-              <div><small>Tardíos</small><strong>{selected.rncpLate}</strong></div>
+              <div><small>RNCP</small><strong>{effectivenessUnavailable ? "—" : selected.rncpTotal}</strong></div>
+              <div><small>Cerrados</small><strong>{effectivenessUnavailable ? "—" : selected.rncpClosed}</strong></div>
+              <div><small>Tardíos</small><strong>{effectivenessUnavailable ? "—" : selected.rncpLate}</strong></div>
               <div><small>Efectividad RNCP</small><strong>{effectivenessUnavailable ? rncpDirectory.loading ? "Consultando RNCP…" : "No disponible" : selected.effectiveness === null ? "Sin RNCP evaluables" : `${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 1 }).format(selected.effectiveness)} %`}</strong>{!demo && !effectivenessUnavailable ? <><small>{effectivenessDetails.closed} cerrados / ({effectivenessDetails.closed} cerrados + {effectivenessDetails.late} tardíos) · {effectivenessDetails.evaluable} evaluables</small><small>F-CA-24: {effectivenessDetails.historicalClosed} Cerrado y {effectivenessDetails.historicalLate} Tarde. «Cerrado» histórico no acredita cierre puntual.</small><small>Nuevos cerrados con respuesta completa validada: {effectivenessDetails.nativeClosed} dentro de plazo y {effectivenessDetails.nativeLate} fuera de plazo. {effectivenessDetails.excluded} RNCP no evaluables excluidos.</small></> : null}</div>
             </div>
             {!demo ? <SupplierAuditProfile supplierId={selected.id} directory={auditDirectory} reports={activeRncp} onOpen={setAuditFocus} onRncp={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }} /> : <section className="party-detail-section">
@@ -199,7 +204,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
       {view === "dashboard" ? demo
         ? <RncpDashboard />
         : <RncpMatrixDashboard key={matrixSupplierId || "all-suppliers"} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
-      {view === "rncp" ? <RncpForm administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={rncpDirectory.reports.find((item) => item.id === editingRncpId)} /> : null}
+      {view === "rncp" && editingRncpId && !editingReport ? <p role="status">El expediente seleccionado aún no está disponible. <button className="button button-secondary" type="button" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></p> : view === "rncp" ? <RncpForm flowReady={rncpDirectory.flowReady} administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={editingReport} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
         : <><SupplierAuditResults directory={auditDirectory} onOpen={setAuditFocus} /><SupplierAssessmentResults canUpdate={canUpdateRncp} companies={companyDirectory.companies} /></> : null}
@@ -466,7 +471,7 @@ function SupplierParetoChart() {
   );
 }
 
-export function RncpForm({ administrator, companies, demo, onSaved, onReopen, report }: { administrator: boolean; companies: ExternalCompany[]; demo: boolean; onSaved: (submitted: boolean) => Promise<void>; onReopen?:(id:string)=>void; report?: RncpReport }) {
+export function RncpForm({ flowReady, administrator, companies, demo, onSaved, onReopen, report }: { flowReady: boolean; administrator: boolean; companies: ExternalCompany[]; demo: boolean; onSaved: (submitted: boolean) => Promise<void>; onReopen?:(id:string)=>void; report?: RncpReport }) {
   const [values, setValues] = useState<RncpDraftInput>(() => valuesFromReport(report));
   const [reason, setReason] = useState("");
   const [notice, setNotice] = useState("");
@@ -475,7 +480,9 @@ export function RncpForm({ administrator, companies, demo, onSaved, onReopen, re
   const [persistedId, setPersistedId] = useState(report?.id);
   const [persistedFolio, setPersistedFolio] = useState(report?.folio);
   const native = !report || report.origin === "native";
-  const flowEnabled = process.env.NEXT_PUBLIC_RNCP_FLOW_ENABLED === "true";
+  const flowRequested = process.env.NEXT_PUBLIC_RNCP_FLOW_ENABLED === "true";
+  const flowEnabled = flowRequested && flowReady;
+  const activationPending = !demo && !flowEnabled && (!report || flowRequested);
   const photos = useRncpInitialPhotos(report?.id, flowEnabled && native && !demo);
   const draftRequest = useRef<{key:string;values:RncpDraftInput} | null>(null);
   const [requiresReopen,setRequiresReopen]=useState(false);
@@ -505,6 +512,7 @@ export function RncpForm({ administrator, companies, demo, onSaved, onReopen, re
   }
 
   async function persist(action: "draft" | "submit" | "correct") {
+    if (activationPending) return;
     setSaving(true); setError(""); setNotice("");
     try {
       if (flowEnabled && native && !isRncpClassification(values.classification)) throw new Error("Selecciona la clasificación QAC, Hilo o Avíos.");
@@ -573,9 +581,10 @@ export function RncpForm({ administrator, companies, demo, onSaved, onReopen, re
       {flowEnabled && native ? <RncpInitialPhotos photos={photos} editable={!correction && !demo} disabled={saving || !editable} /> : !native ? <p>Los RNCP históricos conservan sus originales; consulta su PDF desde el Dashboard RNCP.</p> : null}
       {notice ? <div className="form-success"><CheckCircle2 size={17} /> {notice}</div> : null}
       {error ? <div className="form-error" role="alert">{error}</div> : null}
-      <div className="configuration-actions">{flowEnabled ? <button className="button button-secondary" type="button" disabled={saving || photos.busy || photos.loading || !native || demo || requiresReopen} onClick={()=>void previewPdf()}><Download size={16} /> Vista PDF</button> : null}{!correction ? <button className="button button-secondary" disabled={saving || photos.busy || photos.loading} onClick={() => void persist("draft")} type="button">{requiresReopen?"Reintentar fotografías pendientes":"Guardar borrador"}</button> : null}{!report || report.status === "draft" ? <button className="button button-primary" disabled={saving || photos.busy || photos.loading || requiresReopen} onClick={() => void persist("submit")} type="button">Registrar para seguimiento</button> : null}{correction && administrator ? <button className="button button-primary" disabled={saving || !reason.trim()} onClick={() => void persist("correct")} type="button">Guardar corrección</button> : null}</div>
+      {activationPending ? <p role="status">El registro RNCP está pendiente de activación. Los reportes existentes siguen disponibles para consulta.</p> : null}
+      <div className="configuration-actions">{flowEnabled ? <button className="button button-secondary" type="button" disabled={saving || photos.busy || photos.loading || !native || demo || requiresReopen} onClick={()=>void previewPdf()}><Download size={16} /> Vista PDF</button> : null}{!correction ? <button className="button button-secondary" disabled={activationPending || saving || photos.busy || photos.loading} onClick={() => void persist("draft")} type="button">{requiresReopen?"Reintentar fotografías pendientes":"Guardar borrador"}</button> : null}{!report || report.status === "draft" ? <button className="button button-primary" disabled={activationPending || saving || photos.busy || photos.loading || requiresReopen} onClick={() => void persist("submit")} type="button">Registrar para seguimiento</button> : null}{correction && administrator ? <button className="button button-primary" disabled={activationPending || saving || !reason.trim()} onClick={() => void persist("correct")} type="button">Guardar corrección</button> : null}</div>
     </form>
-    <p>Vista PDF muestra una previsualización. Al registrar o corregir se guarda la versión oficial; si falla, puede reintentarse desde el expediente.</p>
+    {flowEnabled ? <p>Vista PDF muestra una previsualización. Al registrar o corregir se guarda la versión oficial; si falla, puede reintentarse desde el expediente.</p> : null}
     {pdf ? <RncpGeneratedPreview url={pdf.url} name={pdf.name} folio={persistedFolio} onClose={()=>setPdf(null)} /> : null}
   </section>;
 }
@@ -667,7 +676,7 @@ function AuditResults({ administrator, checklistName, onChecklist }: { administr
   );
 }
 
-function SupplierMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: "neutral" | "success" | "warning" | "danger" }) {
+function SupplierMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number | string; tone: "neutral" | "success" | "warning" | "danger" }) {
   return <div className={`metric metric-${tone}`}><span className="metric-icon">{icon}</span><div><strong>{value}</strong><span>{label}</span></div></div>;
 }
 

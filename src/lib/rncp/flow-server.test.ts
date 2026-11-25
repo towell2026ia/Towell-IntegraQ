@@ -1,6 +1,8 @@
 import {describe,it,expect,vi} from "vitest";
 vi.mock("server-only",()=>({}));
 vi.mock("./server",()=>({RncpError:class extends Error{constructor(message:string,public status=400){super(message);}}}));
+import { beforeEach } from "vitest";
+beforeEach(() => vi.stubEnv("RNCP_FLOW_ENABLED", "true"));
 import {requireRncpFlow} from "./flow-server";
 import type {RncpContext} from "./server";
 const context=(result:unknown)=>({supabase:{rpc:vi.fn().mockResolvedValue(result)}} as unknown as Pick<RncpContext,"supabase">);

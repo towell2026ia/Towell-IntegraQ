@@ -14,6 +14,7 @@ const request=()=>{const form=new FormData();form.set("reportId",report);form.se
 const commit=()=>PUT(new Request("https://local.test/photos",{method:"PUT",body:JSON.stringify({reportId:report,fileIds:[],revision:0,reason:"Prueba concurrente"})}));
 // In-memory contract model, NOT SQL/RLS validation. Real Sharp decode and route orchestration.
 beforeEach(async()=>{
+ vi.stubEnv("RNCP_FLOW_ENABLED","true");
  vi.clearAllMocks();reservations.clear();objects.clear();registry.clear();trace=[];fail="";revision=0;commits=0;
  bytes=await sharp({create:{width:32,height:24,channels:3,background:"#ff0011"}}).png().toBuffer();
  reportRow={id:report,organization_id:"org-a",source_kind:"native",status:"draft",deleted_at:null,notified_at:null};

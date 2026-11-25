@@ -44,7 +44,7 @@ begin
 
   for item in select value from jsonb_array_elements(p_contacts->'contacts') loop
     if jsonb_typeof(item) is distinct from 'object'
-      or item - array['id','name','position','email','phone','purpose','notifyRncp'] <> '{}'::jsonb
+      or item - array['id','name','position','email','phone','purpose','notifyRncp','retired'] <> '{}'::jsonb
       or jsonb_typeof(item->'id') is distinct from 'string'
       or jsonb_typeof(item->'name') is distinct from 'string'
       or jsonb_typeof(item->'position') is distinct from 'string'
@@ -52,6 +52,8 @@ begin
       or jsonb_typeof(item->'phone') is distinct from 'string'
       or jsonb_typeof(item->'purpose') is distinct from 'string'
       or jsonb_typeof(item->'notifyRncp') is distinct from 'boolean'
+      or (item ? 'retired' and jsonb_typeof(item->'retired') is distinct from 'boolean')
+      or (item->'retired' = 'true'::jsonb and item->'notifyRncp' = 'true'::jsonb)
       or length(item->>'name') > 500 or length(item->>'position') > 500
       or length(item->>'email') > 500 or length(item->>'phone') > 500
       or length(item->>'purpose') > 500 then raise exception 'AUDIT_CONTACTS_INVALID'; end if;
@@ -69,10 +71,11 @@ begin
     normalized := normalized || jsonb_build_array(jsonb_build_object(
       'id', contact_id, 'name', trim(item->>'name'), 'position', trim(item->>'position'),
       'email', contact_email, 'phone', trim(item->>'phone'),
-      'purpose', trim(item->>'purpose'), 'notifyRncp', item->'notifyRncp'
+      'purpose', trim(item->>'purpose'), 'notifyRncp', item->'notifyRncp', 'retired', coalesce(item->'retired','false'::jsonb)
     ));
   end loop;
 
+  if not public.iq_supplier_contacts_ready() then raise exception 'AUDIT_CONTACTS_GUARD_REQUIRED'; end if;
   old_contacts := coalesce(company.metadata->'supplierQualityContacts', '{}'::jsonb);
   if jsonb_typeof(old_contacts) is distinct from 'object' then raise exception 'AUDIT_CONTACTS_INVALID'; end if;
   if old_contacts ? 'contacts' and jsonb_typeof(old_contacts->'contacts') is distinct from 'array' then raise exception 'AUDIT_CONTACTS_INVALID'; end if;
@@ -94,4 +97,14 @@ end $$;
 
 revoke all on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) from public, anon;
 grant execute on function public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text) to authenticated;
+create function public.iq_supplier_contacts_ready() returns boolean
+language sql stable security invoker set search_path = '' as $
+  select has_function_privilege('authenticated', 'public.iq_supplier_audit_contacts_v2(uuid,jsonb,timestamptz,text)', 'EXECUTE')
+    and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.organizations'::regclass
+      and tgname='supplier_audit_contact_collection_guard' and tgenabled in ('O','A'))
+    and exists (select 1 from pg_catalog.pg_trigger where tgrelid='public.audit_log'::regclass
+      and tgname='supplier_audit_contact_log_guard' and tgenabled in ('O','A'));
+$;
+revoke all on function public.iq_supplier_contacts_ready() from public, anon;
+grant execute on function public.iq_supplier_contacts_ready() to authenticated;
 commit;

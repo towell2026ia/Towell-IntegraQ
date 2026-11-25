@@ -5,8 +5,8 @@ const idPattern = /^(?:legacy-primary|legacy-alternate|[0-9a-f]{8}-[0-9a-f]{4}-[
 
 export function visibleSupplierContacts(value: Partial<SupplierContacts>): SupplierContactEntry[] {
   const entries: SupplierContactEntry[] = Array.isArray(value.contacts) ? [...value.contacts] : [];
-  if (value.email?.trim() && !entries.some(item => item.email?.toLowerCase() === value.email?.trim().toLowerCase())) entries.unshift({ id: "legacy-primary", name: value.notificationName?.trim() || value.qualityName?.trim() || "", position: "", email: value.email.trim(), phone: value.phone?.trim() || "", purpose: "Notificaciones RNCP", notifyRncp: false });
-  if (value.alternateEmail?.trim() && !entries.some(item => item.email?.toLowerCase() === value.alternateEmail?.trim().toLowerCase())) entries.push({ id: "legacy-alternate", name: value.alternateName?.trim() || "", position: "", email: value.alternateEmail.trim(), phone: value.alternatePhone?.trim() || "", purpose: "Contacto alterno", notifyRncp: false });
+  if (value.email?.trim() && !entries.some(item => item.id === "legacy-primary" || item.email?.toLowerCase() === value.email?.trim().toLowerCase())) entries.unshift({ id: "legacy-primary", name: value.notificationName?.trim() || value.qualityName?.trim() || "", position: "", email: value.email.trim(), phone: value.phone?.trim() || "", purpose: "Notificaciones RNCP", notifyRncp: false });
+  if (value.alternateEmail?.trim() && !entries.some(item => item.id === "legacy-alternate" || item.email?.toLowerCase() === value.alternateEmail?.trim().toLowerCase())) entries.push({ id: "legacy-alternate", name: value.alternateName?.trim() || "", position: "", email: value.alternateEmail.trim(), phone: value.alternatePhone?.trim() || "", purpose: "Contacto alterno", notifyRncp: false });
   return entries;
 }
 
@@ -22,7 +22,8 @@ export function validateSupplierContacts(input: unknown): SupplierContactEntry[]
     if (!name || !emailPattern.test(email)) throw new Error(`Contacto ${index + 1}: nombre y correo válido son obligatorios.`);
     if (emails.has(email)) throw new Error(`El correo ${email} aparece más de una vez.`);
     if (typeof item.notifyRncp !== "boolean") throw new Error(`Contacto ${index + 1}: selecciona correctamente el propósito de notificación.`);
+    if (item.retired !== undefined && typeof item.retired !== "boolean" || item.retired && item.notifyRncp) throw new Error("Un contacto retirado no puede seleccionarse para notificaciones.");
     ids.add(item.id as string); emails.add(email);
-    return { id: item.id as string, name, position: (item.position as string).trim(), email, phone: (item.phone as string).trim(), purpose: (item.purpose as string).trim(), notifyRncp: item.notifyRncp };
+    return { id: item.id as string, name, position: (item.position as string).trim(), email, phone: (item.phone as string).trim(), purpose: (item.purpose as string).trim(), notifyRncp: item.notifyRncp, ...(item.retired ? { retired: true } : {}) };
   });
 }

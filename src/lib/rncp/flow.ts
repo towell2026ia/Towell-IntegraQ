@@ -15,4 +15,4 @@ export function reportOperationalState(r: RncpReport, now = new Date().toISOStri
     validatedAt:r.validatedAt??null,closedAt:r.closedAt??null,validationOutcome:r.validationOutcome??null,
     requirementsComplete:r.requirementsComplete===true,missingRequirements:[],deletedAt:r.deletedAt??null,originalFiles:[] },now).state;
 }
-export function reportStateLabel(r:RncpReport) {return stateLabels[reportOperationalState(r)];}
+export function reportStateLabel(r:RncpReport) {return r.status === "draft" && r.origin !== "historical" ? "Borrador" : stateLabels[reportOperationalState(r)];}

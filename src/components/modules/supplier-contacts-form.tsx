@@ -36,7 +36,8 @@ export function SupplierContactsForm({ supplier, contacts, onClose, onChanged }:
       {contacts.notes ? <p>Observaciones históricas: {contacts.notes}</p> : null}
       {entries.map((entry, index) => <fieldset key={entry.id} className={styles.grid}><legend>Contacto {index + 1}</legend>
         {([['name','Nombre'],['position','Puesto'],['email','Correo'],['phone','Teléfono'],['purpose','Propósito']] as const).map(([key,label]) => <label key={key}>{label}<input type={key === 'email' ? 'email' : 'text'} value={entry[key]} maxLength={500} required={key === 'name' || key === 'email'} disabled={busy} onChange={e => update(entry.id, { [key]: e.target.value })} /></label>)}
-        <label className={styles.check}><input type="checkbox" checked={entry.notifyRncp} disabled={busy} onChange={e => update(entry.id, { notifyRncp: e.target.checked })} />Seleccionar para futuras notificaciones RNCP</label>
+        <label className={styles.check}><input type="checkbox" checked={entry.notifyRncp} disabled={busy || entry.retired} onChange={e => update(entry.id, { notifyRncp: e.target.checked })} />Seleccionar para futuras notificaciones RNCP</label>
+        <button type="button" className="button button-secondary" disabled={busy} onClick={() => update(entry.id, { retired: !entry.retired, notifyRncp: false })}>{entry.retired ? "Reactivar contacto" : "Retirar de la selección activa"}</button>
       </fieldset>)}
       <button className="button button-secondary" type="button" disabled={busy} onClick={add}>Agregar contacto</button>
       <label className={styles.field}>Motivo de actualización<input value={reason} required minLength={5} maxLength={2000} disabled={busy} onChange={e => { setReason(e.target.value); setDirty(true); }} /></label>

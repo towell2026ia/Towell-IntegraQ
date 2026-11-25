@@ -4,7 +4,6 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { isDemoSession } from "@/lib/session-data";
-import { missingResponseRequirements, type ResponseContent } from "./response";
 import { defaultAlertRules, type MatrixReport, type OriginalFile, type RncpSettings } from "./model";
 
 export class RncpError extends Error { constructor(message: string, public status = 400) { super(message); } }
@@ -56,7 +55,6 @@ export interface ReportRow {
   complete_submitted_at: string | null; validated_at: string | null; closed_at: string | null; validation_outcome: MatrixReport["validationOutcome"];
   response_requirements: { containment?: boolean; documents?: string[] } | null; deleted_at: string | null;
 }
-interface ActionRow { id: string; report_id: string; root_cause: string | null; action_plan: string | null; containment: string | null; commitments: string | null; document_types: Record<string, string> | null; status: string; updated_at: string; }
 interface FileRow { id: string; original_name: string; sha256: string | null; size_bytes: number | null; created_at: string; version: number; resource_id: string | null; resource_type: string; deleted_at: string | null; }
 export async function loadMatrixReports(context: RncpContext, requestedId?: string) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
@@ -67,21 +65,18 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     allowedId = result.data.id;
   }
   const rows = await paginatedRows<ReportRow>((from, to) => {
-    let query = context.admin.from("supplier_rncp_reports").select("*", { count: "exact" }).order("id");
+    let query = context.supabase.from("supplier_rncp_reports").select("*", { count: "exact" }).order("id");
     query = context.supplier ? query.eq("id", allowedId!) : query.eq("organization_id", context.organizationId);
     if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
     if (requestedId) query = query.eq("id", requestedId);
     return query.range(from, to);
   });
   if (requestedId && rows.length !== 1) throw new RncpError("RNCP no localizado en tu organización.", 404);
-  const ids = rows.map(row => row.id), actions: ActionRow[] = [], files: FileRow[] = [];
+  const ids = rows.map(row => row.id), files: FileRow[] = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batch = ids.slice(offset, offset + 100);
-    actions.push(...await paginatedRows<ActionRow>((from, to) => context.admin.from("supplier_rncp_actions").select("id,report_id,root_cause,action_plan,containment,commitments,document_types,status,updated_at", { count: "exact" }).in("report_id", batch).order("id").range(from, to)));
     files.push(...await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select("id,original_name,sha256,size_bytes,created_at,version,resource_id,resource_type,deleted_at", { count: "exact" }).eq("resource_type", "supplier_rncp_original").in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
-  const evidenceFiles: FileRow[] = [];
-  for (let offset = 0; offset < actions.length; offset += 100) evidenceFiles.push(...await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select("id,original_name,sha256,size_bytes,created_at,version,resource_id,resource_type,deleted_at", { count: "exact" }).eq("resource_type", "supplier_rncp_action_evidence").in("resource_id", actions.slice(offset, offset + 100).map(a => a.id)).is("deleted_at", null).order("id").range(from, to)));
   const supplierIds = [...new Set(rows.flatMap(r => r.supplier_id ? [r.supplier_id] : []))];
   const names = new Map<string, { code: string; name: string }>();
   for (let offset = 0; offset < supplierIds.length; offset += 100) {
@@ -90,11 +85,6 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     for (const row of result.data ?? []) names.set(row.id, row);
   }
   const reports: MatrixReport[] = rows.map(row => {
-    const related = actions.filter(a => a.report_id === row.id).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-    const response = related.find(a => ["submitted", "accepted"].includes(a.status)) ?? related[0];
-    const content: ResponseContent = { reportId: row.id, actionId: response?.id ?? "", rootCause: response?.root_cause ?? "", actionPlan: response?.action_plan ?? "", containment: response?.containment ?? "", commitments: response?.commitments ?? "", documentTypes: response?.document_types ?? {},
-      evidence: evidenceFiles.filter(f => f.resource_id === response?.id).map(f => ({ fileId: f.id, reportId: row.id, actionId: f.resource_id!, sizeBytes: f.size_bytes ?? 0, sha256: f.sha256 ?? "", deleted: Boolean(f.deleted_at) })) };
-    const missing = missingResponseRequirements(content, { containment: row.response_requirements?.containment ?? false, documents: row.response_requirements?.documents ?? [] });
     const originalFiles: OriginalFile[] = files.filter(f => f.resource_id === row.id).sort((a, b) => b.version - a.version).map(f => ({ id: f.id, fileName: f.original_name, sha256: f.sha256 ?? "", sizeBytes: f.size_bytes ?? 0, uploadedAt: f.created_at, version: f.version }));
     return { id: row.id, folio: row.folio, organizationId: row.organization_id, supplierId: row.supplier_id,
       supplierName: names.get(row.supplier_id ?? "")?.name ?? row.historical_supplier_name ?? "Proveedor pendiente de conciliación",
@@ -104,7 +94,7 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
       sourceSupplierName: row.historical_supplier_name ?? undefined, sourceSupplierCode: row.historical_supplier_code ?? undefined,
       notifiedAt: row.notified_at, responseDeadline: row.response_deadline, firstValidProgressAt: row.first_valid_progress_at,
       completeSubmittedAt: row.complete_submitted_at, validatedAt: row.validated_at, closedAt: row.closed_at,
-      validationOutcome: row.validation_outcome, requirementsComplete: missing.length === 0, missingRequirements: missing,
+      validationOutcome: row.validation_outcome, requirementsComplete: false, missingRequirements: [],
       deletedAt: row.deleted_at, originalFiles };
   });
   // Use the database's exact linked-file and physical-object checks, not a

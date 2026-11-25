@@ -21,9 +21,9 @@ beforeEach(() => {
     source_kind: "historical", historical_status: "Cerrado", status: "closed", complete_submitted_at: null,
     validated_at: null, validation_outcome: null, closed_at: null }];
 });
-it("keeps the existing RNCP save RPC available while the new flow SQL is disabled", async () => {
+it("keeps previously saved RNCP editable while new classified registrations are disabled", async () => {
   vi.stubEnv("RNCP_FLOW_ENABLED", "false");
-  const response = await POST(new Request("https://local.test/rncp", { method: "POST", body: JSON.stringify({ action: "draft", values: { description: "Existing flow" } }) }));
+  const response = await POST(new Request("https://local.test/rncp", { method: "POST", body: JSON.stringify({ action: "draft", reportId: "existing", values: { description: "Existing flow" } }) }));
   expect(response.status).toBe(200);
   expect(state.flow).not.toHaveBeenCalled();
   expect(state.rpc).toHaveBeenCalledWith("save_supplier_rncp", expect.objectContaining({ requested_action: "draft" }));
@@ -66,6 +66,12 @@ describe("photo draft retry key",()=>{
 });
 
 describe("V2 draft compatibility",()=>{
+ it("does not confirm a save when the RPC returns an empty identity",async()=>{
+   state.rpc.mockResolvedValue({data:null,error:null});
+   const response=await POST(new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",values:{classification:"QAC"}})}));
+   expect(response.status).toBe(502);
+   expect(await response.json()).not.toHaveProperty("report");
+ });
  it("does not invoke draft or legacy writes when readiness fails",async()=>{
   state.protocol.mockRejectedValue(Object.assign(new Error("V2 missing"),{status:503}));
   const result=await POST(new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",draftKey:"11111111-1111-4111-a111-111111111111",values:{classification:"QAC",description:"Old"}})}));
@@ -84,6 +90,11 @@ describe("RNCP flow contract and historical compatibility",()=>{
  const request=(values:Record<string,unknown>,reportId?:string)=>new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",reportId,values})});
  it.each([undefined,"Colorantes","qac",""])("rejects an unclassified new report: %s",async classification=>{
   expect((await POST(request({classification}))).status).toBe(400);expect(state.rpc).not.toHaveBeenCalled();
+ });
+ it("blocks unkeyed new reports when V2 is off", async()=>{
+  vi.stubEnv("RNCP_FLOW_ENABLED","false");
+  expect((await POST(request({}))).status).toBe(503);
+  expect(state.rpc).not.toHaveBeenCalled();
  });
  it("does not write against a legacy RPC contract",async()=>{state.flow.mockRejectedValue(Object.assign(new Error("missing contract"),{status:503}));expect((await POST(request({classification:"QAC"}))).status).toBe(503);expect(state.rpc).not.toHaveBeenCalled();});
  it("keeps purchase_order out of the client payload; SQL preserves it under lock",async()=>{

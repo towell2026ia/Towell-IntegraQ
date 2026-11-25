@@ -35,6 +35,7 @@ interface DocumentPreviewViewerProps {
   version: ControlledDocumentVersion;
   onReadyChange: (ready: boolean) => void;
   sourceUrl?: () => Promise<string | null>;
+  verifyBytes?: (bytes: ArrayBuffer) => Promise<void>;
   pdfLayout?: "single-page" | "continuous";
 }
 
@@ -65,7 +66,7 @@ export function triggerDownload(blob: Blob, fileName: string) {
 export const DocumentPreviewViewer = forwardRef<
   DocumentPreviewViewerHandle,
   DocumentPreviewViewerProps
->(function DocumentPreviewViewer({ code, version, onReadyChange, sourceUrl, pdfLayout = "single-page" }, ref) {
+>(function DocumentPreviewViewer({ code, version, onReadyChange, sourceUrl, verifyBytes, pdfLayout = "single-page" }, ref) {
   const [kind, setKind] = useState<PreviewKind | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -102,6 +103,8 @@ export const DocumentPreviewViewer = forwardRef<
       const response = await fetch(signedUrl, { cache: "no-store" });
       if (!response.ok) throw new Error("No fue posible abrir el archivo privado.");
       const bytes = await response.arrayBuffer();
+      if (!active) return;
+      if (verifyBytes) await verifyBytes(bytes);
       if (!active) return;
       sourceBytesRef.current = bytes;
       const extension = normalizedPreview ? "pdf" : fileExtension(version.fileName);
@@ -157,7 +160,7 @@ export const DocumentPreviewViewer = forwardRef<
       if (localImageUrl) URL.revokeObjectURL(localImageUrl);
       if (loadedPdf) void loadedPdf.cleanup();
     };
-  }, [onReadyChange, sourceUrl, version]);
+  }, [onReadyChange, sourceUrl, verifyBytes, version]);
 
   useEffect(() => {
     if (pdfLayout !== "single-page" || !pdfDocument || !pdfCanvasRef.current) return;

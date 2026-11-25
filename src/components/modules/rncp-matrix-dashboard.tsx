@@ -1,7 +1,8 @@
 "use client";
 import { generateStoredRncpPdf } from "@/lib/rncp-data";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Download, Eye, FileSpreadsheet, FileText, RefreshCw, Settings2, Trash2, Upload, X } from "lucide-react";
+import { rncpEffectiveness } from "@/lib/rncp/effectiveness";
 import { useRncpMatrix } from "@/hooks/use-rncp-matrix";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { deriveLifecycle } from "@/lib/rncp/analytics";
@@ -45,9 +46,11 @@ export function RncpMatrixDashboard({ session, onEdit, onChanged, initialSupplie
   }
   if (!matrix.data) return <section className={styles.panel}><h3>Dashboard RNCP · F-CA-24</h3>{matrix.error ? <div className="form-error" role="alert">{matrix.error}<button className="button button-secondary" type="button" onClick={() => void matrix.refresh()}>Reintentar</button></div> : <p role="status" aria-label="Cargando registros"><RefreshCw className="spin" size={16} /></p>}</section>;
   const data = matrix.data;
+  const effectiveness = rncpEffectiveness(data.reports.map(report => ({ ...report, status: report.legacyStatus })), Date.parse(data.now));
+  const period = [data.filters.year, data.filters.month, data.filters.day].filter(Boolean).join("-") || "Todos los períodos";
   const update = (key: keyof typeof matrix.filters, value: string) => matrix.setFilters(current => ({ ...current, [key]: value, ...(key === "year" || key === "month" ? { day: "" } : {}) }));
   const days = matrix.filters.year && matrix.filters.month ? new Date(Number(matrix.filters.year), Number(matrix.filters.month), 0).getDate() : 31;
-  const selectedLive = selected ? data.reports.find(r => r.id === selected.id) ?? selected : data.reports.find(r => r.id === linkedReportId) ?? null;
+  const selectedLive = selected ? data.reports.find(r => r.id === selected.id) ?? null : data.reports.find(r => r.id === linkedReportId) ?? null;
   const selectors = <><h4>Fecha</h4><label>Año<select value={matrix.filters.year} onChange={e => update("year", e.target.value)}><option value="">Todos</option>{data.options.years.map(year => <option key={year}>{year}</option>)}</select></label>
     <label>Mes<select value={matrix.filters.month} onChange={e => update("month", e.target.value)}><option value="">Todos</option>{Array.from({ length: 12 }, (_, i) => <option key={i} value={String(i + 1).padStart(2, "0")}>{new Intl.DateTimeFormat("es-MX", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2026, i, 1)))}</option>)}</select></label>
     <label className={styles.dayFilter}>Día<select disabled={!matrix.filters.year || !matrix.filters.month} value={matrix.filters.day} onChange={e => update("day", e.target.value)}><option value="">Todos</option>{Array.from({ length: days }, (_, i) => <option key={i} value={String(i + 1).padStart(2, "0")}>{i + 1}</option>)}</select></label>
@@ -59,9 +62,11 @@ export function RncpMatrixDashboard({ session, onEdit, onChanged, initialSupplie
       <button type="button" className="icon-button" aria-label="Actualizar datos RNCP" title="Actualizar datos RNCP" onClick={() => void matrix.refresh()}><RefreshCw size={16} /></button></div></header>
     {matrix.error || error ? <div className="form-error" role="alert">{matrix.error || error}<button type="button" onClick={() => void matrix.refresh()}>Reintentar</button></div> : null}
     <div className={styles.kpis} aria-label="Indicadores de RNCP filtrados">
-      <Metric label="Total RNCP" value={data.metrics.total} />{(["draft", "open", "in_process", "unattended", "late", "validation", "closed"] as const).map(state => <Metric key={state} label={stateLabels[state]} value={data.metrics[state]} />)}
+      <Metric label="Total RNCP" value={data.metrics.total} /><Metric label="Borradores" value={data.reports.filter(r => r.origin !== "historical" && r.legacyStatus === "draft").length} /><Metric label="Registrados pendientes de comunicación" value={data.reports.filter(r => r.origin === "native" && r.legacyStatus !== "draft" && !r.notifiedAt).length} />{(["open", "in_process", "unattended", "late", "validation", "closed"] as const).map(state => <Metric key={state} label={stateLabels[state]} value={data.metrics[state]} />)}
+      <Metric label="Eficacia RNCP" value={effectiveness.percent === null ? "Sin RNCP evaluables" : `${effectiveness.percent.toLocaleString("es-MX", { maximumFractionDigits: 1 })} %`} />
       <Metric label="Entrega completa en plazo" value={data.metrics.timely} /><Metric label="Vencidos sin respuesta" value={data.metrics.overdueNoResponse} /><Metric label="Cumplimiento de respuesta" value={data.metrics.responseCompliance === null ? "—" : `${data.metrics.responseCompliance.toFixed(1)}%`} />
     </div>
+    <p className={styles.explanation}>{effectiveness.closed} cerrados / {effectiveness.evaluable} evaluables · {period}{data.filters.from ? ` · Desde ${data.filters.from}` : ""}{data.filters.to ? ` · Hasta ${data.filters.to}` : ""}. La evaluación F-CO-05 se consulta por separado.</p>
     <p className={styles.explanation}>{data.metrics.historical} importados conservan su clasificación original. «Tarde» histórico no demuestra una fecha de incumplimiento. Cumplimiento = entregas completas en plazo / RNCP con resultado medible y notificación verificada ({data.metrics.measurable}); se excluyen históricos sin fechas y plazos aún abiertos.</p>
     <RncpOfficialCharts data={data} filters={selectors} />
     <section className={styles.alerts} aria-label="Alertas inteligentes de proveedores"><header><h3>Alertas inteligentes de proveedores</h3><span>IA: {data.aiStatus === "disabled" ? "desactivada; requiere configuración y autorización" : data.aiStatus === "unavailable" ? "no disponible; cálculos y reglas operativos" : "similitud sugerida"}</span></header>
@@ -136,11 +141,28 @@ export function ReportModal({ report, administrator, inspector, onClose, onChang
     <button type="button" className="button button-secondary" onClick={() => { void rncpRequest<typeof trace>(`/follow-up?reportId=${encodeURIComponent(report.id)}`).then(setTrace).catch(e => setError(e.message)); }}>Consultar movimientos y seguimiento</button>{trace ? <><h4>Avances y evidencias del proveedor</h4>{trace.actions.map(action => <article key={action.id}><strong>{action.description}</strong><small> · {action.status}</small><dl><dt>Análisis de causa</dt><dd>{action.root_cause || "Sin análisis registrado"}</dd><dt>Plan de acciones</dt><dd>{action.action_plan || "Sin plan registrado"}</dd><dt>Contención</dt><dd>{action.containment || "Sin contención registrada"}</dd><dt>Observaciones y compromisos</dt><dd>{action.commitments || "Sin compromisos registrados"}</dd></dl>{action.evidence.map(file => <button className="button button-secondary" type="button" key={file.id} onClick={() => { void getRncpEvidenceUrl(file.id).then(result => window.open(result.signedUrl, "_blank", "noopener,noreferrer")).catch(error => setError(error.message)); }}><FileText size={14} />{file.original_name}</button>)}</article>)}{!trace.actions.length ? <p>Sin avances registrados.</p> : null}<h4>Movimientos registrados</h4>{trace.history.map(event => <p key={event.id}>{dateTime(event.created_at)} · {event.user_name_snapshot} · {event.action}{event.reason ? ` · ${event.reason}` : ""}</p>)}<h4>Seguimiento y correos</h4>{trace.notifications.map(event => <p key={event.id}>{event.event_type} · {event.recipient_kind} · {event.delivery_state} · {event.sent_at ? dateTime(event.sent_at) : "Sin envío real"}</p>)}{!trace.notifications.length ? <p>Sin comunicaciones generadas.</p> : null}</> : null}{error ? <p className="form-error" role="alert">{error}</p> : null}</Modal>;
 }
 function OriginalPreview({ file, folio }: { file: OriginalFile; folio: string }) {
+  const panel = useRef<HTMLDivElement>(null);
   const onReadyChange = useCallback(() => undefined, []);
+  const verifyBytes = useCallback(async (bytes: ArrayBuffer) => {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const hex = Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
+    if (hex !== file.sha256.toLowerCase()) throw new Error("La huella del PDF no coincide con la registrada en el expediente.");
+  }, [file.sha256]);
   const sourceUrl = useCallback(async () => (await rncpRequest<{ url: string }>(`/originals/${file.id}`)).url, [file.id]);
   const version = useMemo(() => ({ id: file.id, revision: file.version, status: "current" as const, fileName: file.fileName, uploadedBy: "", validator: "", modifiedAt: file.uploadedAt, changeReason: "PDF original conservado", mimeType: "application/pdf" }), [file]);
   const [error, setError] = useState("");
-  return <div className={styles.originalViewer}><DocumentPreviewViewer code={folio} version={version} sourceUrl={sourceUrl} onReadyChange={onReadyChange} pdfLayout="continuous" /><button className="button button-secondary" type="button" onClick={() => { void rncpRequest<{ url: string }>(`/originals/${file.id}?download=1`).then(({ url }) => { const a = document.createElement("a"); a.href = url!; a.download = file.fileName; a.click(); }).catch(error => setError(error.message)); }}><Download size={15} /> Descargar original</button>{error ? <p role="alert">{error}</p> : null}</div>;
+  return <div className={styles.originalViewer} ref={panel}><DocumentPreviewViewer code={folio} version={version} sourceUrl={sourceUrl} verifyBytes={verifyBytes} onReadyChange={onReadyChange} pdfLayout="continuous" /><button type="button" className="button button-secondary" onClick={() => { if (panel.current?.requestFullscreen) void panel.current.requestFullscreen().catch(() => setError("El navegador no permite abrir la pantalla completa.")); }}>Pantalla completa</button><button className="button button-secondary" type="button" onClick={() => { void rncpRequest<{ url: string }>(`/originals/${file.id}?download=1`).then(async ({ url }) => {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error("No se pudo descargar el original.");
+      const bytes = await response.arrayBuffer();
+      await verifyBytes(bytes);
+      const localUrl = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+      const link = document.createElement("a");
+      link.href = localUrl;
+      link.download = file.fileName;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(localUrl), 1000);
+    }).catch(error => setError(error.message)); }}><Download size={15} /> Descargar original</button>{error ? <p role="alert">{error}</p> : null}</div>;
 }
 function dateTime(value: string) { return new Intl.DateTimeFormat("es-MX", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Mexico_City" }).format(new Date(value)); }
 

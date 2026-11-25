@@ -89,7 +89,10 @@ export async function loadAuditWorkspace(context: AuditContext): Promise<AuditWo
     files.push(...await auditPages<SupplierAuditFile>((from, to) => context.admin.from("file_objects").select("id,resource_id,resource_type,original_name,version,is_current,created_at,size_bytes", { count: "exact" }).in("resource_type", ["supplier_audit_report", "supplier_audit_action_plan"]).eq("workspace_id", context.organizationId).in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
   const history = await auditPages<AuditWorkspace["history"][number]>((from, to) => context.admin.from("audit_log").select("id,resource_id,action,created_at,reason,actor_id,user_name_snapshot", { count: "exact" }).eq("organization_id", context.organizationId).eq("resource_type", "supplier_audit_event").order("id").range(from, to));
-  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, contactsV2Enabled: process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true", withdrawalVersion: context.withdrawalVersion ?? 0, history };
+  const contactsContract = process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true"
+    ? await context.supabase.rpc("iq_supplier_contacts_ready")
+    : null;
+  return { events, results, files, suppliers: await auditSuppliers(context), canManage: context.canManage, administrator: context.administrator, contactsPending: process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true" && contactsContract?.data !== true, contactsV2Enabled: contactsContract?.data === true && !contactsContract.error, withdrawalVersion: context.withdrawalVersion ?? 0, history };
 }
 export function auditFailure(error: unknown) {
   return Response.json({ error: error instanceof Error ? error.message : "La operación de auditoría no se completó." }, { status: error instanceof SupplierAuditError ? error.status : 500 });

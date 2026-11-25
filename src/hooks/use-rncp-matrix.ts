@@ -23,8 +23,7 @@ export function useRncpMatrix(initialSupplierId = "") {
   }, [query]);
   useEffect(() => {
     const timer = window.setTimeout(() => { void refresh(); }, 200);
-    const clock = window.setInterval(() => { if (!document.hidden) void refresh(); }, 60_000);
-    return () => { window.clearTimeout(timer); window.clearInterval(clock); abort.current?.abort(); };
+    return () => { window.clearTimeout(timer); abort.current?.abort(); };
   }, [refresh]);
   return { data, filters: scopedFilters, setFilters, refresh, loading, error };
 }
