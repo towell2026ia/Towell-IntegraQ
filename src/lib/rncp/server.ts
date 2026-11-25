@@ -56,7 +56,77 @@ export interface ReportRow {
   response_requirements: { containment?: boolean; documents?: string[] } | null; deleted_at: string | null;
 }
 interface FileRow { is_current: boolean; resource_key: string | null; id: string; original_name: string; sha256: string | null; size_bytes: number | null; created_at: string; version: number; resource_id: string | null; resource_type: string; deleted_at: string | null; }
-export async function loadMatrixReports(context: RncpContext, requestedId?: string) {
+// File metadata is private. Both projections use only IDs obtained through report RLS.
+async function readOriginals(context: RncpContext, ids: string[], detail: boolean) {
+  const counts = new Map<string, number>();
+  const versions = new Map<string, OriginalFile[]>();
+  async function batch(keys: string[]) {
+    const fields = detail ? "id,is_current,resource_key,original_name,sha256,size_bytes,created_at,version,resource_id" : "id,resource_id";
+    const files = await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select(fields, { count: "exact" })
+      .eq("resource_type", "supplier_rncp_original").in("resource_id", keys).is("deleted_at", null).order("id").range(from, to));
+    for (const file of files) {
+      if (!file.resource_id) continue;
+      counts.set(file.resource_id, (counts.get(file.resource_id) ?? 0) + 1);
+      if (detail) {
+        const group = versions.get(file.resource_id) ?? [];
+        group.push({ id: file.id, currentOfficial: file.is_current && file.resource_key?.startsWith("generated:") === true,
+          fileName: file.original_name, sha256: file.sha256 ?? "", sizeBytes: file.size_bytes ?? 0, uploadedAt: file.created_at, version: file.version });
+        versions.set(file.resource_id, group);
+      }
+    }
+  }
+  // Keep URLs bounded and allow at most three batches in flight.
+  for (let i = 0; i < ids.length; i += 300) {
+    const tasks = [];
+    for (let j = i; j < Math.min(i + 300, ids.length); j += 100) tasks.push(batch(ids.slice(j, j + 100)));
+    await Promise.all(tasks);
+  }
+  for (const files of versions.values()) files.sort((a, b) => b.version - a.version);
+  return { counts, versions };
+}
+
+async function readSupplierNames(context: RncpContext, rows: ReportRow[]) {
+  const supplierIds = [...new Set(rows.flatMap(r => r.supplier_id ? [r.supplier_id] : []))];
+  const names = new Map<string, { code: string; name: string }>();
+  for (let offset = 0; offset < supplierIds.length; offset += 100) {
+    const result = await context.admin.from("organizations").select("id,code,name").in("id", supplierIds.slice(offset, offset + 100)).eq("kind", "supplier");
+    if (result.error) throw new RncpError("No se pudo consultar la identidad de los proveedores.", 503);
+    for (const row of result.data ?? []) names.set(row.id, row);
+  }
+  return names;
+}
+
+async function readRequirements(context: RncpContext, rows: ReportRow[], detail: boolean) {
+  // Only a notified, submitted response can change the list's calculated lifecycle.
+  // The open dossier always receives the full authoritative checklist.
+  const ids = rows.filter(row => detail || (row.source_kind !== "historical" && row.notified_at
+    && row.complete_submitted_at && row.validation_outcome !== "rejected")).map(row => row.id);
+  const requirements = new Map<string, string[]>();
+  for (let i = 0; i < ids.length; i += 500) {
+    const batch = ids.slice(i, i + 500);
+    const result = await context.supabase.rpc("iq_rncp_requirements_summary", { p_report_ids: batch });
+    if (result.error) throw new RncpError("No se pudieron comprobar los requisitos documentales.", 503);
+    for (const id of batch) {
+      const missing = result.data?.[id];
+      if (!Array.isArray(missing) || missing.some(item => typeof item !== "string")) throw new RncpError("La verificación documental quedó incompleta.", 503);
+      requirements.set(id, missing);
+    }
+  }
+  return requirements;
+}
+
+export async function loadMatrixOriginalCounts(context: RncpContext) {
+  if (context.supplier) throw new RncpError("Acceso no autorizado.", 403);
+  const rows = await paginatedRows<{ id: string }>((from, to) => {
+    let query = context.supabase.from("supplier_rncp_reports").select("id", { count: "exact" }).eq("organization_id", context.organizationId);
+    if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
+    return query.order("id").range(from, to);
+  });
+  const { counts } = await readOriginals(context, rows.map(row => row.id), false);
+  return Object.fromEntries(rows.map(row => [row.id, counts.get(row.id) ?? 0]));
+}
+
+export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
   let allowedId: string | undefined;
   if (context.supplier) {
@@ -65,27 +135,21 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     allowedId = result.data.id;
   }
   const rows = await paginatedRows<ReportRow>((from, to) => {
-    let query = context.supabase.from("supplier_rncp_reports").select("*", { count: "exact" }).order("id");
+    let query = context.supabase.from("supplier_rncp_reports").select("id,folio,organization_id,supplier_id,report_date,material_or_service,description,finding_type,source_kind,source_row,source_sha256,historical_status,historical_supplier_name,historical_supplier_code,action_type,notified_at,response_deadline,first_valid_progress_at,complete_submitted_at,validated_at,closed_at,validation_outcome,deleted_at,status,classification", { count: "exact" }).order("id");
     query = context.supplier ? query.eq("id", allowedId!) : query.eq("organization_id", context.organizationId);
     if (context.profile.user_type !== "administrator") query = query.is("deleted_at", null);
     if (requestedId) query = query.eq("id", requestedId);
     return query.range(from, to);
   });
   if (requestedId && rows.length !== 1) throw new RncpError("RNCP no localizado en tu organización.", 404);
-  const ids = rows.map(row => row.id), files: FileRow[] = [];
-  for (let offset = 0; offset < ids.length; offset += 100) {
-    const batch = ids.slice(offset, offset + 100);
-    files.push(...await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select("id,is_current,resource_key,original_name,sha256,size_bytes,created_at,version,resource_id,resource_type,deleted_at", { count: "exact" }).eq("resource_type", "supplier_rncp_original").in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
-  }
-  const supplierIds = [...new Set(rows.flatMap(r => r.supplier_id ? [r.supplier_id] : []))];
-  const names = new Map<string, { code: string; name: string }>();
-  for (let offset = 0; offset < supplierIds.length; offset += 100) {
-    const result = await context.admin.from("organizations").select("id,code,name").in("id", supplierIds.slice(offset, offset + 100)).eq("kind", "supplier");
-    if (result.error) throw new RncpError("No se pudo consultar la identidad de los proveedores.", 503);
-    for (const row of result.data ?? []) names.set(row.id, row);
-  }
-  const reports: MatrixReport[] = rows.map(row => {
-    const originalFiles: OriginalFile[] = files.filter(f => f.resource_id === row.id).sort((a, b) => b.version - a.version).map(f => ({ id: f.id, currentOfficial: f.is_current && f.resource_key?.startsWith("generated:") === true, fileName: f.original_name, sha256: f.sha256 ?? "", sizeBytes: f.size_bytes ?? 0, uploadedAt: f.created_at, version: f.version }));
+  const detail = Boolean(requestedId);
+  const [originals, names, requirements] = await Promise.all([
+    detail || !deferOriginalCounts ? readOriginals(context, rows.map(row => row.id), detail) : null,
+    readSupplierNames(context, rows),
+    readRequirements(context, rows, detail),
+  ]);
+  return rows.map((row): MatrixReport => {
+    const missing = requirements.get(row.id);
     return { id: row.id, folio: row.folio, organizationId: row.organization_id, supplierId: row.supplier_id,
       supplierName: names.get(row.supplier_id ?? "")?.name ?? row.historical_supplier_name ?? "Proveedor pendiente de conciliación",
       supplierCode: names.get(row.supplier_id ?? "")?.code ?? row.historical_supplier_code ?? "",
@@ -94,21 +158,9 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
       sourceSupplierName: row.historical_supplier_name ?? undefined, sourceSupplierCode: row.historical_supplier_code ?? undefined,
       notifiedAt: row.notified_at, responseDeadline: row.response_deadline, firstValidProgressAt: row.first_valid_progress_at,
       completeSubmittedAt: row.complete_submitted_at, validatedAt: row.validated_at, closedAt: row.closed_at,
-      validationOutcome: row.validation_outcome, requirementsComplete: false, missingRequirements: [],
-      deletedAt: row.deleted_at, originalFiles };
+      validationOutcome: row.validation_outcome, requirementsComplete: missing?.length === 0, missingRequirements: missing ?? [],
+      deletedAt: row.deleted_at, originalFileCount: originals ? (originals.counts.get(row.id) ?? 0) : undefined, originalFiles: originals?.versions.get(row.id) ?? [] };
   });
-  // Use the database's exact linked-file and physical-object checks, not a
-  // visual approximation of completion that might accept an orphan upload.
-  for (let offset = 0; offset < ids.length; offset += 500) {
-    const result = await context.supabase.rpc("iq_rncp_requirements_summary", { p_report_ids: ids.slice(offset, offset + 500) });
-    if (result.error) throw new RncpError("No se pudieron comprobar los requisitos documentales.", 503);
-    for (const report of reports.slice(offset, offset + 500)) {
-      const missing = result.data?.[report.id];
-      if (!Array.isArray(missing) || missing.some(item => typeof item !== "string")) throw new RncpError("La verificación documental quedó incompleta.", 503);
-      report.missingRequirements = missing; report.requirementsComplete = missing.length === 0;
-    }
-  }
-  return reports;
 }
 export async function readRncpSettings(context: RncpContext) {
   if (context.supplier) throw new RncpError("Acceso no autorizado.", 403);

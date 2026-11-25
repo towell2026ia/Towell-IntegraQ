@@ -16,7 +16,7 @@ export interface MatrixReport {
   completeSubmittedAt: string | null; validatedAt: string | null; closedAt: string | null;
   validationOutcome: "pending" | "accepted" | "rejected" | null;
   requirementsComplete: boolean; missingRequirements: string[];
-  deletedAt: string | null; originalFiles: OriginalFile[];
+  deletedAt: string | null; originalFileCount?: number; originalFiles: OriginalFile[];
 }
 export interface OriginalFile { currentOfficial?: boolean; id: string; fileName: string; sha256: string; sizeBytes: number; uploadedAt: string; version: number; }
 export interface LifecycleResult {

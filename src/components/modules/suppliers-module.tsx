@@ -203,7 +203,7 @@ export function SuppliersModule({ session }: { session: ActiveSession }) {
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
-        : <RncpMatrixDashboard key={matrixSupplierId || "all-suppliers"} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
+        : <RncpMatrixDashboard key={JSON.stringify([session.authUserId, session.organizationId, matrixSupplierId])} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
       {view === "rncp" && editingRncpId && !editingReport ? <p role="status">El expediente seleccionado aún no está disponible. <button className="button button-secondary" type="button" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></p> : view === "rncp" ? <RncpForm flowReady={rncpDirectory.flowReady} administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={editingReport} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />
