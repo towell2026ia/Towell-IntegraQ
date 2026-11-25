@@ -1,3 +1,4 @@
+import { ROOT2CAUSE_REDBOOTH_ENABLED } from "@/lib/root2cause/redbooth-target";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -13,6 +14,8 @@ async function authorized(write: boolean) {
 }
 const denied = () => NextResponse.json({error:"Seguimiento no autorizado."},{status:403,headers});
 export async function GET(request: Request) {
+  const actionId = new URL(request.url).searchParams.get("action");
+  if (actionId && !ROOT2CAUSE_REDBOOTH_ENABLED) return new Response(null, { status: 404, headers });
   const session = await authorized(false);
   if (!session) return denied();
   const db = await createClient();
@@ -28,7 +31,6 @@ export async function GET(request: Request) {
     return events.error ? NextResponse.json({error:"Historial no disponible para esta sesión."},{status:503,headers})
       : NextResponse.json({events:events.data ?? []},{headers});
   }
-  const actionId = new URL(request.url).searchParams.get("action");
   if (actionId) {
     const result = await db.rpc("iq_u08_redbooth_status",{p_action:actionId});
     if (result.error || !session.organizationId) return NextResponse.json({error:"No se pudo verificar la sincronización."},{status:503,headers});

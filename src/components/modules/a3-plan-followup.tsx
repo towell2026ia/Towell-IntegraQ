@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CalendarClock, CheckCircle2, CircleDot, Clock, MoreHorizontal, Search } from "lucide-react";
 import type { CorrectiveAction } from "@/lib/types";
 import { A3StepEvidence } from "./a3-step-evidence";
-import { getPlanSync, readSyncRecords, type PlanSync } from "@/lib/root2cause/redbooth-target";
+import { ROOT2CAUSE_REDBOOTH_ENABLED, getPlanSync, readSyncRecords, type PlanSync } from "@/lib/root2cause/redbooth-target";
 import styles from "./a3-plan-followup.module.css";
 
 interface Plan {
@@ -51,7 +51,7 @@ export function A3PlanFollowup({write, quality, openPlan, actions}:{
     return () => controller.abort();
   },[refresh]);
   useEffect(() => {
-    if (loading) return;
+    if (loading || !ROOT2CAUSE_REDBOOTH_ENABLED) return;
     const controller = new AbortController();
     const grouped = new Map<string, Plan[]>();
     for (const plan of plans) {
@@ -135,11 +135,11 @@ function PlanProgress({plan,action,write,quality,openReport,sync,overdue,onUpdat
     <h3>{plan.description}</h3><dl className={styles.details}>
       <div><dt>Responsable</dt><dd>{plan.owner_name || "Sin asignar"}</dd></div><div><dt>Compromiso</dt><dd>{plan.due_date || "Sin fecha"}</dd></div>
       <div><dt>Avance</dt><dd>{plan.note || "Sin registrar"}</dd></div><div><dt>Eficacia</dt><dd>{plan.effectiveness==="effective"?"Verificada":plan.effectiveness==="ineffective"?"Insuficiente":"Pendiente"} {plan.review_note}</dd></div>
-      <div><dt>Redbooth</dt><dd>{sync?.label ?? "Sin verificar"}</dd></div></dl>
+      <div><dt>Redbooth</dt><dd>{ROOT2CAUSE_REDBOOTH_ENABLED ? sync?.label ?? "Sin verificar" : "En espera"}</dd></div></dl>
     <div className={styles.controls}>
       {openReport && <button className="button button-secondary" type="button" onClick={openReport}>Ver expediente A3</button>}
       {write && !closed && <button className="button button-primary" type="button" disabled={busy} onClick={()=>show("progress")}>Registrar avance</button>}
-      {sync?.url && <a className="button button-secondary" href={sync.url} target="_blank" rel="noreferrer">Ver en Redbooth</a>}
+      {ROOT2CAUSE_REDBOOTH_ENABLED && sync?.url && <a className="button button-secondary" href={sync.url} target="_blank" rel="noreferrer">Ver en Redbooth</a>}
       <button className="button button-secondary" type="button" disabled={busy} aria-expanded={more} onClick={()=>setMore(v=>!v)}><MoreHorizontal size={16}/>Más acciones</button>
     </div>
     {more && <div className={styles.controls}>

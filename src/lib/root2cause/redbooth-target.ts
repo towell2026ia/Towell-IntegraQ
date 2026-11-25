@@ -1,3 +1,6 @@
+// RCA-10 remains disabled until its production activation is approved.
+export const ROOT2CAUSE_REDBOOTH_ENABLED = false;
+
 /** Destination expressly confirmed by Calidad. Never supplied by browser input. */
 export const ROOT2CAUSE_REDBOOTH_TARGET = Object.freeze({
   name: "QTW",

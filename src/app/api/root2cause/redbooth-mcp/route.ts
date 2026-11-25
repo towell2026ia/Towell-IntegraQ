@@ -1,8 +1,10 @@
+import { ROOT2CAUSE_REDBOOTH_ENABLED } from "@/lib/root2cause/redbooth-target";
 import {NextResponse} from "next/server";
 import {accessForDiscovery,beginConsent,connectionOrigin,connectionOwner,ConnectionError} from "@/lib/root2cause/redbooth-mcp-auth";
 import {discoverRedboothTools} from "@/lib/root2cause/redbooth-mcp";
 const headers={"Cache-Control":"private, no-store","Referrer-Policy":"no-referrer"};
 export async function POST(request:Request) {
+  if (!ROOT2CAUSE_REDBOOTH_ENABLED) return new Response(null, { status: 404, headers });
   try {
     const origin=connectionOrigin(request);
     if(request.headers.get("origin")!==origin) throw new ConnectionError("Origen no autorizado.",403);

@@ -58,3 +58,18 @@ describe("Redbooth oficial",()=>{
     expect(methods).toEqual(["initialize","notifications/initialized","tools/list","tools/list"]);
   });
 });
+
+it("mantiene el inicio de OAuth, el descubrimiento y el retorno cerrados sin acceso externo", async () => {
+  const outbound = vi.fn();
+  vi.stubGlobal("fetch", outbound);
+  const {POST} = await import("@/app/api/root2cause/redbooth-mcp/route");
+  const {GET} = await import("@/app/api/root2cause/redbooth-mcp/callback/route");
+  for (const operation of ["connect", "discover"]) {
+    const response = await POST(new Request(origin + "/api/root2cause/redbooth-mcp?operation=" + operation, {method:"POST", headers:{origin}}));
+    expect(response.status).toBe(404);
+    expect(response.headers.has("location")).toBe(false);
+  }
+  expect(await GET(new Request(origin + callbackPath))).toHaveProperty("status", 404);
+  expect(outbound).not.toHaveBeenCalled();
+  expect(jar.size).toBe(0);
+});

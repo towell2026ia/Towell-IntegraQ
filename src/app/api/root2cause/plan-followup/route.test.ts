@@ -14,3 +14,9 @@ it("keeps optimistic revision and final evidence together",async()=>{mock.rpc.mo
 it("reports an unavailable tracking contract separately from an empty queue",async()=>{mock.rpc.mockResolvedValue({error:{code:"PGRST202"}});expect((await GET(new Request("https://example.test/"))).status).toBe(503);});
 
 it("comprueba el alcance vigente del plan antes de consultar su bitácora",async()=>{mock.rpc.mockResolvedValue({data:[],error:null});expect((await GET(new Request("https://example.test/?history=00000000-0000-4000-8000-000000000001"))).status).toBe(403);});
+
+it("mantiene en espera la consulta de vínculos externos sin consultar registros", async () => {
+  expect((await GET(new Request("https://example.test/?action=plan"))).status).toBe(404);
+  expect(mock.session).not.toHaveBeenCalled();
+  expect(mock.rpc).not.toHaveBeenCalled();
+});

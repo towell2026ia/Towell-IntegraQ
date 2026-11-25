@@ -43,7 +43,7 @@ export function RncpMatrixDashboard({ session, onEdit, onChanged, initialSupplie
       const url = URL.createObjectURL(await response.blob()), anchor = document.createElement("a"); anchor.href = url; anchor.download = `RNCP-filtradas.${format}`; anchor.click(); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) { setError(error instanceof Error ? error.message : "No se pudo exportar."); }
   }
-  if (!matrix.data) return <section className={styles.panel}><h3>Dashboard RNCP · F-CA-24</h3>{matrix.error ? <div className="form-error" role="alert">{matrix.error}<button className="button button-secondary" type="button" onClick={() => void matrix.refresh()}>Reintentar</button></div> : <p role="status">Consultando registros autorizados de Supabase…</p>}</section>;
+  if (!matrix.data) return <section className={styles.panel}><h3>Dashboard RNCP · F-CA-24</h3>{matrix.error ? <div className="form-error" role="alert">{matrix.error}<button className="button button-secondary" type="button" onClick={() => void matrix.refresh()}>Reintentar</button></div> : <p role="status" aria-label="Cargando registros"><RefreshCw className="spin" size={16} /></p>}</section>;
   const data = matrix.data;
   const update = (key: keyof typeof matrix.filters, value: string) => matrix.setFilters(current => ({ ...current, [key]: value, ...(key === "year" || key === "month" ? { day: "" } : {}) }));
   const days = matrix.filters.year && matrix.filters.month ? new Date(Number(matrix.filters.year), Number(matrix.filters.month), 0).getDate() : 31;
