@@ -515,7 +515,7 @@ export function RncpForm({ flowReady, administrator, companies, demo, onSaved, o
     if (activationPending) return;
     setSaving(true); setError(""); setNotice("");
     try {
-      if (flowEnabled && native && !isRncpClassification(values.classification)) throw new Error("Selecciona la clasificación QAC, Hilo o Avíos.");
+      if (flowEnabled && native && action !== "draft" && !isRncpClassification(values.classification)) throw new Error("Selecciona la clasificación QAC, Hilo o Avíos.");
       if (demo) {
         setNotice(action === "submit" ? "RNCP validada en modo demo; no se enviaron datos a producción." : "Borrador guardado únicamente en la sesión demo.");
       } else {

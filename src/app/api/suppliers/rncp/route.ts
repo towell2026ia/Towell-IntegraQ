@@ -149,7 +149,8 @@ export async function POST(request: Request) {
   delete values.purchaseOrder;
   delete values.purchase_order;
   if (!flowEnabled && !payload.reportId) return NextResponse.json({error:"El alta de RNCP está pendiente de activación. Los reportes existentes siguen disponibles."},{status:503});
-  if (flowEnabled && ((!payload.reportId && !isRncpClassification(values.classification)) || (values.classification !== undefined && !isRncpClassification(values.classification)))) return NextResponse.json({error:"Selecciona la clasificación QAC, Hilo o Avíos."},{status:400});
+  if (flowEnabled && ((!payload.reportId && payload.action !== "draft" && !isRncpClassification(values.classification)) || (values.classification !== undefined && !isRncpClassification(values.classification)))) return NextResponse.json({error:"Selecciona la clasificación QAC, Hilo o Avíos."},{status:400});
+  if (flowEnabled && !payload.reportId && !keyedDraft) return NextResponse.json({error:"Abre un nuevo borrador para registrar el reporte con su folio único."},{status:400});
   if (flowEnabled) { try { await requireRncpFlow({supabase}); } catch(error) { return photoFailure(error); } }
   // Until the reviewed flow SQL is installed, retain the production RPC contract.
   if (!flowEnabled) delete values.classification;

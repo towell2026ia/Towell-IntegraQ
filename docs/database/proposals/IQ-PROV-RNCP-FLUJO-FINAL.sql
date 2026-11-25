@@ -66,9 +66,10 @@ begin
   end if;
 
   if requested_action in ('draft','submit','correct') then
+    if not (requested_payload ? 'classification') then selected_classification := current_report.classification; end if;
     if current_report.source_kind='historical' and selected_classification is distinct from current_report.classification then raise exception 'RNCP_HISTORICAL_IMMUTABLE'; end if;
     if current_report.id is null or current_report.source_kind='native' then
-      if selected_classification is null or selected_classification not in ('QAC','Hilo','Avíos') then raise exception 'RNCP_CLASSIFICATION_REQUIRED'; end if;
+      if (selected_classification is null and requested_action <> 'draft') or selected_classification not in ('QAC','Hilo','Avíos') then raise exception 'RNCP_CLASSIFICATION_REQUIRED'; end if;
     end if;
   end if;
 
@@ -234,6 +235,7 @@ declare snap jsonb; r jsonb; obj storage.objects%rowtype; existing public.file_o
  org uuid; path text; next_version integer; file_id uuid; bytes bigint; hash text;
 begin
  snap:=public.iq_rncp_pdf_snapshot(p_report); r:=snap->'snapshot'->'report'; org:=(r->>'organization_id')::uuid;
+ if r->>'status'='draft' then raise exception 'RNCP_REGISTERED_REPORT_REQUIRED'; end if;
  if p_fingerprint is null or p_fingerprint is distinct from snap->>'fingerprint' then raise exception 'RNCP_PDF_CONFLICT'; end if;
  path:='rncp-originals/'||org::text||'/'||auth.uid()::text||'/generated/'||p_report::text||'/'||p_fingerprint||'.pdf';
  select * into existing from public.file_objects where workspace_id=org and resource_type='supplier_rncp_original'
@@ -269,13 +271,14 @@ begin
      and (new.validation_outcome is distinct from 'accepted' or new.validated_at is null or not public.iq_rncp_is_inspector(new.organization_id))
      then raise exception 'RNCP_INSPECTOR_VALIDATION_REQUIRED'; end if;
    if new.folio is distinct from old.folio then raise exception 'RNCP_FOLIO_IMMUTABLE'; end if;
+   if old.status='draft' and new.status<>'draft' and new.source_kind='native' and new.classification is null then raise exception 'RNCP_CLASSIFICATION_REQUIRED'; end if;
    if new.classification is not distinct from old.classification then return new; end if;
    if old.source_kind='historical' then raise exception 'RNCP_HISTORICAL_IMMUTABLE'; end if;
  end if;
  if new.source_kind='native' or (tg_op='UPDATE' and new.classification is distinct from old.classification) then
    actor_org:=public.iq_rncp_actor_org(false);
    if actor_org is distinct from new.organization_id or not public.has_module_permission('suppliers','update') then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
-   if new.classification is null then raise exception 'RNCP_CLASSIFICATION_REQUIRED'; end if;
+   if new.classification is null and new.status <> 'draft' then raise exception 'RNCP_CLASSIFICATION_REQUIRED'; end if;
    if tg_op='INSERT' then
      perform pg_advisory_xact_lock(hashtextextended('integraq:rncp:official-folio',0));
      select 'RNCP'||lpad((coalesce(max(substring(r.folio from 5)::numeric),0)+1)::text,
@@ -292,4 +295,91 @@ begin
 end $$;
 revoke all on function public.iq_rncp_flow_guard() from public,anon,authenticated;
 create trigger zz_iq_rncp_flow_guard before insert or update on public.supplier_rncp_reports for each row execute function public.iq_rncp_flow_guard();
+-- Preserve grants and all existing delivery, validation and reconciliation branches.
+do $
+begin
+  if (select md5(prosrc) from pg_proc where oid='public.iq_rncp_followup_command(uuid,text,jsonb)'::regprocedure) is distinct from 'e16c46a870b35422b6b494436fc10d67' then
+    raise exception 'RNCP_FOLLOWUP_DEFINITION_CHANGED';
+  end if;
+end $;
+CREATE OR REPLACE FUNCTION public.iq_rncp_followup_command(p_report_id uuid, p_command text, p_payload jsonb DEFAULT '{}'::jsonb)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+declare r public.supplier_rncp_reports%rowtype; org uuid; a public.supplier_rncp_actions%rowtype; actor public.profiles%rowtype; missing text[];
+  official public.file_objects%rowtype;
+  revision_key text;
+  proof jsonb := '{}'::jsonb;
+begin
+  select * into actor from public.profiles where id=auth.uid() and status='active';
+  select * into r from public.supplier_rncp_reports where id=p_report_id and deleted_at is null for update;
+  if actor.id is null or r.id is null or r.organization_id is null or not public.iq_rncp_read_scope(r.id) then
+    raise exception using errcode='42501',message='RNCP_FORBIDDEN';
+  end if;
+  if r.source_kind='historical' and p_command<>'reconcile' then raise exception using errcode='55000',message='RNCP_HISTORICAL_NO_TIMER'; end if;
+  if p_command='record_manual_notification' then
+    org:=public.iq_rncp_actor_org();
+    if not (public.is_administrator() or public.iq_rncp_is_inspector(org)) or r.organization_id<>org then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    if r.notified_at is not null then raise exception using errcode='55000',message='RNCP_NOTIFICATION_IMMUTABLE'; end if;
+    if length(trim(coalesce(p_payload->>'reference','')))<8 or nullif(p_payload->>'notifiedAt','') is null
+      or (p_payload->>'notifiedAt')::timestamptz>now()
+      or (p_payload->>'notifiedAt')::timestamptz<(r.report_date::timestamp at time zone 'America/Mexico_City') then
+      raise exception using errcode='22023',message='RNCP_NOTIFICATION_PROOF_REQUIRED';
+    end if;
+    if r.source_kind is distinct from 'native' or r.status is distinct from 'submitted' or r.closed_at is not null then
+      raise exception using errcode='55000',message='RNCP_REGISTERED_REPORT_REQUIRED';
+    end if;
+    revision_key := public.iq_rncp_pdf_snapshot(r.id)->>'fingerprint';
+    select f.* into official from public.file_objects f
+      where f.id=(p_payload->>'officialFileId')::uuid and f.version=(p_payload->>'officialVersion')::integer
+        and f.workspace_id=org and f.resource_id=r.id and f.resource_type='supplier_rncp_original'
+        and f.bucket_id='integraq-private' and f.is_current and f.deleted_at is null
+        and f.resource_key='generated:'||revision_key and f.sha256 ~ '^[a-f0-9]{64}$'
+        and f.created_at <= (p_payload->>'notifiedAt')::timestamptz
+        and exists(select 1 from storage.objects o where o.bucket_id=f.bucket_id and o.name=f.object_path)
+      for share of f;
+    if official.id is null then raise exception using errcode='55000',message='RNCP_CURRENT_OFFICIAL_PDF_REQUIRED'; end if;
+    proof := jsonb_build_object('communication','manual','communicatedAt',p_payload->>'notifiedAt',
+      'officialFileId',official.id,'officialVersion',official.version,'officialSha256',official.sha256,'reportFingerprint',revision_key);
+    update public.supplier_rncp_reports set notified_at=(p_payload->>'notifiedAt')::timestamptz,
+      notification_reference=trim(p_payload->>'reference'),response_deadline=(p_payload->>'notifiedAt')::timestamptz+interval '7 days',
+      response_due_date=(((p_payload->>'notifiedAt')::timestamptz+interval '7 days') at time zone 'America/Mexico_City')::date,
+      status='submitted',response_requirements=jsonb_build_object('containment',coalesce((p_payload->>'containmentRequired')::boolean,false),
+      'documents',coalesce(p_payload->'requiredDocuments','[]'::jsonb)),updated_by=auth.uid() where id=r.id;
+  elsif p_command='submit_delivery' then
+    if actor.user_type<>'supplier' or actor.external_party_id is distinct from r.supplier_id or r.notified_at is null then raise exception using errcode='42501',message='RNCP_FORBIDDEN'; end if;
+    select * into a from public.supplier_rncp_actions where id=(p_payload->>'actionId')::uuid and report_id=r.id and created_by=auth.uid() for update;
+    if a.status='submitted' and r.validation_outcome='pending' then return jsonb_build_object('state','validation','alreadySubmitted',true); end if;
+    missing:=public.iq_rncp_missing_requirements(r.id,a.id);
+    if a.id is null or cardinality(missing)>0 then raise exception using errcode='23514',message='RNCP_REQUIREMENTS_INCOMPLETE',detail=array_to_string(missing,', '); end if;
+    update public.supplier_rncp_actions set status='submitted',submitted_at=now() where id=a.id;
+    update public.supplier_rncp_reports set complete_submitted_at=now(),validation_outcome='pending',status='in_progress',updated_by=auth.uid() where id=r.id;
+  elsif p_command in ('approve','reject') then
+    if not public.iq_rncp_is_inspector(r.organization_id) or r.complete_submitted_at is null or r.validation_outcome is distinct from 'pending' then
+      raise exception using errcode='42501',message='RNCP_INSPECTOR_VALIDATION_REQUIRED';
+    end if;
+    if nullif(trim(p_payload->>'reason'),'') is null then raise exception using errcode='22023',message='RNCP_REASON_REQUIRED'; end if;
+    select * into a from public.supplier_rncp_actions where report_id=r.id and status='submitted' order by submitted_at desc limit 1 for update;
+    if p_command='approve' and (a.id is null or cardinality(public.iq_rncp_missing_requirements(r.id,a.id))>0) then raise exception using errcode='23514',message='RNCP_REQUIREMENTS_INCOMPLETE'; end if;
+    update public.supplier_rncp_actions set status=case when p_command='approve' then 'accepted'::public.supplier_response_status else 'rejected'::public.supplier_response_status end,
+      validated_at=now(),validated_by=auth.uid(),validation_comment=trim(p_payload->>'reason') where id=a.id;
+    update public.supplier_rncp_reports set validation_outcome=case when p_command='approve' then 'accepted' else 'rejected' end,
+      validated_at=now(),validated_by=auth.uid(),validation_note=trim(p_payload->>'reason'),
+      closed_at=case when p_command='approve' then now() else null end,status=case when p_command='approve' then 'closed' else 'in_progress' end,updated_by=auth.uid() where id=r.id;
+  elsif p_command='reconcile' then
+    org:=public.iq_rncp_actor_org(true);
+    if org<>r.organization_id or r.supplier_id is not null or nullif(trim(p_payload->>'reason'),'') is null then raise exception using errcode='42501',message='RNCP_RECONCILIATION_REQUIRED'; end if;
+    if not exists(select 1 from public.organizations s where s.id=(p_payload->>'supplierId')::uuid and s.kind='supplier'
+      and (s.owning_organization_id is null or s.owning_organization_id=org)) then raise exception using errcode='42501',message='RNCP_SUPPLIER_SCOPE_CONFLICT'; end if;
+    update public.supplier_rncp_reports set supplier_id=(p_payload->>'supplierId')::uuid,updated_by=auth.uid() where id=r.id;
+  else raise exception using errcode='22023',message='RNCP_COMMAND_INVALID';
+  end if;
+  insert into public.audit_log(actor_id,module,action,resource_type,resource_id,entity_code_snapshot,reason,metadata)
+    values(auth.uid(),'suppliers','rncp.'||p_command,'supplier_rncp_report',r.id::text,r.folio,p_payload->>'reason',
+      jsonb_build_object('previous_deadline',r.response_deadline,'notification_reference',p_payload->>'reference','command',p_command) || proof);
+  return jsonb_build_object('id',r.id,'folio',r.folio);
+end $function$;
+
 commit;

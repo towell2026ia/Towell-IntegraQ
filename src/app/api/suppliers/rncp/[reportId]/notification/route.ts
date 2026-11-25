@@ -5,6 +5,7 @@ import {mailConfiguration,connectedMailbox,loginMailbox} from "@/lib/rncp/mail-a
 import {dispatchInitialMail,reconcileInitialMail,initialMailJob} from "@/lib/rncp/mail-dispatch";
 export const maxDuration=60;
 export async function GET(_request:Request,{params}:{params:Promise<{reportId:string}>}){
+ if(!mailConfiguration())return new Response(null,{status:404});
  try{const {reportId}=await params;if(!/^[a-f0-9-]{36}$/i.test(reportId))throw new RncpError("RNCP no válido.");
   const context=await rncpContext("update");const prepared=await prepareInitialNotification(context,reportId),config=mailConfiguration(),connected=await connectedMailbox(context),sender=await loginMailbox(context);
   let job:Awaited<ReturnType<typeof initialMailJob>>=null,activationError="";try{job=await initialMailJob(context,reportId);}catch(e){activationError=e instanceof Error?e.message:"Activación pendiente";}

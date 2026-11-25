@@ -18,7 +18,7 @@ export interface MatrixReport {
   requirementsComplete: boolean; missingRequirements: string[];
   deletedAt: string | null; originalFiles: OriginalFile[];
 }
-export interface OriginalFile { id: string; fileName: string; sha256: string; sizeBytes: number; uploadedAt: string; version: number; }
+export interface OriginalFile { currentOfficial?: boolean; id: string; fileName: string; sha256: string; sizeBytes: number; uploadedAt: string; version: number; }
 export interface LifecycleResult {
   state: OperationalState; timeliness: Timeliness; chartStatus: string;
   deadline: string | null; remainingDays: number | null;

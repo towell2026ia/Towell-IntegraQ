@@ -27,6 +27,7 @@ export async function loadGeneratedSnapshot(c:RncpContext,id:string):Promise<Gen
 }
 export async function persistGeneratedPdf(c:RncpContext,id:string){
  const {snapshot:s,fingerprint}=await loadGeneratedSnapshot(c,id),r=s.report;
+ if(r.status==="draft")throw new RncpError("Registra el reporte antes de emitir su PDF oficial.",409);
  const existing=await c.admin.from("file_objects").select("id,version,object_path,sha256,bucket_id")
   .eq("workspace_id",c.organizationId).eq("resource_type","supplier_rncp_original").eq("resource_id",id).eq("resource_key","generated:"+fingerprint).is("deleted_at",null).maybeSingle();
  if(existing.error)throw new RncpError("No se pudo comprobar la versión existente.",503);

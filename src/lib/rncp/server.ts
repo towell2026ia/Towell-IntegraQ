@@ -55,7 +55,7 @@ export interface ReportRow {
   complete_submitted_at: string | null; validated_at: string | null; closed_at: string | null; validation_outcome: MatrixReport["validationOutcome"];
   response_requirements: { containment?: boolean; documents?: string[] } | null; deleted_at: string | null;
 }
-interface FileRow { id: string; original_name: string; sha256: string | null; size_bytes: number | null; created_at: string; version: number; resource_id: string | null; resource_type: string; deleted_at: string | null; }
+interface FileRow { is_current: boolean; resource_key: string | null; id: string; original_name: string; sha256: string | null; size_bytes: number | null; created_at: string; version: number; resource_id: string | null; resource_type: string; deleted_at: string | null; }
 export async function loadMatrixReports(context: RncpContext, requestedId?: string) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
   let allowedId: string | undefined;
@@ -75,7 +75,7 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
   const ids = rows.map(row => row.id), files: FileRow[] = [];
   for (let offset = 0; offset < ids.length; offset += 100) {
     const batch = ids.slice(offset, offset + 100);
-    files.push(...await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select("id,original_name,sha256,size_bytes,created_at,version,resource_id,resource_type,deleted_at", { count: "exact" }).eq("resource_type", "supplier_rncp_original").in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
+    files.push(...await paginatedRows<FileRow>((from, to) => context.admin.from("file_objects").select("id,is_current,resource_key,original_name,sha256,size_bytes,created_at,version,resource_id,resource_type,deleted_at", { count: "exact" }).eq("resource_type", "supplier_rncp_original").in("resource_id", batch).is("deleted_at", null).order("id").range(from, to)));
   }
   const supplierIds = [...new Set(rows.flatMap(r => r.supplier_id ? [r.supplier_id] : []))];
   const names = new Map<string, { code: string; name: string }>();
@@ -85,7 +85,7 @@ export async function loadMatrixReports(context: RncpContext, requestedId?: stri
     for (const row of result.data ?? []) names.set(row.id, row);
   }
   const reports: MatrixReport[] = rows.map(row => {
-    const originalFiles: OriginalFile[] = files.filter(f => f.resource_id === row.id).sort((a, b) => b.version - a.version).map(f => ({ id: f.id, fileName: f.original_name, sha256: f.sha256 ?? "", sizeBytes: f.size_bytes ?? 0, uploadedAt: f.created_at, version: f.version }));
+    const originalFiles: OriginalFile[] = files.filter(f => f.resource_id === row.id).sort((a, b) => b.version - a.version).map(f => ({ id: f.id, currentOfficial: f.is_current && f.resource_key?.startsWith("generated:") === true, fileName: f.original_name, sha256: f.sha256 ?? "", sizeBytes: f.size_bytes ?? 0, uploadedAt: f.created_at, version: f.version }));
     return { id: row.id, folio: row.folio, organizationId: row.organization_id, supplierId: row.supplier_id,
       supplierName: names.get(row.supplier_id ?? "")?.name ?? row.historical_supplier_name ?? "Proveedor pendiente de conciliación",
       supplierCode: names.get(row.supplier_id ?? "")?.code ?? row.historical_supplier_code ?? "",

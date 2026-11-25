@@ -76,11 +76,14 @@ export async function POST(request: Request) {
       if (result.error) throw new RncpError("El avance no se guardó: verifica expediente, campos y permisos.", 409);
       return NextResponse.json({ actionId: result.data });
     }
-    if (!["record_notification", "submit_delivery", "approve", "reject", "reconcile"].includes(command)) throw new RncpError("Operación RNCP no permitida.");
+    if (!["record_manual_notification", "submit_delivery", "approve", "reject", "reconcile"].includes(command)) throw new RncpError("Operación RNCP no permitida.");
+    if (command === "record_manual_notification" && process.env.RNCP_FLOW_ENABLED !== "true") throw new RncpError("El registro de comunicación todavía no está habilitado.", 409);
     const result = await context.supabase.rpc("iq_rncp_followup_command", { p_report_id: reportId, p_command: command, p_payload: payload });
     if (result.error) {
       const msg = result.error.message;
       throw new RncpError(msg.includes("REQUIREMENTS_INCOMPLETE") ? "Faltan requisitos o evidencias válidas. La entrega no pasó a validación."
+        : msg.includes("CURRENT_OFFICIAL_PDF_REQUIRED") ? "Comprueba la versión vigente del PDF y que la fecha de comunicación sea posterior a su emisión."
+        : msg.includes("REGISTERED_REPORT_REQUIRED") ? "Primero registra el reporte y genera su PDF oficial."
         : msg.includes("IMMUTABLE") ? "La notificación original y su vencimiento no pueden reiniciarse."
         : msg.includes("INSPECTOR") ? "Sólo inspectormp puede validar y cerrar una entrega completa."
         : msg.includes("HISTORICAL") ? "Los registros importados conservan su estado histórico; no se les aplica un temporizador nuevo."

@@ -68,7 +68,7 @@ describe("photo draft retry key",()=>{
 describe("V2 draft compatibility",()=>{
  it("does not confirm a save when the RPC returns an empty identity",async()=>{
    state.rpc.mockResolvedValue({data:null,error:null});
-   const response=await POST(new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",values:{classification:"QAC"}})}));
+   const response=await POST(new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",draftKey:"11111111-1111-4111-a111-111111111111",values:{classification:"QAC"}})}));
    expect(response.status).toBe(502);
    expect(await response.json()).not.toHaveProperty("report");
  });
@@ -87,9 +87,18 @@ describe("V2 draft compatibility",()=>{
 
 
 describe("RNCP flow contract and historical compatibility",()=>{
- const request=(values:Record<string,unknown>,reportId?:string)=>new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",reportId,values})});
- it.each([undefined,"Colorantes","qac",""])("rejects an unclassified new report: %s",async classification=>{
+ const request=(values:Record<string,unknown>,reportId?:string)=>new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",reportId,draftKey:"11111111-1111-4111-a111-111111111111",values})});
+ it("saves a draft before classification and requires classification to register a new report",async()=>{
+  expect((await POST(request({}))).status).toBe(200);
+  const submit=new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"submit",values:{}})});
+  expect((await POST(submit)).status).toBe(400);
+ });
+ it.each(["Colorantes","qac",""])("rejects an unclassified new report: %s",async classification=>{
   expect((await POST(request({classification}))).status).toBe(400);expect(state.rpc).not.toHaveBeenCalled();
+ });
+ it("requires a stable creation key before assigning a new folio",async()=>{
+  const response=await POST(new Request("https://local.test/rncp",{method:"POST",body:JSON.stringify({action:"draft",values:{classification:"Hilo"}})}));
+  expect(response.status).toBe(400);expect(state.rpc).not.toHaveBeenCalled();
  });
  it("blocks unkeyed new reports when V2 is off", async()=>{
   vi.stubEnv("RNCP_FLOW_ENABLED","false");

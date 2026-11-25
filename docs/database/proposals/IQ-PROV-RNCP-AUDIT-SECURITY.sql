@@ -42,7 +42,7 @@ CREATE POLICY rncp_initial_photo_audit_organization ON public.audit_log
      AND public.has_permission('proveedores.acceder') AND public.has_permission('proveedores.ver')
    )
   WHEN left(action,18)='rncp.initial_photo' OR left(action,10)='rncp.mail_'
-   OR action IN ('rncp.pdf_generated','rncp.classification_changed') THEN false
+   OR action IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification') THEN false
   ELSE true END
  );
 -- Authoritative SECURITY DEFINER RPCs owned by postgres bypass RLS.
@@ -53,24 +53,24 @@ CREATE POLICY rncp_initial_photo_audit_server_insert ON public.audit_log
   coalesce(resource_type,'')<>'supplier_rncp_report'
   AND left(coalesce(action,''),18)<>'rncp.initial_photo'
   AND left(coalesce(action,''),10)<>'rncp.mail_'
-  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed')
+  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification')
  );
 CREATE POLICY rncp_audit_no_update ON public.audit_log
  AS RESTRICTIVE FOR UPDATE TO authenticated
  USING (coalesce(resource_type,'')<>'supplier_rncp_report'
   AND left(coalesce(action,''),18)<>'rncp.initial_photo'
   AND left(coalesce(action,''),10)<>'rncp.mail_'
-  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed'))
+  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification'))
  WITH CHECK (coalesce(resource_type,'')<>'supplier_rncp_report'
   AND left(coalesce(action,''),18)<>'rncp.initial_photo'
   AND left(coalesce(action,''),10)<>'rncp.mail_'
-  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed'));
+  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification'));
 CREATE POLICY rncp_audit_no_delete ON public.audit_log
  AS RESTRICTIVE FOR DELETE TO authenticated
  USING (coalesce(resource_type,'')<>'supplier_rncp_report'
   AND left(coalesce(action,''),18)<>'rncp.initial_photo'
   AND left(coalesce(action,''),10)<>'rncp.mail_'
-  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed'));
+  AND coalesce(action,'') NOT IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification'));
 
 -- SECURITY INVOKER deliberately: the trigger must observe the actual DML execution role.
 -- A SECURITY DEFINER trigger here would incorrectly turn an authenticated insert into postgres.
@@ -83,14 +83,14 @@ BEGIN
   protected_old:=coalesce(OLD.resource_type,'')='supplier_rncp_report'
    OR left(coalesce(OLD.action,''),18)='rncp.initial_photo'
    OR left(coalesce(OLD.action,''),10)='rncp.mail_'
-   OR coalesce(OLD.action,'') IN ('rncp.pdf_generated','rncp.classification_changed');
+   OR coalesce(OLD.action,'') IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification');
   IF protected_old THEN RAISE EXCEPTION 'RNCP_AUDIT_IMMUTABLE'; END IF;
  END IF;
  IF TG_OP='DELETE' THEN RETURN OLD; END IF;
  protected_new:=coalesce(NEW.resource_type,'')='supplier_rncp_report'
   OR left(coalesce(NEW.action,''),18)='rncp.initial_photo'
   OR left(coalesce(NEW.action,''),10)='rncp.mail_'
-  OR coalesce(NEW.action,'') IN ('rncp.pdf_generated','rncp.classification_changed');
+  OR coalesce(NEW.action,'') IN ('rncp.pdf_generated','rncp.classification_changed','rncp.record_manual_notification');
  IF NOT protected_new THEN RETURN NEW; END IF;
  IF TG_OP<>'INSERT' OR current_user<>'postgres' THEN
   RAISE EXCEPTION USING errcode='42501',message='RNCP_AUDIT_RPC_ONLY';
