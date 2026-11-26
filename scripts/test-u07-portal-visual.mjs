@@ -11,6 +11,7 @@ const { chromium } = require("playwright");
 const viteRequire = createRequire(require.resolve("vitest/package.json"));
 const { build } = await import(pathToFileURL(viteRequire.resolve("vite")).href);
 const root = process.cwd(), base = "91068cb97833f07686011b9af9a5427e70ef2284";
+const finalVisual = process.argv.includes("--ajustes-finales");
 const year = String(new Date().getFullYear()),
   previous = String(Number(year) - 1);
 const company = {
@@ -100,6 +101,14 @@ const clientReports = reports.map((r) => ({
   portalActions: [],
   late: r.historicalStatus === "Tarde",
 }));
+if (finalVisual) {
+  // Reuse the report of the read-only fixture in its editable state to exercise the file controls.
+  Object.assign(clientReports[2], {
+    origin: "native",
+    notifiedAt: year + "-04-15",
+    historicalStatus: undefined,
+  });
+}
 const publishedAudits = [{
   eventId: event.id,
   supplierId: company.id,
@@ -169,7 +178,7 @@ async function bundle(before) {
     ],
     [
       "@/hooks/use-supplier-assessments",
-      `export const useSupplierAssessments=()=>({assessments:[{id:"assessment-1",supplierId:"qa-a",portalVisible:true,assessmentDate:"${year}-03-15",score:94,classification:"A"}],loading:false,error:"",refresh:()=>{}})`,
+      `export const useSupplierAssessments=()=>({assessments:[{id:"assessment-1",supplierId:"qa-a",portalVisible:true,assessmentType:"annual_evaluation",assessmentDate:"${year}-03-15",score:94,classification:"A"}],loading:false,error:"",refresh:()=>{}})`,
     ],
   ]);
   const out = await build({
@@ -221,10 +230,135 @@ async function bundle(before) {
   });
   return (Array.isArray(out) ? out[0] : out).output;
 }
+async function checkFinalAdjustments(page, mobile, image) {
+  const nav = (name) =>
+    page.getByRole("navigation").getByRole("button", { name, exact: true });
+  const document = {
+    name: "Revision-del-lote.pdf",
+    mimeType: "application/pdf",
+    buffer: pdf,
+  };
+  const photo = {
+    name: "Foto-del-lote.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAABgAAAAQCAIAAACDRijCAAAAGklEQVR4nGPwzzpEFcQwatCoQaMGjRpEGQIAiAA4n3PalOkAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  };
+  await page.goto("https://integraq.test/external");
+  await nav("Mis auditorías").click();
+  const table = page.getByRole("table");
+  await table.getByRole("cell").filter({ hasText: "Evaluación anual" })
+    .waitFor();
+  const cells = table.getByRole("cell");
+  assert.equal(await cells.count(), 5);
+  const boxes = await cells.evaluateAll((nodes) =>
+    nodes.map((n) => {
+      const r = n.getBoundingClientRect();
+      return [r.x, r.y, r.width, r.height];
+    })
+  );
+  if (mobile) {
+    for (let i = 1; i < boxes.length; i++) {
+      assert.ok(boxes[i][1] >= boxes[i - 1][1] + boxes[i - 1][3] - 1);
+    }
+    for (const [x, , width] of boxes) assert.ok(x >= 0 && x + width <= 391);
+    await image("ajuste-evaluaciones");
+  } else {
+    assert.ok(boxes.every((b) => b[1] === boxes[0][1]));
+  }
+  const auditButton = page.getByRole("button", {
+    name: "Evidencias de la auditoría",
+  });
+  await auditButton.click();
+  const filter = page.getByLabel("Estado de revisión");
+  await page.getByText("Revision-del-lote.pdf", { exact: true }).waitFor();
+  const buttonBox = await auditButton.boundingBox();
+  const filterBox = await filter.locator("..").boundingBox();
+  assert.ok(
+    filterBox.x >= buttonBox.x + buttonBox.width + 6 ||
+      filterBox.y >= buttonBox.y + buttonBox.height + 6,
+  );
+  if (!mobile) await image("ajuste-detalle-auditoria");
+  const list = page.getByRole("region", {
+    name: "Archivos pendientes de guardar",
+  });
+  async function checkSelection(input) {
+    await input.setInputFiles([document, photo]);
+    assert.equal(await list.getByRole("listitem").count(), 2);
+    assert.ok((await list.innerText()).includes("Imagen PNG"));
+    assert.ok((await list.innerText()).includes("PDF"));
+    await list.getByLabel("Sustituir Revision-del-lote.pdf").setInputFiles({
+      ...document,
+      name: "Revision-final.pdf",
+    });
+    await list.getByText("Revision-final.pdf", { exact: true }).waitFor();
+    await list.getByRole("button", { name: "Retirar Foto-del-lote.png" })
+      .click();
+    assert.equal(await list.getByRole("listitem").count(), 1);
+    await input.setInputFiles(photo);
+    assert.equal(await list.getByRole("listitem").count(), 2);
+  }
+  await page.locator('select[name="action"]').selectOption(event.actions[0].id);
+  await page.getByLabel("Fecha de cumplimiento", { exact: true }).fill(
+    event.date,
+  );
+  await checkSelection(page.locator('input[name="files"]'));
+  assert.equal(
+    await page.getByRole("button", { name: "Guardar evidencias" }).isEnabled(),
+    true,
+  );
+  if (!mobile) await image("ajuste-seleccion-archivos");
+  await nav("Mis RNCP").click();
+  const editable = page.locator("article").filter({
+    has: page.getByRole("heading", { name: reports[2].folio, exact: true }),
+  });
+  await editable.getByRole("button", { name: "Responder o consultar plan" })
+    .click();
+  const exact = page.locator(
+    'input[type="file"][accept=".jpg,.jpeg,.png,.webp,.pdf,.xls,.xlsx"]',
+  ).first();
+  await checkSelection(exact);
+  await list.getByRole("button", { name: "Retirar Revision-final.pdf" })
+    .click();
+  await list.getByRole("button", { name: "Retirar Foto-del-lote.png" }).click();
+  assert.equal(await list.count(), 0);
+  const photoPicker = page.getByRole("region", {
+    name: "Fotografías de acciones del proveedor",
+  });
+  await photoPicker.getByLabel(
+    "Fotografías de acciones del proveedor: seleccionar",
+  ).setInputFiles(photo);
+  const prepared = photoPicker.getByRole("button", {
+    name: "Usar fotografías (1)",
+  });
+  await prepared.waitFor();
+  await photoPicker.locator('input[aria-label^="Sustituir "]').setInputFiles({
+    ...photo,
+    name: "Revision-fotografica.png",
+  });
+  await photoPicker.getByRole("button", {
+    name: "Quitar Revision-fotografica.png",
+  }).waitFor();
+  await prepared.click();
+  await list.getByRole("listitem").waitFor();
+  assert.ok((await list.innerText()).includes("Pendiente de guardar"));
+  await list.getByRole("button", { name: /^Retirar / }).click();
+  await nav("Mi expediente").click();
+  await page.getByText(profile.contacts[0].email, { exact: true }).waitFor();
+  if (!mobile) await image("ajuste-expediente-contactos");
+  assert.ok(
+    await page.evaluate(() =>
+      document.documentElement.scrollWidth <= innerWidth + 1
+    ),
+  );
+}
+
 const output = process.env.U07_VISUAL_DIR;
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 try {
-  for (const before of [true, false]) {
+  for (const before of finalVisual ? [false] : [true, false]) {
     const assets = await bundle(before);
     for (const mobile of [false, true]) {
       const page = await browser.newPage({
@@ -330,11 +464,31 @@ try {
           });
         }
         if (u.pathname.endsWith("/portal-evidence")) {
-          return route.fulfill({ json: { items: [], evidence: [] } });
+          const items = finalVisual && u.searchParams.has("event")
+            ? [{
+              id: original.id,
+              name: "Revision-del-lote.pdf",
+              action: event.actions[0].id,
+              date: event.date,
+              status: "accepted",
+              note: "",
+            }]
+            : [];
+          return route.fulfill({ json: { items, evidence: [] } });
         }
         return route.abort();
       });
       page.setDefaultTimeout(10000);
+      if (finalVisual) {
+        await checkFinalAdjustments(page, mobile, image);
+        assert.deepEqual(errors, []);
+        await page.close();
+        console.log(
+          "Ajustes visuales verificados en " +
+            (mobile ? "teléfono" : "escritorio"),
+        );
+        continue;
+      }
       await page.goto("https://integraq.test/");
       if (before) {
         await page.getByRole("combobox", { name: "Proveedor", exact: true })

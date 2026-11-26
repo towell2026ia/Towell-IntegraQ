@@ -2,6 +2,9 @@
 import { CustomerA3Detail } from "./customer-a3-detail";
 import { readCustomerLink } from "@/lib/customer-portal-link-client";
 import { SupplierEvidenceList } from "./supplier-evidence-list";
+import { SupplierPendingFiles, supplierFileTypes } from "./supplier-pending-files";
+import supplierStyles from "./supplier-portal.module.css";
+import type { Dispatch, SetStateAction } from "react";
 import { SupplierReportFiles } from "./supplier-report-files";
 import { SupplierPortalAdmin } from "./supplier-portal-admin";
 import { canAccessModule } from "@/lib/access-policy";
@@ -435,6 +438,15 @@ function SupplierPortal({
     setNotice("");
     const element = event.currentTarget;
     const form = new FormData(element);
+    let storedFiles = 0;
+    async function storePendingFiles(savedActionId: string) {
+      for (const file of files) {
+        const { evidence } = await uploadRncpEvidence(savedActionId, file, String(form.get("executedAt") ?? ""));
+        if (!evidence?.id) throw new Error("No se confirmó el guardado del archivo.");
+        storedFiles++;
+        setFiles(current => current.filter(item => item !== file));
+      }
+    }
     try {
       if (files.length && !form.get("executedAt")) {
         throw new Error(
@@ -479,14 +491,7 @@ function SupplierPortal({
           },
         );
         setSelectedAction(result.actionId);
-        for (const file of files) {
-          await uploadRncpEvidence(
-            result.actionId,
-            file,
-            String(form.get("executedAt") ?? ""),
-          );
-        }
-        setFiles([]);
+        await storePendingFiles(result.actionId);
         if (form.get("status") === "submitted") {
           await followupCommand("submit_delivery", {
             reportId: selectedReport.id,
@@ -524,22 +529,19 @@ function SupplierPortal({
         },
       );
       setSelectedAction(result.actionId);
-      for (const file of files) {
-        await uploadRncpEvidence(
-          result.actionId,
-          file,
-          String(form.get("executedAt") ?? ""),
-        );
-      }
+      await storePendingFiles(result.actionId);
       if (values.status !== "in_progress") {
         await saveRncpResponseAction({ ...values, actionId: result.actionId });
       }
       setEvidenceRevision((v) => v + 1);
       await Promise.all([detail.refresh(), rncpDirectory.refresh()]);
-      setFiles([]);
       element.reset();
       setNotice("Acción y evidencias enviadas a Calidad para revisión.");
     } catch (cause) {
+      if (storedFiles) {
+        setEvidenceRevision(v => v + 1);
+        await detail.refresh();
+      }
       setError(
         cause instanceof Error
           ? cause.message
@@ -566,7 +568,8 @@ function SupplierPortal({
 
   function addFiles(selected: FileList | File[] | null) {
     if (!selected) return;
-    setFiles((current) => [...current, ...Array.from(selected)]);
+    const added = Array.from(selected);
+    setFiles((current) => [...current, ...added]);
   }
   return (
     <PortalFrame
@@ -860,18 +863,18 @@ function SupplierPortal({
               {assessmentDirectory.loading
                 ? <progress aria-label="Cargando resultados" />
                 : (
-                  <div className="quality-table-wrap">
-                    <table className="quality-table">
-                      <thead>
-                        <tr>
-                          <th>Fecha</th>
-                          <th>Tipo</th>
-                          <th>Resultado</th>
-                          <th>Clasificación</th>
-                          <th>Archivo</th>
+                  <div className={supplierStyles.evaluationList}>
+                    <table className={`quality-table ${supplierStyles.evaluationTable}`} role="table">
+                      <thead role="rowgroup">
+                        <tr role="row">
+                          <th scope="col">Fecha</th>
+                          <th scope="col">Tipo</th>
+                          <th scope="col">Resultado</th>
+                          <th scope="col">Clasificación</th>
+                          <th scope="col">Archivo</th>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody role="rowgroup">
                         {assessments
                           .filter(
                             (a) =>
@@ -879,28 +882,28 @@ function SupplierPortal({
                               a.assessmentDate.slice(0, 4) === year,
                           )
                           .map((assessment) => (
-                            <tr key={assessment.id}>
-                              <td>{formatDate(assessment.assessmentDate)}</td>
-                              <td>
+                            <tr role="row" key={assessment.id}>
+                              <td role="cell"><span aria-hidden="true" className={supplierStyles.mobileField}>Fecha</span>{formatDate(assessment.assessmentDate)}</td>
+                              <td role="cell"><span aria-hidden="true" className={supplierStyles.mobileField}>Tipo</span>
                                 {supplierAssessmentTypeLabel(
                                   assessment.assessmentType,
-                                )}
+                                ) ?? "Sin tipo registrado"}
                               </td>
-                              <td>
+                              <td role="cell"><span aria-hidden="true" className={supplierStyles.mobileField}>Resultado</span>
                                 <strong>
-                                  {assessment.score === undefined
+                                  {assessment.score == null
                                     ? "Sin puntuación"
                                     : `${assessment.score}%`}
                                 </strong>
                               </td>
-                              <td>
+                              <td role="cell"><span aria-hidden="true" className={supplierStyles.mobileField}>Clasificación</span>
                                 {assessment.classification ??
                                   "Sin clasificación"}
                               </td>
-                              <td>
+                              <td role="cell"><span aria-hidden="true" className={supplierStyles.mobileField}>Archivo</span>
                                 {assessment.sourceFile
                                   ? (
-                                    <>
+                                    <div className={supplierStyles.fileControls}>
                                       <button
                                         className="evidence-link"
                                         onClick={() =>
@@ -922,7 +925,7 @@ function SupplierPortal({
                                       >
                                         Descargar
                                       </button>
-                                    </>
+                                    </div>
                                   )
                                   : (
                                     "Sin archivo"
@@ -984,6 +987,7 @@ function SupplierPortal({
                 error={error || rncpDirectory.error}
                 files={files}
                 onAddFiles={addFiles}
+                setFiles={setFiles}
                 onSelectReport={(id) => {
                   if (
                     files.length &&
@@ -1017,6 +1021,7 @@ function SupplierRncpResponse({
   actorId,
   error,
   files,
+  setFiles,
   notice,
   onAddFiles,
   onSelectReport,
@@ -1031,6 +1036,7 @@ function SupplierRncpResponse({
   actorId: string;
   error: string;
   files: File[];
+  setFiles: Dispatch<SetStateAction<File[]>>;
   notice: string;
   onAddFiles: (files: FileList | File[] | null) => void;
   onSelectReport: (id: string) => void;
@@ -1277,7 +1283,7 @@ function SupplierRncpResponse({
                     <ImagePlus size={15} /> Documento / original exacto (sin
                     compresión)
                     <input
-                      accept=".jpg,.jpeg,.png,.webp,.pdf,.xls,.xlsx"
+                      accept={supplierFileTypes}
                       multiple
                       type="file"
                       onChange={(event) => {
@@ -1291,16 +1297,9 @@ function SupplierRncpResponse({
                     por archivo.
                   </small>
                 </div>
-                {files.length ? (
-                  <div className="wide rncp-selected-files">
-                    {files.map((file, index) => (
-                      <span key={`${file.name}-${index}`}>
-                        <FileText size={13} /> {file.name} ·{" "}
-                        {formatFileSize(file.size)} · Pendiente de guardar
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
+                <div className="wide" hidden={!files.length}>
+                  <SupplierPendingFiles files={files} setFiles={setFiles} disabled={saving || Boolean(locked)} />
+                </div>
               </div>
               {notice ? (
                 <div className="form-success">

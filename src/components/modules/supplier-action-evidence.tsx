@@ -1,5 +1,9 @@
 "use client";
 import { Download, Eye, Paperclip } from "lucide-react";
+import {
+  supplierFileTypes,
+  SupplierPendingFiles,
+} from "./supplier-pending-files";
 import css from "./supplier-portal.module.css";
 import { useEffect, useState } from "react";
 type Action = { id: string; description: string };
@@ -33,10 +37,12 @@ export function SupplierActionEvidence({
   initialAction?: string;
   onChange?: () => void;
 }) {
+  const [files, setFiles] = useState<File[]>([]);
   const [open, setOpen] = useState(Boolean(initialAction)),
     [rows, setRows] = useState<Item[] | null>(null),
     [refresh, reload] = useState(0),
     [error, setError] = useState(""),
+    [readError, setReadError] = useState(""),
     [busy, setBusy] = useState(false),
     [filter, setFilter] = useState("");
   useEffect(() => {
@@ -50,12 +56,12 @@ export function SupplierActionEvidence({
       .then((b) => {
         if (!c.signal.aborted) {
           setRows(b.items);
-          setError("");
+          setReadError("");
         }
       })
       .catch(() => {
         if (!c.signal.aborted) {
-          setError("No se pudieron consultar las evidencias.");
+          setReadError("No se pudieron consultar las evidencias.");
         }
       });
     return () => c.abort();
@@ -65,11 +71,12 @@ export function SupplierActionEvidence({
     setError("");
     try {
       await fn();
-      onChange?.();
-      reload((v) => v + 1);
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      // A preceding file can already be registered when a later upload fails.
+      reload((v) => v + 1);
+      onChange?.();
       setBusy(false);
     }
   }
@@ -98,19 +105,27 @@ export function SupplierActionEvidence({
     }
   }
   return (
-    <section>
-      <button
-        className="button button-secondary"
-        aria-expanded={open}
-        onClick={() => {
-          setRows(null);
-          setOpen(!open);
-        }}
-      >
-        <Paperclip size={15} /> Evidencias de la auditoría
-      </button>
-      {open && (
-        <>
+    <section className={css.evidenceSection}>
+      <div className={css.auditControls}>
+        <button
+          className="button button-secondary"
+          disabled={busy}
+          aria-expanded={open}
+          onClick={() => {
+            if (
+              open && files.length &&
+              !window.confirm(
+                "¿Descartar los archivos pendientes al cerrar las evidencias?",
+              )
+            ) return;
+            if (open) setFiles([]);
+            setRows(null);
+            setOpen(!open);
+          }}
+        >
+          <Paperclip size={15} /> Evidencias de la auditoría
+        </button>
+        {open && (
           <label>
             Estado de revisión{" "}
             <select value={filter} onChange={(e) => setFilter(e.target.value)}>
@@ -120,7 +135,14 @@ export function SupplierActionEvidence({
               <option value="returned">Devueltas</option>
             </select>
           </label>
-          {!rows && !error && <progress aria-label="Cargando evidencias" />}
+        )}
+      </div>
+      {open && (
+        <>
+          {!rows && !readError && <progress aria-label="Cargando evidencias" />}
+          {rows && rows.some((item) => !filter || item.status === filter) && (
+            <h4>Evidencias guardadas</h4>
+          )}
           {rows
             ?.filter((i) => !filter || i.status === filter)
             .map((i) => (
@@ -191,12 +213,13 @@ export function SupplierActionEvidence({
           )}
           {!review && actions.length > 0 && (
             <form
+              className={css.evidenceForm}
               onSubmit={(e) => {
                 e.preventDefault();
                 const el = e.currentTarget;
                 const f = new FormData(el);
                 void operation(async () => {
-                  for (const entry of f.getAll("files")) {
+                  for (const entry of files) {
                     if (!(entry instanceof File) || !entry.size) {
                       throw new Error("Selecciona un archivo.");
                     }
@@ -206,15 +229,23 @@ export function SupplierActionEvidence({
                     }
                     upload.set("event", event);
                     upload.set("file", entry);
-                    await checked(
+                    const confirmation = await checked<{ id: string }>(
                       await fetch(url, { method: "POST", body: upload }),
+                    );
+                    if (!confirmation.id) {
+                      throw new Error(
+                        "No se confirmó el guardado del archivo.",
+                      );
+                    }
+                    setFiles((current) =>
+                      current.filter((file) => file !== entry)
                     );
                   }
                   el.reset();
                 });
               }}
             >
-              <div className="rncp-form-grid">
+              <fieldset disabled={busy} className={css.uploadFields}>
                 <label>
                   Acción
                   <select name="action" defaultValue={initialAction} required>
@@ -236,19 +267,31 @@ export function SupplierActionEvidence({
                     name="files"
                     type="file"
                     multiple
-                    required
-                    accept=".pdf,.png,.jpg,.jpeg,.webp,.xls,.xlsx"
+                    accept={supplierFileTypes}
+                    onChange={({ currentTarget }) => {
+                      const selected = Array.from(currentTarget.files ?? []);
+                      setFiles((current) => [...current, ...selected]);
+                      currentTarget.value = "";
+                    }}
                   />
                 </label>
-              </div>
-              <button className="button button-primary" disabled={busy}>
+              </fieldset>
+              <SupplierPendingFiles
+                files={files}
+                setFiles={setFiles}
+                disabled={busy}
+              />
+              <button
+                className="button button-primary"
+                disabled={busy || !files.length}
+              >
                 Guardar evidencias
               </button>
             </form>
           )}
-          {error && (
+          {(error || readError) && (
             <p role="alert">
-              {error}{" "}
+              {error || readError}{" "}
               <button
                 onClick={() => {
                   setError("");

@@ -8,6 +8,7 @@ import {
 import type { SupplierAuditFile } from "@/lib/supplier-audits/model";
 import { SupplierAuditDocument } from "./supplier-audit-document";
 import { SupplierActionEvidence } from "./supplier-action-evidence";
+import portalCss from "./supplier-portal.module.css";
 import styles from "./supplier-audit-calendar.module.css";
 async function request<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`/api/suppliers/audit-portal${path}`, {
@@ -135,16 +136,34 @@ export function SupplierAuditPortal({
         Información autorizada por Calidad para tu proveedor. Las acciones no se
         cierran automáticamente.
       </p>
-      <button
-        type="button"
-        className="button button-secondary"
-        onClick={() => {
-          setPreview(null);
-          refresh();
-        }}
-      >
-        Actualizar auditorías
-      </button>
+      <div className={portalCss.auditControls}>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => {
+            setPreview(null);
+            refresh();
+          }}
+        >
+          Actualizar auditorías
+        </button>
+        {evidenceOnly && (
+          <label>
+            Expediente de auditoría{" "}
+            <select value={chosen} onChange={(e) => setChosen(e.target.value)}>
+              <option value="">Seleccionar evento</option>
+              {visible.map((a) => (
+                <option key={a.eventId} value={a.eventId}>
+                  {a.auditDate ?? a.plannedDate ?? "Fecha pendiente"} ·{" "}
+                  {a.methodology === "other"
+                    ? "Otra metodología"
+                    : a.methodology} · {auditClassifications[a.classification]}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
       {fileError && <p role="alert">{fileError}</p>}
       {error ? <p role="alert">{error}</p> : !audits
         ? (
@@ -155,22 +174,6 @@ export function SupplierAuditPortal({
         : !visible.length
         ? <p>No hay auditorías publicadas para este proveedor.</p>
         : null}
-      {evidenceOnly && (
-        <label>
-          Expediente de auditoría{" "}
-          <select value={chosen} onChange={(e) => setChosen(e.target.value)}>
-            <option value="">Seleccionar evento</option>
-            {visible.map((a) => (
-              <option key={a.eventId} value={a.eventId}>
-                {a.auditDate ?? a.plannedDate ?? "Fecha pendiente"} ·{" "}
-                {a.methodology === "other" ? "Otra metodología" : a.methodology}
-                {" "}
-                · {auditClassifications[a.classification]}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
       {audits
         ? visible.filter((a) => !evidenceOnly || a.eventId === chosen).map(
           (a) => (
