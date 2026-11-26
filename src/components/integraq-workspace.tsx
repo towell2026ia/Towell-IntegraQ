@@ -87,6 +87,10 @@ import { applyIndicatorRuntimeAccess } from "@/lib/indicator-access";
 import { DEFAULT_CAPTURE_DAYS_AFTER_CLOSE } from "@/lib/indicators/indicator-windows";
 import {
   buildDemoManagementReviewHistory,
+  buildManagementReviewContext,
+  hasSourceChanges,
+  readLocalManagementReviews,
+  saveLocalManagementReview,
   type ManagementReviewRecord,
 } from "@/lib/management-review-data";
 import {
@@ -260,7 +264,7 @@ export function IntegraQWorkspace({
   );
   const [demoIndicatorCaptureDays, setDemoIndicatorCaptureDays] = useState(DEFAULT_CAPTURE_DAYS_AFTER_CLOSE);
   const indicatorRuntime = useIndicatorRuntime(
-    !demoMode && ["indicators", "risks", "management-review"].includes(activeModule) && !isExternalUser(session) && canAccessModule(session, "indicators"),
+    !demoMode && ["indicators", "risks"].includes(activeModule) && !isExternalUser(session) && canAccessModule(session, "indicators"),
   );
   const indicatorDefinitions = demoMode ? demoIndicatorDefinitions : indicatorRuntime.definitions;
   const indicatorResults = demoMode ? demoIndicatorResults : indicatorRuntime.results;
@@ -318,8 +322,6 @@ export function IntegraQWorkspace({
         const savedDocuments = demoMode ? window.localStorage.getItem("integraq.controlledDocuments.v1") : null;
         const savedForms = window.localStorage.getItem("integraq.appForms.v1");
         const savedRiskWorkspace = window.localStorage.getItem("integraq.riskWorkspace.v1");
-        const savedManagementReviews = window.localStorage.getItem("integraq.managementReviews.v2");
-        const savedManagementReview = window.localStorage.getItem("integraq.managementReview.v1");
         const savedImprovementProjects = window.localStorage.getItem("integraq.improvementProjects.v2") ?? window.localStorage.getItem("integraq.improvementProjects.v1");
         const savedAudits = window.localStorage.getItem("integraq.auditOccurrences.v1");
         if (savedActions) {
@@ -349,14 +351,6 @@ export function IntegraQWorkspace({
             importIssues: withoutUnchangedSamples(saved.importIssues ?? [], samples.importIssues),
           }));
         }
-        if (savedManagementReviews) {
-          const saved = withoutUnchangedSamples(JSON.parse(savedManagementReviews) as ManagementReviewRecord[], buildDemoManagementReviewHistory());
-          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
-        } else if (savedManagementReview) {
-          const migrated = JSON.parse(savedManagementReview) as ManagementReviewRecord;
-          const saved = withoutUnchangedSamples([migrated], buildDemoManagementReviewHistory());
-          setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
-        }
         if (savedImprovementProjects) {
           const samples = buildInitialImprovementProjects();
           setImprovementProjects(normalizeImprovementProjects(withoutUnchangedSamples(JSON.parse(savedImprovementProjects) as ImprovementProject[], [...samples, ...normalizeImprovementProjects(samples)], ["createdAt", "updatedAt"])));
@@ -380,7 +374,7 @@ export function IntegraQWorkspace({
     }
   }, [actions, storageReady, demoMode]);
 
-  const needsActions = ["corrective-actions", "customers", "management-review", "customer-portal", "supplier-portal"].includes(activeModule);
+  const needsActions = ["corrective-actions", "customers", "customer-portal", "supplier-portal"].includes(activeModule);
   useEffect(() => {
     if (!storageReady || demoMode || externalScope || !needsActions) return;
     let active = true;
@@ -406,7 +400,7 @@ export function IntegraQWorkspace({
     window.localStorage.setItem("integraq.controlledDocuments.v1", JSON.stringify(loadedDocuments));
   }, [loadedDocuments, storageReady, demoMode]);
 
-  const needsGlobalDocuments = activeModule === "home-settings" || activeModule === "management-review";
+  const needsGlobalDocuments = activeModule === "home-settings";
   useEffect(() => {
     if (!storageReady || demoMode || !needsGlobalDocuments || externalScope) return;
     const controller = new AbortController();
@@ -432,7 +426,7 @@ export function IntegraQWorkspace({
   }, [riskWorkspace, storageReady]);
 
   useEffect(() => {
-    if (!storageReady || externalScope || (!demoMode && !["risks", "management-review"].includes(activeModule))) return;
+    if (!storageReady || externalScope || (!demoMode && activeModule !== "risks")) return;
     let active = true;
     void loadRiskWorkspace()
       .then(({ state }) => {
@@ -466,10 +460,31 @@ export function IntegraQWorkspace({
     return () => { active = false; window.clearTimeout(timer); };
   }, [riskServerReady, riskWorkspace, externalScope]);
 
+  const [reviewsReady, setReviewsReady] = useState(false);
+  const [reviewsError, setReviewsError] = useState(false);
+  const [reviewRetry, setReviewRetry] = useState(0);
   useEffect(() => {
-    if (!storageReady) return;
-    window.localStorage.setItem("integraq.managementReviews.v2", JSON.stringify(managementReviews));
-  }, [managementReviews, storageReady]);
+    if (externalScope || !canAccessModule(session, "management-review")) return;
+    const readLocalReviews = () => {
+      try {
+        const stored = readLocalManagementReviews(window.localStorage);
+        const saved = withoutUnchangedSamples(stored, buildDemoManagementReviewHistory());
+        setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
+        setReviewsError(false);
+      } catch {
+        setReviewsError(true);
+      } finally {
+        setReviewsReady(true);
+      }
+    };
+    const timer = window.setTimeout(readLocalReviews, 0);
+    return () => window.clearTimeout(timer);
+  }, [session, externalScope, demoMode, reviewRetry]);
+
+  function saveManagementReview(previous: ManagementReviewRecord, next: ManagementReviewRecord) {
+    saveLocalManagementReview(window.localStorage, previous, next);
+    setManagementReviews(records => records.map(record => record.id === previous.id ? next : record));
+  }
 
   useEffect(() => {
     if (!storageReady) return;
@@ -489,6 +504,21 @@ export function IntegraQWorkspace({
     [managementReviews],
   );
 
+  function reviewSourcesChanged(record: ManagementReviewRecord) {
+    if (record.period.year !== new Date().getFullYear()) return false;
+    // Compare only sources already available in the authorized workspace.
+    if (!demoMode && (documentLoad?.sessionKey !== sessionKey || documentLoad.error ||
+        actionLoadedSession !== sessionKey || !indicatorRuntime.access || indicatorRuntime.error)) return false;
+    if (!["documents", "indicators", "corrective-actions", "calibrations"].every(
+      module => isWorkspaceModuleId(module) && canAccessModule(session, module))) return false;
+    const context = buildManagementReviewContext({
+      session, documents: controlledDocuments, actions, assets: withoutUnchangedSamples(assets, demoMeasurementAssets),
+      indicators: indicatorDefinitions, indicatorResults, supplierAudits: [], externalAudits: [], customers: [],
+      suppliers: [], certifications: [], rncpSummary: { total: 0, closed: 0, late: 0, inProcess: 0 },
+    }, record.period);
+    return hasSourceChanges(record, context);
+  }
+
   const activeMeta = workspaceModuleMeta[activeModule];
   const homeSources = useMemo(
     () => ({
@@ -506,23 +536,6 @@ export function IntegraQWorkspace({
       risks: riskWorkspace,
     }),
     [demoMode, documentLoad, sessionKey, actions, assets, controlledDocuments, currentManagementReview, indicatorDefinitions, indicatorResults, riskWorkspace, session],
-  );
-  const managementReviewSources = useMemo(
-    () => ({
-      session,
-      documents: controlledDocuments,
-      actions,
-      assets: withoutUnchangedSamples(assets, demoMeasurementAssets),
-      indicators: indicatorDefinitions,
-      indicatorResults,
-      supplierAudits: [],
-      externalAudits: [],
-      customers: [],
-      suppliers: [],
-      certifications: [],
-      rncpSummary: { total: 0, closed: 0, late: 0, inProcess: 0 },
-    }),
-    [actions, assets, controlledDocuments, indicatorDefinitions, indicatorResults, session],
   );
   const localHomeDashboard = useMemo(
     () => demoMode ? buildHomeDashboard(homeSources) : null,
@@ -675,7 +688,7 @@ export function IntegraQWorkspace({
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimDraftId(claim.selectedDraftId ?? "");setClaimSeedId(claim.id);setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
-          {activeModule === "management-review" ? <ManagementReviewModule onRecordsChange={setManagementReviews} records={managementReviews} sources={managementReviewSources} /> : null}
+          {activeModule === "management-review" ? <ManagementReviewModule key={sessionKey} sourcesChanged={reviewSourcesChanged} onRecordChange={saveManagementReview} records={managementReviews} session={session} recordsReady={reviewsReady} recordsError={reviewsError} onRetryRecords={() => setReviewRetry(value => value + 1)} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule initialCustomerId={navigationTarget?.module === "customer-portal" ? navigationTarget.id : undefined} kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}

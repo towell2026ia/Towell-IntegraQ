@@ -123,3 +123,19 @@ describe("management review aggregation and approvals", () => {
     expect(history.every((record) => record.approvals.every((approval) => approval.status === "approved"))).toBe(true);
   });
 });
+
+
+it("conserva el acta v1 y los demás informes al editar un único expediente", async () => {
+  const { readLocalManagementReviews, saveLocalManagementReview } = await import("./management-review-data");
+  const [previous, other] = buildDemoManagementReviewHistory();
+  const values = new Map([["integraq.managementReview.v1", JSON.stringify(previous)]]);
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  expect(readLocalManagementReviews(storage)).toEqual([previous]);
+  expect(values.size).toBe(1);
+  values.set("integraq.managementReviews.v2", JSON.stringify([previous, other]));
+  const next = { ...previous, revision: previous.revision + 1 };
+  saveLocalManagementReview(storage, previous, next);
+  expect(readLocalManagementReviews(storage)).toEqual([next, other]);
+  expect(values.get("integraq.managementReview.v1")).toBe(JSON.stringify(previous));
+  expect(() => saveLocalManagementReview(storage, previous, next)).toThrow();
+});

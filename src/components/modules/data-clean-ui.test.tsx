@@ -52,15 +52,19 @@ describe("dashboard Root2Cause y módulos vacíos", () => {
     expect(html).not.toContain("Registros retirados");
   });
 
+  it.each(["Cliente", "Proveedor", "Usuario interno"] as const)("impide abrir la revisión sin alcance (%s)", userType => {
+    const session = { ...activeSession, userType, assignedModuleIds: [] };
+    expect(renderToStaticMarkup(createElement(ManagementReviewModule, {
+      session, records: [], recordsReady: true, onRecordChange: vi.fn(),
+    }))).toBe("");
+  });
+
   it("presenta estados vacíos en Revisión, Mejora y Formularios", () => {
     const review = renderToStaticMarkup(createElement(ManagementReviewModule, {
-      records: [], onRecordsChange: vi.fn(), sources: {
-        session: activeSession, documents: [], actions: [], assets: [], indicators: [], indicatorResults: {},
-        supplierAudits: [], externalAudits: [], customers: [], suppliers: [], certifications: [],
-        rncpSummary: { total: 0, closed: 0, late: 0, inProcess: 0 },
-      },
+      records: [], onRecordChange: vi.fn(), session: activeSession, recordsReady: true,
     }));
-    expect(review).toContain("No hay revisiones registradas");
+    expect(review).toContain("Alcance de Dirección");
+    expect(review).toContain("Revisiones anteriores");
     expect(review).not.toMatch(/RPD-202[45]-01/);
 
     const improvement = renderToStaticMarkup(createElement(ContinuousImprovementModule, {

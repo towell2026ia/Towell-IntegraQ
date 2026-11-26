@@ -1,0 +1,36 @@
+.portal { display: grid; gap: 18px; min-width: 0; color: var(--ink); }
+.portal > button { justify-self: start; }
+.header, .group, .footer { border: 1px solid var(--line); border-radius: 12px; background: var(--surface, white); }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 24px; border-inline-start: 4px solid var(--green, #16806d); }
+.header h2 { margin: 0; font-size: clamp(1.35rem, 2vw, 1.85rem); }
+.header p { margin: 6px 0 0; color: var(--muted); }
+.year, .footer { display: flex; align-items: center; gap: 9px; }
+.year { font-weight: 650; font-size: .87rem; }
+.year select { background: white; color: inherit; border-radius: 7px; border: 1px solid var(--line); padding: 8px; font: inherit; }
+.groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.group { padding: 15px; min-width: 0; }
+.group h3 { margin: 0 0 13px; font-size: 1rem; }
+.group:first-child, .group:nth-last-child(-n+2) { grid-column: 1 / -1; }
+.cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; height: auto; grid-auto-rows: 1fr; }
+.group:first-child .cards, .group:nth-last-child(2) .cards { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.group:last-child .cards { grid-template-columns: repeat(3, minmax(0,1fr)); }
+.card { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--line); background: var(--paper,#fafbf9); border-radius: 8px; color: inherit; text-align: left; font: inherit; }
+button.card { cursor: pointer; background: white; }
+button.card:hover, button.card:focus-visible, .year select:focus-visible { border-color: var(--green,#16806d); outline: 2px solid var(--green,#16806d); outline-offset: 2px; }
+.icon { display: grid; place-items: center; flex: 0 0 30px; height: 30px; background: #e6f2ee; color: var(--green,#16806d); border-radius: 8px; }
+.copy { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.copy strong { font-size: .88rem; }
+.copy span, .footer span { color: var(--muted); font-size: .8rem; }
+.copy small { color: #4b655d; font-size: .72rem; margin-top: 4px; }
+.footer { padding: 12px 16px; flex-wrap: wrap; }
+.progress { width: 6rem; height: 4px; }
+@media (max-width: 1120px) {
+  .groups { grid-template-columns: 1fr; }
+  .group:first-child .cards, .group:nth-last-child(2) .cards { grid-template-columns: repeat(2,minmax(0,1fr)); }
+}
+@media (max-width: 650px) {
+  .header { align-items: flex-start; flex-direction: column; padding: 16px; }
+  .cards, .group:first-child .cards, .group:nth-last-child(2) .cards, .group:last-child .cards { grid-template-columns: 1fr; }
+  .group { padding: 12px; }
+  .portal { gap: 12px; }
+}

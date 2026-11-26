@@ -3,7 +3,7 @@
 import {
   AlertCircle,
   ArrowLeft,
-  Bot,
+  ChevronRight,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -12,38 +12,37 @@ import {
   Eye,
   FilePenLine,
   FileText,
-  History,
   LockKeyhole,
   Printer,
-  RefreshCcw,
   Save,
   Send,
-  ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import {
   approveManagementReviewAsOperations,
   approveManagementReviewAsSgc,
-  buildAnnualManagementReviewPeriod,
-  buildManagementReviewContext,
-  createManagementReviewRecord,
-  hasSourceChanges,
   type ManagementReviewAiDraft,
   type ManagementReviewApproval,
   type ManagementReviewRecord,
-  type ManagementReviewSources,
 } from "@/lib/management-review-data";
-import { ManagementReviewMinutes } from "./management-review-minutes";
-import type { ActiveSession } from "@/lib/session-data";
+import { ManagementReviewMinutes, useReviewMinutes } from "./management-review-minutes";
+import { canAccessModule } from "@/lib/access-policy";
+import { managementReviewGroups } from "@/lib/management-review-sections";
+import styles from "./management-review-portal.module.css";
+import { isExternalUser, type ActiveSession } from "@/lib/session-data";
 
 interface ManagementReviewModuleProps {
-  sources: ManagementReviewSources;
+  session: ActiveSession;
+  recordsReady: boolean;
+  sourcesChanged?: (record: ManagementReviewRecord) => boolean;
+  recordsError?: boolean;
+  onRetryRecords?: () => void;
   records: ManagementReviewRecord[];
-  onRecordsChange: (records: ManagementReviewRecord[]) => void;
+  onRecordChange: (previous: ManagementReviewRecord, next: ManagementReviewRecord) => void;
 }
 
 const reviewStatusLabels: Record<ManagementReviewRecord["status"], string> = {
@@ -52,66 +51,36 @@ const reviewStatusLabels: Record<ManagementReviewRecord["status"], string> = {
   operations_approved: "Cerrada",
 };
 
-export function ManagementReviewModule({
-  sources,
-  records,
-  onRecordsChange,
-}: ManagementReviewModuleProps) {
-  const period = useMemo(
-    () => buildAnnualManagementReviewPeriod(new Date().getFullYear()),
-    [],
-  );
-  const context = useMemo(
-    () => buildManagementReviewContext(sources, period),
-    [period, sources],
-  );
+export function ManagementReviewModule(props: ManagementReviewModuleProps) {
+  if (isExternalUser(props.session) || !canAccessModule(props.session, "management-review")) return null;
+  return <ManagementReviewWorkspace {...props} />;
+}
+
+function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords }: ManagementReviewModuleProps) {
+  const [period, setPeriod] = useState(() => new Date().getFullYear());
+  const [view, setView] = useState<"portal" | "history" | "attachments">("portal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState("");
+  const catalog = useReviewMinutes();
   const [editing, setEditing] = useState(false);
   const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(null);
+  const [saveError, setSaveError] = useState("");
   const [approvalComment, setApprovalComment] = useState("");
   const record = records.find((item) => item.id === selectedId) ?? null;
-  const currentRecord = records.find((item) => item.period.year === period.year) ?? null;
-
-  const displayedSources = record?.sourceSnapshot ?? context.sources;
-  const changedAfterGeneration = record?.period.year === period.year
-    ? hasSourceChanges(record, context)
-    : false;
-  const isAdministrator = sources.session.userType === "Administrador";
-  const isOperationsDirector = normalize(sources.session.position) === normalize("Dirección de Operaciones");
+  const displayedSources = record?.sourceSnapshot ?? [];
+  const isAdministrator = session.userType === "Administrador";
+  const isOperationsDirector = normalize(session.position) === normalize("Dirección de Operaciones");
   const connectedCount = displayedSources.filter((source) => source.status === "connected").length;
 
-  const generateReview = async () => {
-    if (currentRecord || generating || !isAdministrator) return;
-    setGenerating(true);
-    setError("");
-    try {
-      const response = await fetch("/api/ai/management-review", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ task: "management_review", context }),
-      });
-      const payload = (await response.json()) as ManagementReviewAiDraft & { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? "No fue posible generar la revisión.");
-      const created = createManagementReviewRecord(context, payload);
-      onRecordsChange([created, ...records]);
-      setSelectedId(created.id);
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error
-          ? requestError.message
-          : "No fue posible generar la revisión.",
-      );
-    } finally {
-      setGenerating(false);
-    }
-  };
-
   const updateRecord = (nextRecord: ManagementReviewRecord) => {
-    onRecordsChange(
-      records.map((item) => (item.id === nextRecord.id ? nextRecord : item)),
-    );
+    if (!record) return false;
+    try {
+      onRecordChange(record, nextRecord);
+      setSaveError("");
+      return true;
+    } catch {
+      setSaveError("No se pudo guardar el informe. Conserva tus cambios y comprueba la versión antes de reintentar.");
+      return false;
+    }
   };
 
   const startEditing = () => {
@@ -122,38 +91,38 @@ export function ManagementReviewModule({
 
   const saveDraft = () => {
     if (!record || !workingDraft) return;
-    updateRecord({
+    if (!updateRecord({
       ...record,
       draft: workingDraft,
       modifiedAt: new Date().toISOString(),
-    });
+    })) return;
     setEditing(false);
   };
 
   const approveAsSgc = () => {
     if (!record) return;
-    updateRecord(
+    if (!updateRecord(
       approveManagementReviewAsSgc(
         record,
-        sources.session,
+        session,
         approvalComment,
         new Date().toISOString(),
       ),
-    );
+    )) return;
     setApprovalComment("");
     setEditing(false);
   };
 
   const approveAsOperations = () => {
     if (!record) return;
-    updateRecord(
+    if (!updateRecord(
       approveManagementReviewAsOperations(
         record,
-        sources.session,
+        session,
         approvalComment,
         new Date().toISOString(),
       ),
-    );
+    )) return;
     setApprovalComment("");
   };
 
@@ -182,19 +151,43 @@ export function ManagementReviewModule({
   };
 
   if (!record) {
-    return (
-      <ManagementReviewIndex
-        currentRecord={currentRecord}
-        error={error}
-        generating={generating}
-        isAdministrator={isAdministrator}
-        onGenerate={generateReview}
-        onOpen={(id) => setSelectedId(id)}
-        periodLabel={period.label}
-        records={records}
-        session={sources.session}
-      />
-    );
+    const currentYear = new Date().getFullYear();
+    const years = [...new Set([currentYear, period, ...records.map(item => item.period.year),
+      ...catalog.files.map(item => Number(item.resourceKey))])]
+      .filter(year => Number.isInteger(year) && year >= 1900 && year <= currentYear)
+      .sort((left, right) => right - left);
+    return <div className={styles.portal}>
+      <header className={styles.header}>
+        <div><h2>{view === "portal" ? "Alcance de Dirección" : view === "history" ? "Revisiones anteriores" : "Evidencias y adjuntos"}</h2>
+          <p>{view === "portal" ? "Consulta los apartados del sistema de gestión para la revisión anual." :
+            view === "history" ? "Informes de este navegador y actas históricas del período." : "Archivos históricos de la revisión. Gestión de nuevos adjuntos prevista para RE-03."}</p></div>
+        <label className={styles.year}><CalendarDays size={16} />Período
+          <select value={period} onChange={event => setPeriod(Number(event.target.value))}>{years.map(year => <option key={year}>{year}</option>)}</select>
+        </label>
+      </header>
+      {recordsError && <p role="alert">No se pudieron leer los informes de este navegador. <button type="button" onClick={onRetryRecords}>Reintentar</button></p>}
+      {catalog.loading && <progress className={styles.progress} aria-label="Actualizando períodos" />}
+      {catalog.loadError && view === "portal" && <p role="alert">No se pudieron consultar los períodos de las actas. <button type="button" onClick={catalog.reload}>Reintentar</button></p>}
+      {view === "portal" ? <>
+        <div className={styles.groups}>{managementReviewGroups.map(group => <section key={group.group} className={styles.group}>
+          <h3>{group.group}</h3><div className={styles.cards}>{group.sections.map(section => {
+            const allowed = canAccessModule(session, section.module);
+            const target = section.view;
+            const available = allowed && (target === "history" || target === "attachments");
+            const body = <><span className={styles.icon}><section.icon size={19} /></span><span className={styles.copy}>
+              <strong>{section.title}</strong><span>{section.description}</span><small>{allowed ? section.availability : "Sin acceso"}</small>
+            </span>{available && <ChevronRight size={16} />}</>;
+            return available ? <button key={section.id} type="button" className={styles.card} onClick={() => setView(target)}>{body}</button> :
+              <div key={section.id} className={styles.card}>{body}</div>;
+          })}</div>
+        </section>)}</div>
+        <footer className={styles.footer}><button type="button" disabled className="button button-secondary"><Sparkles size={16} />Generar Revisión por la Dirección</button><span>Previsto para RE-05</span></footer>
+      </> : <>
+        <button className="button button-secondary" type="button" onClick={() => setView("portal")}><ArrowLeft size={16} />Alcance de Dirección</button>
+        {view === "history" && !recordsError && (recordsReady ? <ManagementReviewIndex records={records.filter(item => item.period.year === period)} onOpen={setSelectedId} /> : <progress aria-label="Cargando informes" />)}
+        <ManagementReviewMinutes key={period} session={session} period={period} catalog={catalog} />
+      </>}
+    </div>;
   }
 
   const draft = editing ? workingDraft : record?.draft;
@@ -210,33 +203,25 @@ export function ManagementReviewModule({
           </p>
         </div>
         <div className="module-heading-actions">
-          <button className="button button-secondary" type="button" onClick={() => { setSelectedId(null); setEditing(false); }}>
+          <button className="button button-secondary" type="button" onClick={() => { setSelectedId(null); setEditing(false); setSaveError(""); setApprovalComment(""); }}>
             <ArrowLeft size={16} />Historial
           </button>
           <span className={`management-review-status status-${record?.status ?? "not-generated"}`}>
             {record ? reviewStatusLabels[record.status] : "Sin generar"}
           </span>
-          {!record ? (
-            <button
-              className="button button-ai"
-              type="button"
-              disabled={!isAdministrator || generating}
-              onClick={generateReview}
-            >
-              {generating ? <RefreshCcw className="spin" size={16} /> : <Sparkles size={16} />}
-              {generating ? "Consolidando fuentes" : "Generar con IA"}
-            </button>
-          ) : null}
+
         </div>
       </div>
 
+      {sourcesChanged?.(record) && <p className="management-data-change"><AlertCircle size={16} />Hay cambios posteriores a la generación. El acta conserva las fuentes de su revisión.</p>}
+      {saveError && <p role="alert">{saveError}</p>}
       <section className="management-source-panel work-panel print-hidden">
         <header className="management-panel-heading">
           <div>
             <span className="module-kicker">Cobertura de evidencia</span>
             <h3>{connectedCount} de {displayedSources.length} fuentes integradas</h3>
           </div>
-          <span className="management-context-id"><Database size={14} /> {record?.contextFingerprint ?? context.fingerprint}</span>
+          <span className="management-context-id"><Database size={14} /> {record.contextFingerprint}</span>
         </header>
         <div className="management-source-grid">
           {displayedSources.map((source) => (
@@ -256,38 +241,7 @@ export function ManagementReviewModule({
             </div>
           ))}
         </div>
-        {changedAfterGeneration ? (
-          <div className="management-data-change">
-            <AlertCircle size={16} />
-            <div>
-              <strong>Hay cambios posteriores a la generación</strong>
-              <span>El expediente conserva la fotografía original para no alterar una revisión en autorización.</span>
-            </div>
-          </div>
-        ) : null}
       </section>
-
-      {error ? <div className="management-error print-hidden"><AlertCircle size={16} />{error}</div> : null}
-
-      {!record ? (
-        <section className="management-empty work-panel">
-          <div className="management-empty-icon"><Bot size={26} /></div>
-          <span className="module-kicker">{period.label}</span>
-          <h3>El expediente todavía no ha sido emitido</h3>
-          <p>
-            Al generarlo, la IA redactará el resumen y las ocho entradas de revisión con la información disponible. Las fuentes pendientes quedarán declaradas como limitaciones.
-          </p>
-          <div className="management-flow-preview">
-            <span><Sparkles size={15} />Generación única</span>
-            <i />
-            <span><ShieldCheck size={15} />Autoriza SGC</span>
-            <i />
-            <span><CheckCircle2 size={15} />Autoriza Operaciones</span>
-          </div>
-          {!isAdministrator ? <small>Solo el perfil Administrador puede generar este expediente.</small> : null}
-        </section>
-      ) : (
-        <>
           <section className="management-control-strip print-hidden">
             <div><FileText size={17} /><span><small>Expediente</small><strong>{record.id} / Rev. {record.revision}</strong></span></div>
             <div><Database size={17} /><span><small>Corte de información</small><strong>{formatDateTime(record.generatedAt)}</strong></span></div>
@@ -323,7 +277,7 @@ export function ManagementReviewModule({
             </header>
 
             <section className="management-report-meta">
-              <div><small>Empresa</small><strong>{sources.session.company}</strong></div>
+              <div><small>Empresa</small><strong>{session.company}</strong></div>
               <div><small>Preparó</small><strong>{record.generatedBy}</strong><span>{record.generatedByPosition}</span></div>
               <div><small>Periodo revisado</small><strong>{formatDate(record.period.startDate)} - {formatDate(record.period.endDate)}</strong></div>
               <div><small>Fuentes</small><strong>{connectedCount} integradas</strong><span>{displayedSources.length - connectedCount} pendientes</span></div>
@@ -472,72 +426,19 @@ export function ManagementReviewModule({
             </div>
           </section>
           )}
-        </>
-      )}
     </div>
   );
 }
 
-function ManagementReviewIndex({
-  currentRecord,
-  error,
-  generating,
-  isAdministrator,
-  onGenerate,
-  onOpen,
-  periodLabel,
-  records,
-  session,
-}: {
-  currentRecord: ManagementReviewRecord | null;
-  error: string;
-  generating: boolean;
-  isAdministrator: boolean;
-  onGenerate: () => void;
-  onOpen: (id: string) => void;
-  periodLabel: string;
+function ManagementReviewIndex({ records, onOpen }: {
   records: ManagementReviewRecord[];
-  session: ActiveSession;
+  onOpen: (id: string) => void;
 }) {
-  const orderedRecords = [...records].sort((left, right) => right.period.year - left.period.year);
-  const closedCount = records.filter((record) => record.status === "operations_approved").length;
-  const pendingCount = records.length - closedCount;
-
   return (
-    <div className="management-review-module management-review-index">
-      <div className="module-heading management-review-heading">
-        <div>
-          <span className="module-kicker">Gobierno del SGC</span>
-          <h2>Revisiones por la Dirección</h2>
-          <p>Historial anual de actas, responsables de validación y autorizaciones finales.</p>
-        </div>
-        <div className="module-heading-actions">
-          {!currentRecord ? (
-            <button className="button button-ai" type="button" disabled={!isAdministrator || generating} onClick={onGenerate}>
-              {generating ? <RefreshCcw className="spin" size={16} /> : <Sparkles size={16} />}
-              {generating ? "Consolidando fuentes" : `Generar ${periodLabel}`}
-            </button>
-          ) : (
-            <button className="button button-secondary" type="button" onClick={() => onOpen(currentRecord.id)}>
-              <Eye size={16} />Abrir revisión {currentRecord.period.year}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {error ? <div className="management-error"><AlertCircle size={16} />{error}</div> : null}
-
-      <section className="management-history-summary">
-        <div><History size={18} /><span><small>Expedientes</small><strong>{records.length}</strong></span></div>
-        <div><CheckCircle2 size={18} /><span><small>Cerrados</small><strong>{closedCount}</strong></span></div>
-        <div><Clock3 size={18} /><span><small>En autorización</small><strong>{pendingCount}</strong></span></div>
-        <div><CalendarDays size={18} /><span><small>Periodicidad</small><strong>Anual</strong></span></div>
-      </section>
-
       <section className="management-history-panel work-panel">
         <header className="management-panel-heading">
-          <div><span className="module-kicker">Archivo controlado</span><h3>Actas por año</h3></div>
-          <span className="management-context-id">{orderedRecords.length} registros</span>
+          <div><span className="module-kicker">Guardado en este navegador</span><h3>Informes del período</h3></div>
+          <span className="management-context-id">{records.length} registros</span>
         </header>
         <div className="management-history-table-wrap">
           <table className="management-history-table">
@@ -545,7 +446,7 @@ function ManagementReviewIndex({
               <tr><th>Año</th><th>Expediente</th><th>Estado</th><th>Validó</th><th>Aprobó</th><th>Fecha de cierre</th><th>Archivo</th></tr>
             </thead>
             <tbody>
-              {orderedRecords.map((record) => {
+              {records.map((record) => {
                 const validation = record.approvals[0];
                 const approval = record.approvals[1];
                 return (
@@ -560,13 +461,12 @@ function ManagementReviewIndex({
                   </tr>
                 );
               })}
-              {!orderedRecords.length ? <tr><td colSpan={7}>No hay revisiones registradas. Puedes generar la revisión actual o adjuntar un acta histórica.</td></tr> : null}
+              {!records.length ? <tr><td colSpan={7}>No hay informes guardados para este período en este navegador.</td></tr> : null}
             </tbody>
           </table>
         </div>
       </section>
-      <ManagementReviewMinutes session={session} />
-    </div>
+
   );
 }
 

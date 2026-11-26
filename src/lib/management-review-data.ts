@@ -345,6 +345,28 @@ export function createManagementReviewRecord(
   };
 }
 
+/** The v1 key held a single report. Reading it never migrates or clears the original. */
+export function readLocalManagementReviews(storage: Pick<Storage, "getItem">): ManagementReviewRecord[] {
+  const collection = storage.getItem("integraq.managementReviews.v2");
+  const legacy = collection === null ? storage.getItem("integraq.managementReview.v1") : null;
+  const records = collection !== null ? JSON.parse(collection) : legacy ? [JSON.parse(legacy)] : [];
+  if (!Array.isArray(records) || records.some(record => !record?.id || !Number.isInteger(record.period?.year))) {
+    throw new Error("No se pudieron leer los informes guardados.");
+  }
+  return records;
+}
+
+export function saveLocalManagementReview(storage: Pick<Storage, "getItem" | "setItem">,
+  previous: ManagementReviewRecord, next: ManagementReviewRecord) {
+  const stored = readLocalManagementReviews(storage);
+  const index = stored.findIndex(record => record.id === previous.id);
+  if (index < 0 || previous.id !== next.id || JSON.stringify(stored[index]) !== JSON.stringify(previous)) {
+    throw new Error("El informe cambió. Vuelve a abrirlo antes de guardar.");
+  }
+  stored[index] = next;
+  storage.setItem("integraq.managementReviews.v2", JSON.stringify(stored));
+}
+
 export function buildDemoManagementReviewHistory(): ManagementReviewRecord[] {
   return [2025, 2024].map((year) => buildClosedDemoReview(year));
 }
