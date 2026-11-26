@@ -36,7 +36,9 @@ sql(`insert into external_company_sites(id,company_id,code,name) values
  ('${site}','${supplier}','PORTAL-A','Synthetic A'),('${otherSite}','${supplier}','PORTAL-B','Synthetic B');
  update profiles set external_site_id='${site}',external_party_kind='supplier' where id='${member}';
  update auth.users set email='${email}' where id='${member}';
- update organizations set contact_email='${email}' where id='${supplier}';`);
+ update organizations set metadata=jsonb_set(metadata,'{supplierQualityContacts}',
+   jsonb_build_object('contacts',jsonb_build_array(jsonb_build_object('id','r5-ci','email','${email}','retired',false))))
+ where id='${supplier}';`);
 
 // Hold a barrier until pg_locks proves every worker is waiting in its own backend.
 async function race(commands) {
