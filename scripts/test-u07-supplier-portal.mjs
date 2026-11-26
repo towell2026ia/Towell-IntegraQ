@@ -62,7 +62,12 @@ try {
  alter table file_objects enable row level security;alter table storage.objects enable row level security;
  create function iq_supplier_audit_supplier_allowed(s uuid,o uuid) returns boolean language sql as $$select exists(select 1 from public.organizations where id=s and owning_organization_id=o and active) and exists(select 1 from public.profiles where id=auth.uid() and user_type in ('administrator','internal') and status='active' and organization_id=o)$$;
  create function iq_rncp_actor_org(boolean) returns uuid language sql as $$select organization_id from public.profiles where id=auth.uid() and user_type='administrator'$$;
- create function has_permission(text,uuid,uuid,text,uuid,boolean,uuid) returns boolean language sql as $$select true$$;
+ create table roles(id uuid primary key default gen_random_uuid(),code text unique,scope_type text,status text default 'active');
+ create table permissions(id uuid primary key default gen_random_uuid(),code text unique,status text default 'active');
+ create table user_roles(user_id uuid,role_id uuid,organization_id uuid,assigned_by uuid,area_id uuid,process_id text,status text default 'active', starts_at timestamptz default now(),ends_at timestamptz,unique(user_id,role_id,organization_id));
+ create table role_permissions(role_id uuid,permission_id uuid,allowed boolean default true);
+ create table user_permission_overrides(user_id uuid,permission_id uuid,allowed boolean);
+ create function is_administrator() returns boolean language sql stable as $$select exists(select 1 from public.profiles where id=auth.uid() and status='active' and user_type='administrator')$$;
  create function iq_rncp_read_scope(uuid) returns boolean language sql as $$select true$$;
  create function iq_rncp_save_response(p_action_id uuid,p_report_id uuid,p_payload jsonb) returns uuid language plpgsql as $$declare x uuid;begin
  if p_action_id is null then insert into public.supplier_rncp_actions(report_id,created_by) values(p_report_id,auth.uid()) returning id into x;
@@ -75,6 +80,14 @@ try {
     /CREATE FUNCTION public\.iq_supplier_audit_manual_portal_scope\(p_event uuid\)[\s\S]*?\$sql\$;/i,
   );
   assert.ok(scope);
+  const permissions = readFileSync(
+    "supabase/migrations/202609240002_transversal_evidence_permissions.sql", "utf8",
+  ).match(/create or replace function public\.has_permission\([\s\S]*?\$\$;/i);
+  assert.ok(permissions);
+  await db.exec(permissions[0]);
+  await db.exec(`insert into roles(code,scope_type) values('EXTERNAL_SUPPLIER','company');
+    insert into permissions(code) values('portal_proveedores.acceder');
+    insert into role_permissions(role_id,permission_id) select r.id,p.id from roles r cross join permissions p;`);
   await db.exec(scope[0]);
   await db.exec(
     readFileSync("docs/database/proposals/IQ-PROV-U07-R5.sql", "utf8"),
@@ -160,7 +173,36 @@ try {
     ]);
   const t = await issue("first");
   assert.equal(t.enroll, true);
+  const resolve = "select * from iq_supplier_portal_enrollment($1,$2)";
+  // A registered contact without an Auth identity can receive an invitation.
+  await q("reset role");
+  await q("update organizations set metadata=$2::jsonb where id=$1", [
+    a, JSON.stringify({supplierQualityContacts:{contacts:[{email:"new@example.invalid"}]}}),
+  ]);
+  await q("set role authenticated");
+  await q("select iq_supplier_portal_issue($1,$2,$3,$4)", [a, site, "new@example.invalid", sha("fresh")]);
+  await q("set role service_role");
+  assert.deepEqual((await q(resolve, [sha("fresh"), "new@example.invalid"])).rows, [
+    { supplier_id: a, email: "new@example.invalid", needs_account: true },
+  ]);
+  await q("reset role");
+  assert.equal(await value("select count(*)::int from auth.users where email='new@example.invalid'"), 0);
+  await q("set role authenticated");
+  const proof = [sha("first"), "one@example.invalid"];
+  await reject(resolve, proof);
+  await q("set role anon");
+  await reject(resolve, proof);
+  await q("set role service_role");
+  assert.deepEqual((await q(resolve, proof)).rows, [
+    { supplier_id: a, email: proof[1], needs_account: false },
+  ]);
+  assert.equal((await q(resolve, [proof[0], "two@example.invalid"])).rows.length, 0);
+  assert.equal((await q(resolve, [sha("wrong-code"), proof[1]])).rows.length, 0);
+  await q("set role authenticated");
   await q("select iq_supplier_portal_access($1,$2,'withdraw')", [a, t.id]);
+  await q("set role service_role");
+  assert.equal((await q(resolve, proof)).rows.length, 0);
+  await q("set role authenticated");
   await act(user);
   await reject("select iq_supplier_portal_accept($1,'Invitado')", [
     sha("first"),
@@ -194,12 +236,23 @@ try {
     [user],
   );
   await q("set role authenticated");
+  await q("reset role");
+  await q("insert into user_permission_overrides select $1,id,false from permissions", [user]);
+  await q("set role authenticated");
+  await reject("select iq_supplier_portal_accept($1,'Invitado')", [sha("usable")]);
+  await q("reset role");
+  assert.equal(await value("select count(*)::int from user_roles where user_id=$1",[user]), 0);
+  assert.equal(await value("select status from profiles where id=$1",[user]), "inactive");
+  await q("delete from user_permission_overrides where user_id=$1",[user]);
+  await q("set role authenticated");
   assert.equal(
     await value("select iq_supplier_portal_accept($1,'Invitado')", [
       sha("usable"),
     ]),
     a,
   );
+  assert.equal(await value("select has_permission('portal_proveedores.acceder',null,null,null,null,false,$1)", [a]), true);
+  assert.equal(await value("select has_permission('portal_proveedores.acceder',null,null,null,null,false,$1)", [b]), false);
   await reject("select iq_supplier_portal_accept($1,'Invitado')", [
     sha("usable"),
   ]);

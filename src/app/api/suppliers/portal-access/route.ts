@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { newInvitationProof } from "@/lib/supplier-audits/invitation-proof";
 import { rncpContext, RncpError } from "@/lib/rncp/server";
 import { auditContext, auditSuppliers } from "@/lib/supplier-audits/server";
 import { visibleSupplierContacts } from "@/lib/supplier-audits/contacts";
@@ -159,8 +159,7 @@ export async function POST(request: Request) {
         );
       return reply({ saved: true });
     }
-    const secret = randomBytes(32).toString("hex");
-    const digest = createHash("sha256").update(secret).digest("hex");
+    const { invite, code, digest } = newInvitationProof();
     const reservation = await ctx.supabase.rpc("iq_supplier_portal_issue", {
       p_supplier: supplier,
       p_site: site || null,
@@ -172,54 +171,13 @@ export async function POST(request: Request) {
         "Invitación",
         reservation.error.code === "42501" ? 403 : 409,
       );
-    const ticket = reservation.data;
-    try {
-      const fragment = new URLSearchParams({ invite: secret });
-      let verificationCode: string | undefined;
-      if (ticket.enroll) {
-        let uid = ticket.userId;
-        if (!uid) {
-          const created = await ctx.admin.auth.admin.createUser({
-            email,
-            email_confirm: false,
-            app_metadata: {
-              user_type: "supplier",
-              supplier_enrollment: supplier,
-            },
-          });
-          if (created.error) throw new RncpError("Cuenta", 409);
-          uid = created.data.user.id;
-        }
-        const identity = await ctx.admin.auth.admin.getUserById(uid);
-        if (
-          identity.error ||
-          identity.data.user.app_metadata.supplier_enrollment !== supplier
-        )
-          throw new RncpError("Identidad", 409);
-        const proof = await ctx.admin.auth.admin.generateLink({
-          type: "magiclink",
-          email,
-        });
-        if (proof.error || proof.data.user.id !== uid)
-          throw new RncpError("Confirmación", 409);
-        verificationCode = proof.data.properties.email_otp;
-        if (!verificationCode)
-          throw new RncpError("Confirmación no disponible", 409);
-        fragment.set("enroll", "1");
-      }
-      return reply({
-        path: "/portal/proveedor/registro#" + fragment.toString(),
-        verificationCode,
-        email,
-      });
-    } catch (e) {
-      await ctx.supabase.rpc("iq_supplier_portal_access", {
-        p_supplier: supplier,
-        p_id: ticket.id,
-        p_action: "withdraw",
-      });
-      throw e;
-    }
+    const fragment = new URLSearchParams({ invite });
+    if (reservation.data.enroll) fragment.set("enroll", "1");
+    return reply({
+      path: "/portal/proveedor/registro#" + fragment.toString(),
+      verificationCode: code,
+      email,
+    });
   } catch (e) {
     return failed(e);
   }

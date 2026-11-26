@@ -1,19 +1,14 @@
-import { createHash } from "node:crypto";
+import { invitationDigest } from "@/lib/supplier-audits/invitation-proof";
 import { createClient } from "@/lib/supabase/server";
 export async function POST(request: Request) {
   const input = await request.json().catch(() => null);
-  if (
-    !input ||
-    typeof input.invite !== "string" ||
-    !/^[a-f0-9]{64}$/.test(input.invite) ||
-    typeof input.name !== "string"
-  )
+  const digest = invitationDigest(input?.invite, input?.code);
+  if (!digest || typeof input?.name !== "string")
     return Response.json({ error: "Invitación inválida." }, { status: 400 });
   const db = await createClient();
   const result = await db.rpc("iq_supplier_portal_accept", {
-    p_digest: createHash("sha256").update(input.invite).digest("hex"),
+    p_digest: digest,
     p_name: input.name,
-    p_prepare: input.prepare === true,
   });
   return result.error
     ? Response.json(
@@ -24,7 +19,7 @@ export async function POST(request: Request) {
         { status: 403 },
       )
     : Response.json(
-        { accepted: input.prepare !== true },
+        { accepted: true },
         { headers: { "Cache-Control": "no-store" } },
       );
 }

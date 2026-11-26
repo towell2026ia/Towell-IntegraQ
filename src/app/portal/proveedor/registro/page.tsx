@@ -3,7 +3,6 @@ import { FormEvent, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 export default function SupplierRegistration() {
   const [ticket, setTicket] = useState<URLSearchParams | null>(null),
-    [verifiedEmail, setVerifiedEmail] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -18,47 +17,29 @@ export default function SupplierRegistration() {
       db = createClient(),
       email = String(fields.get("email")).trim().toLowerCase(),
       password = String(fields.get("password")),
-      enroll = ticket.get("enroll") === "1";
+      code = String(fields.get("code") ?? ""),
+      invite = ticket.get("invite");
     setBusy(true);
     setError("");
     try {
-      if (enroll && verifiedEmail !== email) {
-        const check = await db.auth.verifyOtp({
-          email,
-          token: String(fields.get("code") ?? "").trim(),
-          type: "email",
-        });
-        if (check.error || check.data.user?.email?.toLowerCase() !== email)
-          throw new Error(
-            "Comprueba el correo y la vigencia de la invitación.",
-          );
-        setVerifiedEmail(email);
-      } else if (!enroll) {
-        const login = await db.auth.signInWithPassword({ email, password });
-        if (login.error) throw new Error("Comprueba tus credenciales.");
-      }
-      async function accept(prepare: boolean) {
-        const response = await fetch("/api/suppliers/portal-access/accept", {
+      const submit = (step: "register" | "accept", payload: object) =>
+        fetch("/api/suppliers/portal-access/" + step, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            invite: ticket?.get("invite"),
-            prepare,
-            name: fields.get("name"),
-          }),
+          body: JSON.stringify({ invite, code, ...payload }),
         });
-        if (!response.ok)
-          throw new Error("Esta invitación no está disponible para tu cuenta.");
+      const registration = await submit("register", { email, password });
+      if (!registration.ok) {
+        const message = await registration.json().catch(() => null);
+        throw new Error(message?.error || "No se pudo comprobar la invitación.");
       }
-      if (enroll) {
-        await accept(true);
-        const saved = await db.auth.updateUser({ password });
-        if (saved.error)
-          throw new Error(
-            "No se confirmó la contraseña. Revisa sus requisitos y vuelve a intentarlo.",
-          );
+      const login = await db.auth.signInWithPassword({ email, password });
+      if (login.error) throw new Error("Comprueba la contraseña de tu cuenta.");
+      const acceptance = await submit("accept", { name: fields.get("name") });
+      if (!acceptance.ok) {
+        await db.auth.signOut({ scope: "local" });
+        throw new Error("Esta invitación ya no está disponible para tu cuenta.");
       }
-      await accept(false);
       window.location.replace("/");
     } catch (e) {
       setError(
@@ -83,17 +64,15 @@ export default function SupplierRegistration() {
               Correo invitado
               <input name="email" type="email" autoComplete="email" required />
             </label>
-            {ticket.get("enroll") === "1" && (
-              <label>
-                Código recibido en tu correo
-                <input
-                  name="code"
-                  autoComplete="one-time-code"
-                  inputMode="numeric"
-                  required
-                />
-              </label>
-            )}
+            <label>
+              Código recibido en tu correo
+              <input
+                name="code"
+                autoComplete="one-time-code"
+                spellCheck={false}
+                required
+              />
+            </label>
             <label>
               {ticket.get("enroll") === "1"
                 ? "Crear contraseña"

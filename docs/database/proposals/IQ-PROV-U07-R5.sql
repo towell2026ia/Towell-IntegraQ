@@ -77,7 +77,34 @@ begin
   return jsonb_build_object('id',ticket,'userId',known,'enroll',prof.external_party_id is null);
 end $$;
 
-create function public.iq_supplier_portal_accept(p_digest text,p_name text,p_prepare boolean default false) returns uuid
+-- Only the registration server can resolve the combined invitation and mailbox proof.
+create function public.iq_supplier_portal_enrollment(p_digest text,p_email text)
+returns table(supplier_id uuid,email text,needs_account boolean)
+language sql stable security definer set search_path='' as $$
+  select t.supplier_id,t.email,u.id is null
+  from public.supplier_portal_invitations t
+  join public.organizations tenant on tenant.id=t.organization_id and tenant.kind='internal'
+    and tenant.active and tenant.deleted_at is null
+  join public.organizations s on s.id=t.supplier_id and s.kind='supplier' and s.active and s.deleted_at is null
+  join public.profiles inviter on inviter.id=t.invited_by and inviter.organization_id=t.organization_id
+    and inviter.user_type='administrator' and inviter.status='active' and inviter.workspace_mode='production'
+  left join auth.users u on lower(u.email)=t.email
+  left join public.profiles p on p.id=u.id
+  where t.token_digest=p_digest and t.email=lower(trim(p_email))
+    and t.accepted_at is null and t.withdrawn_at is null and t.expires_at>now()
+    and (s.owning_organization_id=tenant.id or (s.owning_organization_id is null
+      and (select count(*) from public.organizations where kind='internal')=1))
+    and (t.site_id is null or exists(select 1 from public.external_company_sites site
+      where site.id=t.site_id and site.company_id=s.id and site.active))
+    and public.iq_supplier_portal_contact(s.id,t.email)
+    and (u.id is null or (p.user_type='supplier' and p.workspace_mode='production' and (
+      (p.status='inactive' and p.external_party_id is null and u.raw_app_meta_data->>'supplier_enrollment'=s.id::text)
+      or (p.status='active' and p.external_party_id=s.id and p.external_site_id is not distinct from t.site_id))))
+$$;
+revoke all on function public.iq_supplier_portal_enrollment(text,text) from public,anon,authenticated;
+grant execute on function public.iq_supplier_portal_enrollment(text,text) to service_role;
+
+create function public.iq_supplier_portal_accept(p_digest text,p_name text) returns uuid
 language plpgsql security definer set search_path='' as $$
 declare t public.supplier_portal_invitations%rowtype; p public.profiles%rowtype; u auth.users%rowtype; org uuid;
 begin
@@ -88,18 +115,19 @@ begin
     or length(trim(coalesce(p_name,''))) not between 2 and 160 then raise exception 'INVALID_INVITATION'; end if;
   select * into strict p from public.profiles where id=u.id for update;
   org:=t.organization_id;
-  if not exists(select 1 from public.organizations s join public.organizations tenant on tenant.id=org and tenant.kind='internal' and tenant.active and tenant.deleted_at is null
-    where s.id=t.supplier_id and s.active and s.deleted_at is null and s.kind='supplier'
-    and (s.owning_organization_id=org or (s.owning_organization_id is null and (select count(*) from public.organizations where kind='internal')=1))) or
-     not exists(select 1 from public.profiles where id=t.invited_by and organization_id=org and user_type='administrator' and status='active' and workspace_mode='production') or
-     (t.site_id is not null and not exists(select 1 from public.external_company_sites where id=t.site_id and company_id=t.supplier_id and active)) or
-     not public.iq_supplier_portal_contact(t.supplier_id,t.email) or p.user_type<>'supplier' or p.workspace_mode<>'production' then raise exception 'INVALID_INVITATION'; end if;
+  if not exists(select 1 from public.iq_supplier_portal_enrollment(p_digest,u.email)) then raise exception 'INVALID_INVITATION'; end if;
   if p.external_party_id is null and p.status='inactive' and u.raw_app_meta_data->>'supplier_enrollment'=t.supplier_id::text then
-    if p_prepare then return t.supplier_id; end if;
     if nullif(u.encrypted_password,'') is null then raise exception 'CREDENTIALS_REQUIRED'; end if;
     update public.profiles set full_name=trim(p_name),short_name=trim(p_name),external_party_kind='supplier',
       external_party_id=t.supplier_id,external_site_id=t.site_id,status='active' where id=p.id;
-  elsif p_prepare or p.external_party_id is distinct from t.supplier_id or p.external_site_id is distinct from t.site_id or p.status<>'active' then raise exception 'IDENTITY_CONFLICT'; end if;
+    insert into public.user_roles(user_id,role_id,organization_id,assigned_by)
+      select p.id,r.id,t.supplier_id,t.invited_by from public.roles r
+      where r.code='EXTERNAL_SUPPLIER' and r.scope_type='company' and r.status='active'
+      on conflict do nothing;
+  elsif p.external_party_id is distinct from t.supplier_id or p.external_site_id is distinct from t.site_id or p.status<>'active' then raise exception 'IDENTITY_CONFLICT'; end if;
+  if not public.has_permission('portal_proveedores.acceder',null,null,null,null,false,t.supplier_id) then
+    raise exception using errcode='42501',message='PORTAL_SCOPE';
+  end if;
   update public.supplier_portal_invitations set accepted_at=now(),accepted_by=u.id where id=t.id;
   insert into public.audit_log(actor_id,organization_id,module,action,resource_type,resource_id)
     values(u.id,org,'suppliers','supplier.portal.accepted','supplier_invitation',t.id::text);
@@ -121,8 +149,8 @@ begin
   insert into public.audit_log(actor_id,organization_id,module,action,resource_type,resource_id)
     values(auth.uid(),org,'suppliers','supplier.portal.'||p_action,'supplier_access',p_id::text);
 end $$;
-revoke all on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text,boolean),public.iq_supplier_portal_access(uuid,uuid,text) from public, anon;
-grant execute on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text,boolean),public.iq_supplier_portal_access(uuid,uuid,text) to authenticated;
+revoke all on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) from public, anon;
+grant execute on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) to authenticated;
 
 -- Actions are already part of manual_record. Only the association and its review are new.
 create table public.supplier_audit_portal_evidence (
