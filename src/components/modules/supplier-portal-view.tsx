@@ -566,7 +566,7 @@ export function Profile({
   category?: string;
   sites: string[];
   contacts:
-    | { name: string; email: string; phone?: string; purpose?: string }[]
+    | { id?: string; name: string; email: string; phone?: string; purpose?: string }[]
     | null;
 }) {
   return (
@@ -586,11 +586,11 @@ export function Profile({
       </Panel>
       <Panel title="Contactos autorizados">
         {contacts?.map((c) => (
-          <article className={css.record} key={c.email}>
+          <article className={css.record} key={c.id ?? c.email}>
             <div>
               <h4>{c.name || "Nombre sin registrar"}</h4>
               <p>{c.purpose}</p>
-              <p>{c.email}</p>
+              <p>{c.email || "Sin correo electrónico"}</p>
               {c.phone && <small>{c.phone}</small>}
             </div>
           </article>

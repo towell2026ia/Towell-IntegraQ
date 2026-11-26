@@ -74,9 +74,73 @@ async function previousOwnProfile(ctx: Awaited<ReturnType<typeof rncpContext>>, 
     contacts,
   });
 }
+async function adminDirectory(ctx: Awaited<ReturnType<typeof rncpContext>>, id: string) {
+  const [company, profiles, invites, sites] = await Promise.all([
+    ctx.admin
+      .from("organizations")
+      .select("id,contact_name,contact_email,metadata")
+      .eq("id", id)
+      .eq("kind", "supplier")
+      .eq("active", true)
+      .single(),
+    ctx.admin
+      .from("profiles")
+      .select("id,full_name,status,created_at")
+      .eq("external_party_id", id)
+      .eq("user_type", "supplier")
+      .eq("workspace_mode", "production"),
+    ctx.admin
+      .from("supplier_portal_invitations")
+      .select(
+        "id,email,site_id,created_at,expires_at,withdrawn_at,accepted_at,blocked_at",
+      )
+      .eq("supplier_id", id)
+      .eq("organization_id", ctx.organizationId)
+      .order("created_at", { ascending: false }),
+    ctx.admin
+      .from("external_company_sites")
+      .select("id,name")
+      .eq("company_id", id)
+      .eq("active", true),
+  ]);
+  if (company.error || profiles.error || sites.error) throw new RncpError("Consulta", 503);
+  const users = await Promise.all(
+    (profiles.data ?? []).map(async (p) => {
+      const identity = await ctx.admin.auth.admin.getUserById(p.id);
+      if (identity.error) throw new RncpError("Identidad", 503);
+      return {
+        ...p,
+        email: identity.data.user.email,
+        lastAccess: identity.data.user.last_sign_in_at,
+      };
+    }),
+  );
+  const contacts = (company.data?.metadata?.supplierQualityContacts ??
+    {}) as Partial<SupplierContacts>;
+  return {
+    users,
+    invitations: invites.data ?? [],
+    accessReady: !invites.error,
+    contacts: visibleSupplierContacts({
+      ...contacts,
+      qualityName: contacts.qualityName || company.data?.contact_name || "",
+      email: contacts.email ?? company.data?.contact_email ?? "",
+    }, true)
+      .filter((c) => !c.retired)
+      .map((c) => ({
+        id: c.id,
+        email: c.email?.trim() || "",
+        name: c.name,
+        phone: c.phone,
+        purpose: c.purpose?.trim() || c.position?.trim() || "",
+      })),
+    sites: sites.data,
+  };
+}
 export async function GET(request: Request) {
   try {
-    if (new URL(request.url).searchParams.has("self")) {
+    const params = new URL(request.url).searchParams;
+    if (params.has("self")) {
       const ctx = await rncpContext("view", true);
       if (!ctx.supplier || !ctx.profile.external_party_id) {
         throw new RncpError("Alcance", 403);
@@ -97,7 +161,7 @@ export async function GET(request: Request) {
       return reply(profile.data);
     }
     const ctx = await rncpContext("admin");
-    const contactSupplier = new URL(request.url).searchParams.get("contactSettings");
+    const contactSupplier = params.get("contactSettings");
     if (contactSupplier !== null) {
       const settings = await ctx.supabase.rpc("iq_supplier_contact_publication_settings", { p_supplier: contactSupplier });
       if (["PGRST202", "42883"].includes(settings.error?.code ?? "")) return reply({ available: false });
@@ -106,7 +170,7 @@ export async function GET(request: Request) {
       }
       return reply(settings.data);
     }
-    const id = new URL(request.url).searchParams.get("supplier");
+    const id = params.get("supplier");
     if (!id) {
       const rows = await auditSuppliers(await auditContext("admin"));
       return reply({
@@ -129,92 +193,36 @@ export async function GET(request: Request) {
         allowed.error && allowed.error.code !== "42501" ? 503 : 403,
       );
     }
-    const [company, profiles, invites, sites, reports, audits, assessments] =
-      await Promise.all([
-        ctx.admin
-          .from("organizations")
-          .select("id,contact_email,metadata")
-          .eq("id", id)
-          .eq("kind", "supplier")
-          .eq("active", true)
-          .single(),
-        ctx.admin
-          .from("profiles")
-          .select("id,full_name,status,created_at")
-          .eq("external_party_id", id)
-          .eq("user_type", "supplier")
-          .eq("workspace_mode", "production"),
-        ctx.admin
-          .from("supplier_portal_invitations")
-          .select(
-            "id,email,created_at,expires_at,withdrawn_at,accepted_at,blocked_at",
-          )
-          .eq("supplier_id", id)
-          .eq("organization_id", ctx.organizationId)
-          .order("created_at", { ascending: false }),
-        ctx.admin
-          .from("external_company_sites")
-          .select("id,name")
-          .eq("company_id", id)
-          .eq("active", true),
-        loadMatrixReports(ctx, undefined, true, undefined, id),
-        ctx.admin
-          .from("supplier_audit_events")
-          .select(
-            "id,planned_date,actual_date,state,withdrawn_at,manual_record",
-          )
-          .eq("organization_id", ctx.organizationId)
-          .eq("supplier_id", id),
-        ctx.admin
-          .from("supplier_assessments")
-          .select(
-            "id,assessment_date,score,classification,portal_visible,source_file_id",
-          )
-          .eq("supplier_id", id)
-          .is("audit_event_id", null),
-      ]);
-    if (
-      [company, profiles, sites, audits, assessments].some(
-        (x) => x.error,
-      )
-    ) {
-      throw new RncpError("Consulta", 503);
+    if (params.has("recipients")) {
+      return reply(await adminDirectory(ctx, id));
     }
-    const users = await Promise.all(
-      (profiles.data ?? []).map(async (p) => {
-        const identity = await ctx.admin.auth.admin.getUserById(p.id);
-        if (identity.error) throw new RncpError("Identidad", 503);
-        return {
-          ...p,
-          email: identity.data.user.email,
-          lastAccess: identity.data.user.last_sign_in_at,
-        };
-      }),
-    );
+    const [directory, reports, audits, assessments] = await Promise.all([
+      adminDirectory(ctx, id),
+      loadMatrixReports(ctx, undefined, true, undefined, id),
+      ctx.admin
+        .from("supplier_audit_events")
+        .select(
+          "id,planned_date,actual_date,state,withdrawn_at,manual_record",
+        )
+        .eq("organization_id", ctx.organizationId)
+        .eq("supplier_id", id),
+      ctx.admin
+        .from("supplier_assessments")
+        .select(
+          "id,assessment_date,score,classification,portal_visible,source_file_id",
+        )
+        .eq("supplier_id", id)
+        .is("audit_event_id", null),
+    ]);
+    if (audits.error || assessments.error) throw new RncpError("Consulta", 503);
     const counts = await auditEvidenceCounts(
       ctx,
       (audits.data ?? []).filter((a) =>
         a.manual_record?.record?.actions?.length
       ).map((a) => a.id),
     );
-    const contacts = (company.data?.metadata?.supplierQualityContacts ??
-      {}) as Partial<SupplierContacts>;
     return reply({
-      users,
-      invitations: invites.data ?? [],
-      accessReady: !invites.error,
-      contacts: visibleSupplierContacts({
-        ...contacts,
-        email: contacts.email || company.data?.contact_email || "",
-      })
-        .filter((c) => !c.retired && c.email)
-        .map((c) => ({
-          email: c.email,
-          name: c.name,
-          phone: c.phone,
-          purpose: c.purpose || c.position,
-        })),
-      sites: sites.data,
+      ...directory,
       reports,
       actions: await portalActionSummaries(ctx, reports.map((r) => r.id)),
       audits: (audits.data ?? []).map((a) => ({
@@ -261,7 +269,7 @@ export async function POST(request: Request) {
     const email = typeof body.email === "string"
       ? body.email.trim().toLowerCase()
       : "";
-    if (action !== "invite") {
+    if (action !== "invite" && action !== "reissue") {
       const result = await ctx.supabase.rpc("iq_supplier_portal_access", {
         p_supplier: supplier,
         p_id: id,
@@ -276,12 +284,14 @@ export async function POST(request: Request) {
       return reply({ saved: true });
     }
     const { invite, code, digest } = newInvitationProof();
-    const reservation = await ctx.supabase.rpc("iq_supplier_portal_issue", {
+    if (action === "reissue" && !id) throw new RncpError("Invitación", 409);
+    const reservation = await ctx.supabase.rpc("iq_supplier_portal_issue_selected", {
       p_supplier: supplier,
       p_site: site || null,
       p_email: email,
       p_digest: digest,
       p_link: invitationLocator(invite),
+      p_replace: action === "reissue" ? id : null,
     });
     if (reservation.error?.message === "REISSUE_LIMIT") {
       return reply({
@@ -298,6 +308,7 @@ export async function POST(request: Request) {
     const fragment = new URLSearchParams({ invite });
     if (reservation.data.enroll) fragment.set("enroll", "1");
     return reply({
+      id: reservation.data.id,
       path: "/portal/proveedor/registro#" + fragment.toString(),
       verificationCode: code,
       email,

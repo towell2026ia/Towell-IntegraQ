@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { SupplierActionEvidence } from "./supplier-action-evidence";
+import { invitationStatus, SupplierInvitationDialog, type PortalContact, type PortalInvitation } from "./supplier-invitation-dialog";
 import { getSupplierAssessmentFileUrl } from "@/lib/supplier-assessment-data";
 import dynamic from "next/dynamic";
 import { deriveLifecycle } from "@/lib/rncp/analytics";
@@ -37,15 +38,8 @@ type Detail = {
     created_at: string;
     lastAccess?: string;
   }[];
-  invitations: {
-    id: string;
-    email: string;
-    accepted_at?: string;
-    withdrawn_at?: string;
-    blocked_at?: string;
-    expires_at: string;
-  }[];
-  contacts: { email: string; name: string }[];
+  invitations: PortalInvitation[];
+  contacts: PortalContact[];
   sites: { id: string; name: string }[];
   accessReady: boolean;
   reports: MatrixReport[];
@@ -156,11 +150,7 @@ function CompanyPortal({
     [attempt, reload] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]),
-    [site, setSite] = useState(""),
-    [links, setLinks] = useState<
-      Record<string, { path: string; code?: string }>
-    >({});
+  const [links, setLinks] = useState<Record<string, { path: string; code: string }>>({});
   useEffect(() => {
     const c = new AbortController();
     access<Detail>("?supplier=" + encodeURIComponent(company.id), {
@@ -180,46 +170,61 @@ function CompanyPortal({
       });
     return () => c.abort();
   }, [company.id, attempt]);
-  async function command(action: string, id?: string, email?: string) {
-    return access<{ path?: string; verificationCode?: string }>("", {
+  async function openInvitations() {
+    setBusy(true);
+    setError("");
+    try {
+      const directory = await access<Pick<Detail, "contacts" | "sites" | "users" | "invitations" | "accessReady">>(
+        "?supplier=" + encodeURIComponent(company.id) + "&recipients=1",
+      );
+      setData(current => current && { ...current, ...directory });
+      setNow(Date.now());
+      setInvite(directory.accessReady);
+    } catch {
+      setError("No se pudieron actualizar los contactos. Vuelve a abrir la invitación.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function command(action: string, id?: string, email?: string, site?: string) {
+    return access<{ id?: string; path?: string; verificationCode?: string }>("", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, supplier: company.id, site, id, email }),
     });
   }
-  async function issue() {
+  async function issue(emails: string[], site: string, replaceId?: string): Promise<string[]> {
     if (
-      !selected.length ||
-      busy ||
-      !window.confirm(
-        "¿Crear invitaciones individuales para los contactos seleccionados?",
-      )
+      !emails.length || busy || !data?.accessReady ||
+      !window.confirm(replaceId
+        ? `¿Reemitir la invitación de ${emails[0]} e invalidar su enlace anterior?`
+        : "¿Crear invitaciones individuales para los contactos seleccionados?")
     ) {
-      return;
+      return [];
     }
     setBusy(true);
     setError("");
+    const issued: string[] = [];
+    const failures: string[] = [];
     try {
-      for (const email of selected) {
-        const r = await command("invite", undefined, email);
-        if (!r.path) throw new Error();
-        setLinks((old) => ({
-          ...old,
-          [email]: { path: r.path!, code: r.verificationCode },
-        }));
-        setSelected((old) => old.filter((x) => x !== email));
+      for (const email of emails) {
+        try {
+          const { id, path, verificationCode } = await command(replaceId ? "reissue" : "invite", replaceId, email, site);
+          if (!id || !path || !verificationCode) throw new Error();
+          setLinks(old => ({ ...old, [id]: { path, code: verificationCode } }));
+          issued.push(email);
+        } catch (cause) {
+          failures.push(email + " · " + (cause instanceof Error && cause.message === issuanceLimit
+            ? issuanceLimit : "Comprueba el estado de acceso antes de reintentar."));
+        }
       }
-      setInvite(false);
-    } catch (cause) {
-      setError(
-        cause instanceof Error && cause.message === issuanceLimit
-          ? issuanceLimit
-          : "No se completaron todas las invitaciones. Comprueba los estados antes de reintentar.",
-      );
+      if (failures.length) setError(failures.join(" "));
+      else setInvite(false);
     } finally {
       setBusy(false);
       reload((v) => v + 1);
     }
+    return issued;
   }
   async function openAssessment(id: string, download: boolean) {
     try {
@@ -243,7 +248,11 @@ function CompanyPortal({
     setError("");
     try {
       await command(action, id);
-      setLinks({});
+      if (action === "withdraw") setLinks(old => {
+        const next = { ...old };
+        delete next[id];
+        return next;
+      });
     } catch {
       setError("No se pudo modificar el acceso.");
     } finally {
@@ -534,8 +543,8 @@ function CompanyPortal({
           aside={
             <button
               className="button button-primary"
-              disabled={!data.accessReady}
-              onClick={() => setInvite(true)}
+              disabled={busy || !data.accessReady}
+              onClick={() => void openInvitations()}
             >
               Invitar usuario
             </button>
@@ -591,110 +600,63 @@ function CompanyPortal({
             )}
           <h4>Invitaciones</h4>
           {data.invitations.map((i) => {
-            const status = i.accepted_at
-              ? "Aceptada"
-              : i.withdrawn_at
-              ? "Revocada"
-              : i.blocked_at
-              ? "Bloqueada"
-              : Date.parse(i.expires_at) <= now
-              ? "Vencida"
-              : "Pendiente";
+            const status = invitationStatus(i, now);
+            const receipt = links[i.id];
+            const url = receipt && location.origin + receipt.path;
             return (
-              <p key={i.id}>
-                {i.email} · {status} {status === "Pendiente" && (
-                  <button
-                    className="button button-secondary"
-                    disabled={busy}
-                    onClick={() => void change("withdraw", i.id)}
-                  >
-                    Revocar invitación
-                  </button>
-                )}
-              </p>
+              <article key={i.id} className={css.record} aria-label={`Invitación de ${i.email}`}>
+                <div>
+                  <strong>{i.email}</strong> · {status}
+                  {status === "Pendiente" && (
+                    <div className={css.fileControls}>
+                      {receipt && <>
+                        {/^[\w.+-]+@[\w.-]+$/.test(i.email) && (
+                          <a className="button button-secondary" href={
+                            "mailto:" + encodeURIComponent(i.email) + "?subject=" +
+                            encodeURIComponent("Invitación al portal de " + company.name) + "&body=" +
+                            encodeURIComponent("Accede al portal de proveedores de IntegraQ con tu enlace individual:\n" + url +
+                              "\n\nRecibirás tu código de verificación por separado.")
+                          }>Preparar correo individual</a>
+                        )}
+                        <button className="button button-secondary" onClick={() =>
+                          void navigator.clipboard.writeText(url)
+                            .catch(() => setError("No se pudo copiar el enlace."))}>
+                          Copiar enlace
+                        </button>
+                        <button className="button button-secondary" onClick={() =>
+                          void navigator.clipboard.writeText(receipt.code)
+                            .catch(() => setError("No se pudo copiar el código."))}>
+                          Copiar código de verificación
+                        </button>
+                        <small>Entrega el enlace y el código por separado a {i.email}.</small>
+                      </>}
+                      <button className="button button-secondary" disabled={busy}
+                        onClick={() => void issue([i.email], i.site_id ?? "", i.id)}>
+                        Reemitir invitación
+                      </button>
+                      <button className="button button-secondary" disabled={busy}
+                        onClick={() => void change("withdraw", i.id)}>
+                        Revocar invitación
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </article>
             );
           })}
           {!data.invitations.length && (
             <Empty>Sin invitaciones registradas.</Empty>
           )}
           {invite && (
-            <Dialog
-              title="Invitar usuario"
+            <SupplierInvitationDialog
+              company={company} contacts={data.contacts} sites={data.sites}
+              invitations={data.invitations} users={data.users} now={now}
+              busy={busy || !data.accessReady} error={error} issue={issue}
               onClose={() => {
                 if (!busy) setInvite(false);
               }}
-            >
-              <fieldset disabled={busy || !data.accessReady}>
-                <label>
-                  Sucursal{" "}
-                  <select
-                    value={site}
-                    onChange={(e) => setSite(e.target.value)}
-                  >
-                    <option value="">Todo el proveedor</option>
-                    {data.sites.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {data.contacts.map((c) => (
-                  <label key={c.email}>
-                    <input
-                      type="checkbox"
-                      checked={selected.includes(c.email)}
-                      onChange={(e) =>
-                        setSelected(
-                          e.target.checked
-                            ? [...selected, c.email]
-                            : selected.filter((x) => x !== c.email),
-                        )}
-                    />
-                    {c.name} {c.email}
-                  </label>
-                ))}
-                <button
-                  className="button button-primary"
-                  disabled={!selected.length}
-                  onClick={() => void issue()}
-                >
-                  Crear invitaciones
-                </button>
-              </fieldset>
-              {error && <p role="alert">{error}</p>}
-            </Dialog>
+            />
           )}
-          {Object.entries(links).map(([email, invitation]) => (
-            <div key={email}>
-              <button
-                className="button button-secondary"
-                key={email}
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(location.origin + invitation.path)
-                    .catch(() => setError("No se pudo copiar el enlace."))}
-              >
-                Copiar invitación de {email}
-              </button>
-              {invitation.code && (
-                <>
-                  <button
-                    className="button button-secondary"
-                    onClick={() =>
-                      void navigator.clipboard
-                        .writeText(invitation.code!)
-                        .catch(() => setError("No se pudo copiar el código."))}
-                  >
-                    Copiar código de verificación
-                  </button>
-                  <small>
-                    Entrega el código por separado al correo registrado {email}.
-                  </small>
-                </>
-              )}
-            </div>
-          ))}
           {!data.accessReady && (
             <p>Administración de accesos pendiente de activación.</p>
           )}

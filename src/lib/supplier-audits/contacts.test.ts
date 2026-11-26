@@ -5,6 +5,13 @@ const first = { id: "legacy-primary", name: "Calidad", position: "Inspectora", e
 const second = { id: "legacy-alternate", name: "Compras", position: "", email: "compras@example.test", phone: "456", purpose: "Alterno", notifyRncp: false };
 
 describe("multiple supplier contacts", () => {
+  it("includes named historical contacts without email in the invitation directory and respects retirement", () => {
+    const directory = { notificationName: "Avisos", qualityName: "Inspección", alternateName: "Anterior",
+      contacts: [{ ...second, name: "Anterior", retired: true }] };
+    const rows = visibleSupplierContacts(directory, true).filter(contact => !contact.retired);
+    expect(rows.map(contact => [contact.name, contact.email])).toEqual([["Avisos", ""], ["Inspección", ""]]);
+    expect(visibleSupplierContacts(directory)).toEqual(directory.contacts);
+  });
   it("keeps retired contacts identifiable and excludes them from active RNCP selection", () => {
     expect(validateSupplierContacts([{ ...first, retired: true, notifyRncp: false }])[0]).toMatchObject({ id: first.id, retired: true, notifyRncp: false });
     expect(() => validateSupplierContacts([{ ...first, retired: true, notifyRncp: true }])).toThrow(/retirado/);

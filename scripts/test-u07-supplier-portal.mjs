@@ -93,6 +93,7 @@ try {
   await db.exec(
     readFileSync("docs/database/proposals/IQ-PROV-U07-R5.sql", "utf8"),
   );
+  await db.exec(readFileSync("docs/database/proposals/IQ-PROV-U07-R6.sql", "utf8"));
   await q(
     "insert into organizations(id,kind) values($1,'internal'),($2,'internal')",
     [org, otherOrg],
@@ -178,11 +179,27 @@ try {
   // A registered contact without an Auth identity can receive an invitation.
   await q("reset role");
   await q("update organizations set metadata=$2::jsonb where id=$1", [
-    a, JSON.stringify({supplierQualityContacts:{contacts:[{id:uuid(),name:"Anterior",position:"",purpose:"",phone:"",notifyRncp:false,email:"new@example.invalid"}]}}),
+    a, JSON.stringify({supplierQualityContacts:{contacts:["new@example.invalid", "selection@example.invalid"].map(email =>
+      ({id:uuid(),name:"Contacto",position:"",purpose:"",phone:"",notifyRncp:false,email}))}}),
   ]);
   await q("set role authenticated");
-  await q("select iq_supplier_portal_issue($1,$2,$3,$4,$5)", [a, site, "new@example.invalid", sha("code/fresh"), sha("fresh")]);
+  const selected = (email, key, replace = null) => value(
+    "select iq_supplier_portal_issue_selected($1,$2,$3,$4,$5,$6)",
+    [a, site, email, sha("code/" + key), sha(key), replace],
+  );
+  const freshEmailForSelection = "selection@example.invalid";
+  const initial = await selected(freshEmailForSelection, "initial");
+  await assert.rejects(selected(" Selection@Example.Invalid ", "duplicate"), /INVITATION_CHANGED/);
+  await selected(freshEmailForSelection, "replacement", initial.id);
+  await assert.rejects(selected(freshEmailForSelection, "stale", initial.id), /INVITATION_CHANGED/);
+  await assert.rejects(selected("absent@example.invalid", "unknown"), /CONTACT_REQUIRED/);
+  await selected("new@example.invalid", "fresh");
+  await q("set role anon");
+  await assert.rejects(selected(freshEmailForSelection, "anonymous"), /permission denied/);
   await q("set role service_role");
+  assert.equal((await q(resolve, [sha("initial"), sha("code/initial"), freshEmailForSelection])).rows.length, 0);
+  assert.equal((await q(resolve, [sha("replacement"), sha("code/fresh"), freshEmailForSelection])).rows.length, 0);
+  assert.equal((await q(resolve, [sha("replacement"), sha("code/replacement"), freshEmailForSelection])).rows[0].supplier_id, a);
   assert.deepEqual((await q(resolve, [sha("fresh"), sha("code/fresh"), "new@example.invalid"])).rows, [
     { supplier_id: a, email: "new@example.invalid", needs_account: true },
   ]);
@@ -577,6 +594,32 @@ try {
   await reject("select iq_supplier_portal_own_profile()");
   assert.equal(await value("select count(*)::int from organizations where id=$1",[b]),0);
   console.log("PASS U07-R5.2: complete SQL through COMMIT, existing data preserved, default private, authorized company/site access, rollback, revocation and R2 legacy edits.");
+  await q("reset role");
+  await q("update organizations set code='PR-01' where id=$1", [a]);
+  const companiesBefore = await value("select count(*) from organizations");
+  const people = [wide, privateContact].map(c => ({email:c.email, userId:uuid(), key:uuid()}));
+  await as(admin);
+  for (const person of people) await selected(person.email, person.key);
+  for (const person of people) {
+    await q("reset role");
+    await q("insert into profiles(id,status,user_type) values($1,'inactive','supplier')", [person.userId]);
+    await q(`insert into auth.users(id,email,email_confirmed_at,raw_app_meta_data,encrypted_password)
+      values($1,$2,now(),jsonb_build_object('supplier_enrollment',$3::text),'fixture')`,
+      [person.userId,person.email,a]);
+    await q("set role service_role");
+    const verifyIdentity = (actor) => q("select * from iq_supplier_portal_enrollment($1,$2,$3,$4)",
+      [sha(person.key),sha("code/"+person.key),person.email,actor]);
+    assert.equal((await verifyIdentity(second)).rows.length, 0);
+    assert.equal((await verifyIdentity(person.userId)).rows.length, 1);
+    await as(person.userId);
+    assert.equal(await value("select iq_supplier_portal_accept($1,'Contacto')",[sha(person.key)]), a);
+    assert.equal((await value("select iq_supplier_portal_own_profile(true)")).code, "PR-01");
+  }
+  await q("reset role");
+  assert.equal(await value("select count(*) from organizations"), companiesBefore);
+  assert.equal(await value("select count(distinct accepted_by)::int from supplier_portal_invitations where email=any($1) and supplier_id=$2",
+    [people.map(p=>p.email),a]), 2);
+  console.log("PASS U07-R6: two individual redemptions, one supplier and company code, independent proofs, duplicate and stale reissue rejected.");
 } finally {
   await db.close();
 }

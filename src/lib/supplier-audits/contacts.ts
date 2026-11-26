@@ -1,12 +1,26 @@
 import type { SupplierContactEntry, SupplierContacts } from "./model";
 
-const emailPattern = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
+export const supplierEmailPattern = /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/;
 const idPattern = /^(?:legacy-primary|legacy-alternate|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i;
 
-export function visibleSupplierContacts(value: Partial<SupplierContacts>): SupplierContactEntry[] {
+export function visibleSupplierContacts(value: Partial<SupplierContacts>, includeWithoutEmail = false): SupplierContactEntry[] {
   const entries: SupplierContactEntry[] = Array.isArray(value.contacts) ? [...value.contacts] : [];
-  if (value.email?.trim() && !entries.some(item => item.id === "legacy-primary" || item.email?.toLowerCase() === value.email?.trim().toLowerCase())) entries.unshift({ id: "legacy-primary", name: value.notificationName?.trim() || value.qualityName?.trim() || "", position: "", email: value.email.trim(), phone: value.phone?.trim() || "", purpose: "Notificaciones RNCP", notifyRncp: false });
-  if (value.alternateEmail?.trim() && !entries.some(item => item.id === "legacy-alternate" || item.email?.toLowerCase() === value.alternateEmail?.trim().toLowerCase())) entries.push({ id: "legacy-alternate", name: value.alternateName?.trim() || "", position: "", email: value.alternateEmail.trim(), phone: value.alternatePhone?.trim() || "", purpose: "Contacto alterno", notifyRncp: false });
+  function addLegacy(id: string, name: string, email: string, phone: string, purpose: string) {
+    if (!email && !(includeWithoutEmail && (name || phone))) return;
+    if (entries.some(item => item.id === id || (email
+      ? item.email?.trim().toLowerCase() === email.toLowerCase()
+      : name && item.name?.trim().toLowerCase() === name.toLowerCase()))) return;
+    const contact = { id, name, email, phone, purpose, position: "", notifyRncp: false };
+    if (id === "legacy-primary") entries.unshift(contact);
+    else entries.push(contact);
+  }
+  const qualityName = value.qualityName?.trim() || "";
+  const primaryName = value.notificationName?.trim() || qualityName;
+  addLegacy("legacy-primary", primaryName, value.email?.trim() || "", value.phone?.trim() || "", "Notificaciones RNCP");
+  addLegacy("legacy-alternate", value.alternateName?.trim() || "", value.alternateEmail?.trim() || "", value.alternatePhone?.trim() || "", "Contacto alterno");
+  if (includeWithoutEmail && qualityName && qualityName !== primaryName) {
+    addLegacy("legacy-quality", qualityName, "", "", "Calidad");
+  }
   return entries;
 }
 
@@ -19,7 +33,7 @@ export function validateSupplierContacts(input: unknown): SupplierContactEntry[]
     for (const key of ["id", "name", "position", "email", "phone", "purpose"]) if (typeof item[key] !== "string" || (item[key] as string).length > 500) throw new Error(`Contacto ${index + 1}: revisa ${key}.`);
     if (!idPattern.test(item.id as string) || ids.has(item.id as string)) throw new Error(`Contacto ${index + 1}: identificador repetido o no válido.`);
     const name = (item.name as string).trim(), email = (item.email as string).trim().toLowerCase();
-    if (!name || !emailPattern.test(email)) throw new Error(`Contacto ${index + 1}: nombre y correo válido son obligatorios.`);
+    if (!name || !supplierEmailPattern.test(email)) throw new Error(`Contacto ${index + 1}: nombre y correo válido son obligatorios.`);
     if (emails.has(email)) throw new Error(`El correo ${email} aparece más de una vez.`);
     if (typeof item.notifyRncp !== "boolean") throw new Error(`Contacto ${index + 1}: selecciona correctamente el propósito de notificación.`);
     if (item.retired !== undefined && typeof item.retired !== "boolean" || item.retired && item.notifyRncp) throw new Error("Un contacto retirado no puede seleccionarse para notificaciones.");
