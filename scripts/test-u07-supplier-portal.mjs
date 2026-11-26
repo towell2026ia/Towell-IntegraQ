@@ -31,6 +31,7 @@ async function reject(sql, args = []) {
       e.code === "42501" ||
       [
         "CONTACT_REQUIRED",
+        "REISSUE_LIMIT",
         "SITE_DENIED",
         "INVALID_INVITATION",
         "IDENTITY_CONFLICT",
@@ -153,52 +154,63 @@ try {
   await q("set role authenticated");
   await reject("select * from supplier_portal_invitations");
   await reject("select iq_supplier_portal_admin($1)", [b]);
-  await reject("select iq_supplier_portal_issue($1,$2,$3,$4)", [
+  await reject("select iq_supplier_portal_issue($1,$2,$3,$4,$5)", [
     a,
     siteB,
     "one@example.invalid",
-    sha("x"),
+    sha("code/x"), sha("x"),
   ]);
-  await reject("select iq_supplier_portal_issue($1,null,$2,$3)", [
+  await reject("select iq_supplier_portal_issue($1,null,$2,$3,$4)", [
     a,
     "other@example.invalid",
-    sha("bad"),
+    sha("code/bad"), sha("bad"),
   ]);
   const issue = (key, branch = null) =>
-    value("select iq_supplier_portal_issue($1,$2,$3,$4)", [
+    value("select iq_supplier_portal_issue($1,$2,$3,$4,$5)", [
       a,
       branch,
       "one@example.invalid",
-      sha(key),
+      sha("code/"+key), sha(key),
     ]);
   const t = await issue("first");
   assert.equal(t.enroll, true);
-  const resolve = "select * from iq_supplier_portal_enrollment($1,$2)";
+  const resolve = "select * from iq_supplier_portal_enrollment($1,$2,$3)";
   // A registered contact without an Auth identity can receive an invitation.
   await q("reset role");
   await q("update organizations set metadata=$2::jsonb where id=$1", [
     a, JSON.stringify({supplierQualityContacts:{contacts:[{email:"new@example.invalid"}]}}),
   ]);
   await q("set role authenticated");
-  await q("select iq_supplier_portal_issue($1,$2,$3,$4)", [a, site, "new@example.invalid", sha("fresh")]);
+  await q("select iq_supplier_portal_issue($1,$2,$3,$4,$5)", [a, site, "new@example.invalid", sha("code/fresh"), sha("fresh")]);
   await q("set role service_role");
-  assert.deepEqual((await q(resolve, [sha("fresh"), "new@example.invalid"])).rows, [
+  assert.deepEqual((await q(resolve, [sha("fresh"), sha("code/fresh"), "new@example.invalid"])).rows, [
     { supplier_id: a, email: "new@example.invalid", needs_account: true },
   ]);
   await q("reset role");
   assert.equal(await value("select count(*)::int from auth.users where email='new@example.invalid'"), 0);
   await q("set role authenticated");
-  const proof = [sha("first"), "one@example.invalid"];
+  const proof = [sha("first"), sha("code/first"), "one@example.invalid"];
   await reject(resolve, proof);
   await q("set role anon");
   await reject(resolve, proof);
   await q("set role service_role");
   assert.deepEqual((await q(resolve, proof)).rows, [
-    { supplier_id: a, email: proof[1], needs_account: false },
+    { supplier_id: a, email: proof[2], needs_account: false },
   ]);
-  assert.equal((await q(resolve, [proof[0], "two@example.invalid"])).rows.length, 0);
-  assert.equal((await q(resolve, [sha("wrong-code"), proof[1]])).rows.length, 0);
+  assert.equal((await q(resolve, [proof[0], proof[1], "two@example.invalid"])).rows.length, 0);
+  assert.equal((await q(resolve, [proof[0], sha("wrong-code"), proof[2]])).rows.length, 0);
+  assert.equal((await q("select * from iq_supplier_portal_enrollment($1,$2,$3,$4)",
+    [...proof, user])).rows.length, 1);
+  for (let i=0;i<3;i++) await q(resolve,[proof[0],null,proof[2]]);
   await q("set role authenticated");
+  await act(user);
+  // Even a session verified before the fifth failure cannot subsequently redeem.
+  await reject("select iq_supplier_portal_accept($1,'Invitado')",[proof[0]]);
+  // A provider may not replace its own invitation.
+  await reject("select iq_supplier_portal_issue($1,null,$2,$3,$4)", [
+    a, "one@example.invalid", sha("forbidden-code"), sha("forbidden-link"),
+  ]);
+  await act(admin);
   await q("select iq_supplier_portal_access($1,$2,'withdraw')", [a, t.id]);
   await q("set role service_role");
   assert.equal((await q(resolve, proof)).rows.length, 0);
@@ -208,12 +220,82 @@ try {
     sha("first"),
   ]);
   await act(admin);
+  const freshEmail = "new@example.invalid";
+  const freshLink = sha("fresh");
+  const freshCode = sha("code/fresh");
+  const failedCount = async () => {
+    await q("reset role");
+    const n = await value("select failed_attempts from supplier_portal_invitations where link_digest=$1", [freshLink]);
+    await q("set role service_role");
+    return n;
+  };
+  await q("set role service_role");
+  await q(resolve, [freshLink, null, freshEmail]);
+  assert.equal(await failedCount(), 1);
+  await act(second);
+  await q(resolve, [freshLink, sha("mistyped"), freshEmail]);
+  assert.equal(await failedCount(), 2);
+  await act(user);
+  await q("begin");
+  assert.equal((await q(resolve, [freshLink, freshCode, freshEmail])).rows.length, 1);
+  await q("commit");
+  // PGlite is single-backend. Verify the actual row-locking lookup's query plan
+  // as well as the final state of overlapping callers below.
+  const verifierBody = await value("select pg_get_functiondef('iq_supplier_portal_enrollment(text,text,text,uuid)'::regprocedure)");
+  const lookup = verifierBody.match(/select \* into t from public\.supplier_portal_invitations where link_digest=p_link for update/i);
+  assert.ok(lookup);
+  await q("reset role"); // The lookup runs with the SQL function owner's permissions.
+  const queryPlan = await q("explain (format json) "+lookup[0].replace(" into t","").replace("=p_link","=$1"),[freshLink]);
+  assert.match(JSON.stringify(queryPlan.rows), /"Node Type":"LockRows"/);
+  await q("set role service_role");
+  assert.equal(await failedCount(), 2);
+  await q(resolve, [freshLink, null, freshEmail]);
+  await q(resolve, [freshLink, null, freshEmail]);
+  assert.equal(await failedCount(), 4);
+  assert.equal((await q(resolve, [freshLink, freshCode, freshEmail])).rows.length, 1);
+  // Submit overlapping callers on the existing PGlite instance without sharing a JS counter.
+  const simultaneous = await Promise.all(Array.from({length:8}, () => q(resolve, [freshLink,null,freshEmail])));
+  assert.ok(simultaneous.every(r => r.rows.length===0));
+  assert.equal(await failedCount(), 5);
+  assert.equal((await q(resolve, [freshLink,freshCode,freshEmail])).rows.length, 0);
+  await q("reset role");
+  const events = await q(`select l.action,l.metadata from audit_log l join supplier_portal_invitations i
+    on l.resource_id=i.id::text where i.link_digest=$1 and l.action in ('supplier.portal.invalid_proof','supplier.portal.blocked')`,[freshLink]);
+  assert.deepEqual(events.rows.filter(x=>x.action.endsWith("invalid_proof")).map(x=>x.metadata.attempt).sort(),[1,2,3,4,5]);
+  assert.equal(events.rows.filter(x=>x.action.endsWith("blocked")).length,1);
+  assert.ok(events.rows.every(x=>!x.metadata || Object.keys(x.metadata).every(k=>k==="attempt")));
+  await q("set role authenticated");
+  await act(admin);
+  const reissue = key => q("select iq_supplier_portal_issue($1,null,$2,$3,$4)",[a,freshEmail,sha("code/"+key),sha(key)]);
+  await reissue("second");
+  await q("set role service_role");
+  assert.equal((await q(resolve,[freshLink,freshCode,freshEmail])).rows.length,0);
+  assert.equal((await q(resolve,[sha("second"),sha("code/second"),freshEmail])).rows.length,1);
+  await q("set role authenticated");
+  await reissue("third");
+  await assert.rejects(reissue("fourth"), /REISSUE_LIMIT/);
+  await q("reset role");
+  const lineage = await q(`select child.id, parent.withdrawn_at, child.replaces_id
+    from supplier_portal_invitations child join supplier_portal_invitations parent
+    on parent.id=child.replaces_id where child.link_digest=$1`,[sha("third")]);
+  assert.ok(lineage.rows[0].withdrawn_at);
+  await q("set role service_role");
+  assert.equal((await q(resolve,[sha("second"),sha("code/second"),freshEmail])).rows.length,0);
+  assert.equal((await q(resolve,[sha("third"),sha("code/third"),freshEmail])).rows.length,1);
+  await q("set role authenticated");
+  await q("select iq_supplier_portal_access($1,$2,'withdraw')", [a,lineage.rows[0].id]);
+  await assert.rejects(reissue("after-withdrawal"), /REISSUE_LIMIT/);
+  await q("set role service_role");
+  assert.equal((await q(resolve,[sha("third"),sha("code/third"),freshEmail])).rows.length,0);
+  await q("set role authenticated");
   const expired = await issue("expired");
   await q("reset role");
   await q(
     "update supplier_portal_invitations set expires_at=now()-interval '1 second' where id=$1",
     [expired.id],
   );
+  await q("set role service_role");
+  assert.equal((await q(resolve,[sha("expired"),sha("code/expired"),proof[2]])).rows.length,0);
   await q("set role authenticated");
   await act(user);
   await reject("select iq_supplier_portal_accept($1,'Invitado')", [
@@ -236,6 +318,12 @@ try {
     [user],
   );
   await q("set role authenticated");
+  await reject("select iq_supplier_portal_accept($1,'Invitado')", [sha("usable")]);
+  await q("set role service_role");
+  const confirmed = await q("select * from iq_supplier_portal_enrollment($1,$2,$3,$4)", [
+    sha("usable"), sha("code/usable"), "one@example.invalid", user,
+  ]);
+  assert.equal(confirmed.rows.length,1);
   await q("reset role");
   await q("insert into user_permission_overrides select $1,id,false from permissions", [user]);
   await q("set role authenticated");
@@ -245,12 +333,10 @@ try {
   assert.equal(await value("select status from profiles where id=$1",[user]), "inactive");
   await q("delete from user_permission_overrides where user_id=$1",[user]);
   await q("set role authenticated");
-  assert.equal(
-    await value("select iq_supplier_portal_accept($1,'Invitado')", [
-      sha("usable"),
-    ]),
-    a,
-  );
+  const redeem = () => value("select iq_supplier_portal_accept($1,'Invitado')", [sha("usable")]);
+  const redemptions = await Promise.allSettled([redeem(), redeem()]);
+  assert.deepEqual(redemptions.filter(x=>x.status==="fulfilled").map(x=>x.value),[a]);
+  assert.equal(redemptions.filter(x=>x.status==="rejected" && x.reason.message==="INVALID_INVITATION").length,1);
   assert.equal(await value("select has_permission('portal_proveedores.acceder',null,null,null,null,false,$1)", [a]), true);
   assert.equal(await value("select has_permission('portal_proveedores.acceder',null,null,null,null,false,$1)", [b]), false);
   await reject("select iq_supplier_portal_accept($1,'Invitado')", [
@@ -373,7 +459,7 @@ try {
   );
   assert.equal(await value("select count(*)::int from file_objects"), 4);
   console.log(
-    "PASS U07-R5: transaction, invitations, verified identity, company/site isolation, revocation, idempotent actions, audit evidence and administrative review (local fixtures).",
+    "PASS U07-R5.1: committed SQL, five persistent failures, LockRows plan, blocked redemption, reissue budget and lineage, single-use redemption, supplier/site isolation and original U07-R5 regressions (local PGlite).",
   );
 } finally {
   await db.close();

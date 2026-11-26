@@ -16,6 +16,7 @@ type Detail = {
     email: string;
     accepted_at?: string;
     withdrawn_at?: string;
+    blocked_at?: string;
     expires_at: string;
   }[];
   contacts: { email: string; name: string }[];
@@ -40,11 +41,14 @@ type Detail = {
     score: number | null;
   }[];
 };
+const issuanceLimit = "Se alcanzó el límite de tres emisiones para este correo en 24 horas.";
 async function access<T>(url: string, options: RequestInit = {}): Promise<T> {
   const r = await fetch("/api/suppliers/portal-access" + url, {
     cache: "no-store",
     ...options,
   });
+  if (r.status === 429)
+    throw new Error(issuanceLimit);
   if (!r.ok)
     throw new Error(
       "No se pudo completar la operación. Actualiza la consulta y comprueba tus permisos.",
@@ -193,9 +197,11 @@ function CompanyPortal({
         }));
         setSelected((old) => old.filter((x) => x !== email));
       }
-    } catch {
+    } catch (cause) {
       setError(
-        "No se completaron todas las invitaciones. Comprueba los estados antes de reintentar.",
+        cause instanceof Error && cause.message === issuanceLimit
+          ? issuanceLimit
+          : "No se completaron todas las invitaciones. Comprueba los estados antes de reintentar.",
       );
     } finally {
       setBusy(false);
@@ -364,7 +370,7 @@ function CompanyPortal({
           ? "Aceptada"
           : i.withdrawn_at
             ? "Revocada"
-            : Date.parse(i.expires_at) <= now
+            : i.blocked_at ? "Bloqueada" : Date.parse(i.expires_at) <= now
               ? "Vencida"
               : "Pendiente";
         return (

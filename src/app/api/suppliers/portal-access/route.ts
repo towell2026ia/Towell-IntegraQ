@@ -1,4 +1,4 @@
-import { newInvitationProof } from "@/lib/supplier-audits/invitation-proof";
+import { invitationLocator, newInvitationProof } from "@/lib/supplier-audits/invitation-proof";
 import { rncpContext, RncpError } from "@/lib/rncp/server";
 import { auditContext, auditSuppliers } from "@/lib/supplier-audits/server";
 import { visibleSupplierContacts } from "@/lib/supplier-audits/contacts";
@@ -65,7 +65,7 @@ export async function GET(request: Request) {
           .eq("workspace_mode", "production"),
         ctx.admin
           .from("supplier_portal_invitations")
-          .select("id,email,created_at,expires_at,withdrawn_at,accepted_at")
+          .select("id,email,created_at,expires_at,withdrawn_at,accepted_at,blocked_at")
           .eq("supplier_id", id)
           .eq("organization_id", ctx.organizationId)
           .order("created_at", { ascending: false }),
@@ -165,7 +165,10 @@ export async function POST(request: Request) {
       p_site: site || null,
       p_email: email,
       p_digest: digest,
+      p_link: invitationLocator(invite),
     });
+    if (reservation.error?.message === "REISSUE_LIMIT")
+      return reply({ error: "Se alcanzó el límite de tres emisiones para este correo en 24 horas." }, 429);
     if (reservation.error)
       throw new RncpError(
         "Invitación",

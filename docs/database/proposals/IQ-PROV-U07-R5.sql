@@ -7,15 +7,22 @@ create table public.supplier_portal_invitations (
   supplier_id uuid not null references public.organizations,
   site_id uuid references public.external_company_sites,
   email text not null,
+  link_digest text not null unique check (link_digest ~ '^[0-9a-f]{64}$'),
   token_digest text not null unique check (token_digest ~ '^[0-9a-f]{64}$'),
+  failed_attempts smallint not null default 0 check (failed_attempts between 0 and 5),
+  blocked_at timestamptz,
+  verified_for uuid references public.profiles,
+  replaces_id uuid references public.supplier_portal_invitations,
   invited_by uuid not null references public.profiles,
   created_at timestamptz not null default now(),
   expires_at timestamptz not null default now() + interval '24 hours',
   withdrawn_at timestamptz,
   accepted_at timestamptz,
-  accepted_by uuid references public.profiles
+  accepted_by uuid references public.profiles,
+  check ((blocked_at is not null) = (failed_attempts = 5))
 );
-create unique index supplier_portal_one_pending on public.supplier_portal_invitations(lower(email))
+create index supplier_portal_issue_history on public.supplier_portal_invitations(email,created_at desc);
+create unique index supplier_portal_one_pending on public.supplier_portal_invitations(supplier_id,lower(email))
 where withdrawn_at is null and accepted_at is null;
 alter table public.supplier_portal_invitations enable row level security;
 revoke all on public.supplier_portal_invitations from public, anon, authenticated;
@@ -51,15 +58,19 @@ begin
 end $$;
 revoke all on function public.iq_supplier_portal_contact(uuid,text) from public,anon,authenticated;
 
-create function public.iq_supplier_portal_issue(p_supplier uuid,p_site uuid,p_email text,p_digest text)
+create function public.iq_supplier_portal_issue(p_supplier uuid,p_site uuid,p_email text,p_digest text,p_link text)
 returns jsonb language plpgsql security definer set search_path='' as $$
 declare org uuid:=public.iq_supplier_portal_admin(p_supplier); dest text:=lower(trim(p_email));
-  s public.organizations%rowtype; known uuid; prof public.profiles%rowtype; ticket uuid;
+  s public.organizations%rowtype; known uuid; prof public.profiles%rowtype; ticket uuid; previous uuid;
 begin
   select * into strict s from public.organizations where id=p_supplier for share;
   if not public.iq_supplier_portal_contact(p_supplier,dest) then raise exception 'CONTACT_REQUIRED'; end if;
   if p_site is not null and not exists(select 1 from public.external_company_sites where id=p_site and company_id=p_supplier and active) then raise exception 'SITE_DENIED'; end if;
   perform pg_advisory_xact_lock(hashtextextended(dest,0));
+  -- The same allowance applies after withdrawal or a change of administrator/site.
+  if (select count(*) from public.supplier_portal_invitations where email=dest
+      and created_at>clock_timestamp()-interval '24 hours') >= 3 then raise exception 'REISSUE_LIMIT'; end if;
+  perform 1 from public.supplier_portal_invitations where email=dest and accepted_at is null and withdrawn_at is null for update;
   select id into known from auth.users where lower(email)=dest;
   if known is not null then
     select * into strict prof from public.profiles where id=known for update;
@@ -69,16 +80,19 @@ begin
         raw_app_meta_data->>'supplier_enrollment'=p_supplier::text))) then raise exception 'IDENTITY_CONFLICT'; end if;
   end if;
   if exists(select 1 from public.supplier_portal_invitations where email=dest and supplier_id<>p_supplier and withdrawn_at is null and accepted_at is null and expires_at>now()) then raise exception 'IDENTITY_CONFLICT'; end if;
-  update public.supplier_portal_invitations set withdrawn_at=now() where email=dest and accepted_at is null and withdrawn_at is null;
-  insert into public.supplier_portal_invitations(organization_id,supplier_id,site_id,email,token_digest,invited_by)
-    values(org,p_supplier,p_site,dest,p_digest,auth.uid()) returning id into ticket;
+  select id into previous from public.supplier_portal_invitations where email=dest and supplier_id=p_supplier
+    and organization_id=org order by created_at desc,id limit 1;
+  update public.supplier_portal_invitations set withdrawn_at=clock_timestamp()
+    where supplier_id=p_supplier and organization_id=org and email=dest and accepted_at is null and withdrawn_at is null;
+  insert into public.supplier_portal_invitations(organization_id,supplier_id,site_id,email,token_digest,link_digest,invited_by,replaces_id)
+    values(org,p_supplier,p_site,dest,p_digest,p_link,auth.uid(),previous) returning id into ticket;
   insert into public.audit_log(actor_id,organization_id,module,action,resource_type,resource_id)
-    values(auth.uid(),org,'suppliers','supplier.portal.invited','supplier_invitation',ticket::text);
+    values(auth.uid(),org,'suppliers',case when previous is null then 'supplier.portal.invited'
+      else 'supplier.portal.reissued' end,'supplier_invitation',ticket::text);
   return jsonb_build_object('id',ticket,'userId',known,'enroll',prof.external_party_id is null);
 end $$;
 
--- Only the registration server can resolve the combined invitation and mailbox proof.
-create function public.iq_supplier_portal_enrollment(p_digest text,p_email text)
+create function public.iq_supplier_portal_eligible(p_id uuid,p_email text)
 returns table(supplier_id uuid,email text,needs_account boolean)
 language sql stable security definer set search_path='' as $$
   select t.supplier_id,t.email,u.id is null
@@ -90,8 +104,8 @@ language sql stable security definer set search_path='' as $$
     and inviter.user_type='administrator' and inviter.status='active' and inviter.workspace_mode='production'
   left join auth.users u on lower(u.email)=t.email
   left join public.profiles p on p.id=u.id
-  where t.token_digest=p_digest and t.email=lower(trim(p_email))
-    and t.accepted_at is null and t.withdrawn_at is null and t.expires_at>now()
+  where t.id=p_id and t.email=lower(trim(p_email))
+    and t.blocked_at is null and t.accepted_at is null and t.withdrawn_at is null and t.expires_at>clock_timestamp()
     and (s.owning_organization_id=tenant.id or (s.owning_organization_id is null
       and (select count(*) from public.organizations where kind='internal')=1))
     and (t.site_id is null or exists(select 1 from public.external_company_sites site
@@ -101,21 +115,52 @@ language sql stable security definer set search_path='' as $$
       (p.status='inactive' and p.external_party_id is null and u.raw_app_meta_data->>'supplier_enrollment'=s.id::text)
       or (p.status='active' and p.external_party_id=s.id and p.external_site_id is not distinct from t.site_id))))
 $$;
-revoke all on function public.iq_supplier_portal_enrollment(text,text) from public,anon,authenticated;
-grant execute on function public.iq_supplier_portal_enrollment(text,text) to service_role;
+revoke all on function public.iq_supplier_portal_eligible(uuid,text) from public,anon,authenticated,service_role;
 
-create function public.iq_supplier_portal_accept(p_digest text,p_name text) returns uuid
+-- Wrong proofs return an empty result normally. Their transaction commits before Auth or redemption.
+create function public.iq_supplier_portal_enrollment(p_link text,p_digest text,p_email text,p_actor uuid default null)
+returns table(supplier_id uuid,email text,needs_account boolean)
+language plpgsql security definer set search_path='' as $$
+declare t public.supplier_portal_invitations%rowtype;
+begin
+  select * into t from public.supplier_portal_invitations where link_digest=p_link for update;
+  if t.id is null or t.blocked_at is not null or t.withdrawn_at is not null or t.accepted_at is not null
+    or t.expires_at<=clock_timestamp() then return; end if;
+  if t.token_digest is distinct from p_digest or t.email is distinct from lower(trim(p_email)) then
+    update public.supplier_portal_invitations set failed_attempts=t.failed_attempts+1,
+      blocked_at=case when t.failed_attempts=4 then clock_timestamp() end where id=t.id;
+    insert into public.audit_log(organization_id,module,action,resource_type,resource_id,metadata)
+      values(t.organization_id,'suppliers','supplier.portal.invalid_proof','supplier_invitation',t.id::text,
+        jsonb_build_object('attempt',t.failed_attempts+1));
+    if t.failed_attempts=4 then
+      insert into public.audit_log(organization_id,module,action,resource_type,resource_id)
+        values(t.organization_id,'suppliers','supplier.portal.blocked','supplier_invitation',t.id::text);
+    end if;
+    return;
+  end if;
+  return query select e.* from public.iq_supplier_portal_eligible(t.id,t.email) e
+    where p_actor is null or exists(select 1 from auth.users u where u.id=p_actor
+      and lower(u.email)=t.email and u.email_confirmed_at is not null);
+  if found and p_actor is not null then
+    update public.supplier_portal_invitations set verified_for=p_actor where id=t.id;
+  end if;
+end $$;
+revoke all on function public.iq_supplier_portal_enrollment(text,text,text,uuid) from public,anon,authenticated;
+grant execute on function public.iq_supplier_portal_enrollment(text,text,text,uuid) to service_role;
+
+create function public.iq_supplier_portal_accept(p_link text,p_name text) returns uuid
 language plpgsql security definer set search_path='' as $$
 declare t public.supplier_portal_invitations%rowtype; p public.profiles%rowtype; u auth.users%rowtype; org uuid;
 begin
-  select * into t from public.supplier_portal_invitations where token_digest=p_digest for update;
+  select * into t from public.supplier_portal_invitations where link_digest=p_link for update;
   select * into u from auth.users where id=auth.uid();
-  if t.id is null or t.expires_at<=now() or t.withdrawn_at is not null or t.accepted_at is not null
+  if t.id is null or t.expires_at<=clock_timestamp() or t.blocked_at is not null or t.withdrawn_at is not null or t.accepted_at is not null
+    or t.verified_for is null or t.verified_for is distinct from u.id
     or u.email_confirmed_at is null or lower(u.email) is distinct from t.email
     or length(trim(coalesce(p_name,''))) not between 2 and 160 then raise exception 'INVALID_INVITATION'; end if;
   select * into strict p from public.profiles where id=u.id for update;
   org:=t.organization_id;
-  if not exists(select 1 from public.iq_supplier_portal_enrollment(p_digest,u.email)) then raise exception 'INVALID_INVITATION'; end if;
+  if not exists(select 1 from public.iq_supplier_portal_eligible(t.id,u.email)) then raise exception 'INVALID_INVITATION'; end if;
   if p.external_party_id is null and p.status='inactive' and u.raw_app_meta_data->>'supplier_enrollment'=t.supplier_id::text then
     if nullif(u.encrypted_password,'') is null then raise exception 'CREDENTIALS_REQUIRED'; end if;
     update public.profiles set full_name=trim(p_name),short_name=trim(p_name),external_party_kind='supplier',
@@ -149,8 +194,8 @@ begin
   insert into public.audit_log(actor_id,organization_id,module,action,resource_type,resource_id)
     values(auth.uid(),org,'suppliers','supplier.portal.'||p_action,'supplier_access',p_id::text);
 end $$;
-revoke all on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) from public, anon;
-grant execute on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) to authenticated;
+revoke all on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) from public, anon;
+grant execute on function public.iq_supplier_portal_admin(uuid),public.iq_supplier_portal_issue(uuid,uuid,text,text,text),public.iq_supplier_portal_accept(text,text),public.iq_supplier_portal_access(uuid,uuid,text) to authenticated;
 
 -- Actions are already part of manual_record. Only the association and its review are new.
 create table public.supplier_audit_portal_evidence (

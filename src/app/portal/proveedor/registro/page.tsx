@@ -38,7 +38,7 @@ export default function SupplierRegistration() {
       const acceptance = await submit("accept", { name: fields.get("name") });
       if (!acceptance.ok) {
         await db.auth.signOut({ scope: "local" });
-        throw new Error("Esta invitación ya no está disponible para tu cuenta.");
+        throw new Error("Tu invitación ya no está disponible. Solicita una nueva al responsable de proveedores.");
       }
       window.location.replace("/");
     } catch (e) {
@@ -98,6 +98,9 @@ export default function SupplierRegistration() {
         <p>Abre el enlace de invitación que recibiste.</p>
       )}
       {error && <p role="alert">{error}</p>}
+      {error === "Verifica tu enlace y código de invitación." && (
+        <p>Si ya venció o agotaste los intentos, solicita una nueva invitación al responsable de proveedores.</p>
+      )}
     </main>
   );
 }

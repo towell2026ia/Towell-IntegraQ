@@ -1,5 +1,10 @@
 import { createHash, randomBytes } from "node:crypto";
 
+export function invitationLocator(invite: unknown) {
+  if (typeof invite !== "string" || !/^[a-f0-9]{64}$/.test(invite)) return null;
+  return createHash("sha256").update(invite).digest("hex");
+}
+
 export function invitationDigest(invite: unknown, code: unknown) {
   if (typeof invite !== "string" || !/^[a-f0-9]{64}$/.test(invite) ||
       typeof code !== "string" || code.length > 64) return null;
