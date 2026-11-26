@@ -48,6 +48,8 @@ jobs:
           node-version: 22
       - name: Test supplier audit proposal with deployed RNCP and legacy assessment definitions
         run: node scripts/test-supplier-audit-db.mjs
+      - name: Verify supplier portal with concurrent PostgreSQL connections in the same database
+        run: node scripts/test-u07-portal-concurrency.mjs
 
   rncp-database:
     name: Isolated RNCP history / RLS / lifecycle
