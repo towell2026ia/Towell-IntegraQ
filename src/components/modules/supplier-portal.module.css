@@ -321,6 +321,47 @@
 .dialog input[type=checkbox] {
   width: auto;
 }
+.inviteForm legend {
+  margin-bottom: .8rem;
+  font-weight: 650;
+}
+.inviteContacts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-block: 1px solid var(--line);
+  max-height: clamp(9rem, calc(85dvh - 20rem), 29rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dialog:has(.inviteForm) { width: min(600px, 94vw); }
+.inviteContacts li + li { border-top: 1px solid var(--line); }
+.dialog .inviteContacts label:has(input[type=checkbox]) {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: .65rem 0;
+  cursor: pointer;
+}
+.dialog .inviteContacts label:has(:disabled) { cursor: default; }
+.inviteContacts label > span:first-of-type { display: grid; gap: .2rem; }
+.inviteContacts label > .badge { max-width: 9rem; }
+.inviteForm input[type=checkbox] { accent-color: var(--accent); }
+.inviteFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .75rem;
+  font-size: .86rem;
+}
+.inviteFooter button:global(.button-primary) {
+  background: var(--primary);
+  color: white;
+}
+@media (max-width: 520px) {
+  .dialog .inviteContacts label:has(input[type=checkbox]) { grid-template-columns: auto minmax(0,1fr); }
+  .inviteContacts label > .badge { grid-column: 2; justify-self: start; }
+}
 .dialog label:has(input[type=checkbox]) {
   display: flex;
   align-items: center;

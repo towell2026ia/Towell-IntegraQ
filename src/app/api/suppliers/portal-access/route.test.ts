@@ -18,6 +18,45 @@ vi.mock("@/lib/rncp/server", () => ({
 vi.mock("@/lib/supplier-audits/server", () => ({}));
 const request = () =>
   GET(new Request("https://integraq.test/api/suppliers/portal-access?self=1"));
+describe("administrative invitation directory", () => {
+  const read = () => GET(new Request("https://integraq.test/api/suppliers/portal-access?supplier=company&recipients=1"));
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mock.context.mockResolvedValue({ organizationId: "org", supabase: { rpc: mock.rpc }, admin: { from: mock.from } });
+  });
+  it("requires access to the selected supplier before reading contacts", async () => {
+    mock.rpc.mockResolvedValue({ data: null, error: { code: "42501" } });
+    expect((await read()).status).toBe(403);
+    expect(mock.context).toHaveBeenCalledWith("admin");
+    expect(mock.rpc).toHaveBeenCalledWith("iq_supplier_portal_admin", {p_supplier:"company"});
+    expect(mock.from).not.toHaveBeenCalled();
+  });
+  it("projects all active contacts from the current dossier, including contacts without an address", async () => {
+    mock.rpc.mockResolvedValue({ data: "org" });
+    const contacts = [
+      { id: "a", name: "Ana", email: "a@example.invalid", position: "Supervisión" },
+      { id: "b", name: "Bruno", email: null, purpose: "Logística" },
+      { id: "c", name: "Retirado", retired: true, email: "old@example.invalid" },
+    ];
+    mock.from.mockImplementation((table: string) => {
+      const data = table === "organizations" ? { metadata: { supplierQualityContacts: { contacts } } } : [];
+      const chain = { select: () => chain, eq: () => chain, order: () => chain,
+        single: () => ({ data }), then: (resolve: (value: unknown) => void) => resolve({ data }) };
+      return chain;
+    });
+    const response = await read();
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.contacts).toEqual([
+      { id:"a", name:"Ana", email:"a@example.invalid", purpose:"Supervisión" },
+      { id:"b", name:"Bruno", email:"", purpose:"Logística" },
+    ]);
+    expect(result).not.toHaveProperty("reports");
+    expect(mock.from.mock.calls.map(([table]) => table)).toEqual([
+      "organizations", "profiles", "supplier_portal_invitations", "external_company_sites",
+    ]);
+  });
+});
 describe("supplier profile projection", () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -13,6 +13,7 @@ const { build } = await import(pathToFileURL(viteRequire.resolve("vite")).href);
 const root = process.cwd(), base = "91068cb97833f07686011b9af9a5427e70ef2284";
 const contactEditor = process.argv.includes("--contactos");
 const finalVisual = process.argv.includes("--ajustes-finales");
+const multiInvite = process.argv.includes("--destinatarios");
 const year = String(new Date().getFullYear()),
   previous = String(Number(year) - 1);
 const company = {
@@ -79,6 +80,7 @@ const profile = {
   category: company.category,
   sites: ["Planta Centro"],
   contacts: [{
+    id: "qa-quality",
     name: "Contacto de calidad",
     email: "calidad@example.invalid",
     phone: "Ext. 120",
@@ -363,7 +365,7 @@ async function checkFinalAdjustments(page, mobile, image) {
 const output = process.env.U07_VISUAL_DIR;
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 try {
-  for (const before of contactEditor || finalVisual ? [false] : [true, false]) {
+  for (const before of contactEditor || finalVisual || multiInvite ? [false] : [true, false]) {
     const assets = await bundle(before);
     for (const mobile of contactEditor ? [false] : [false, true]) {
       const page = await browser.newPage({
@@ -391,9 +393,28 @@ try {
         }
       };
       let savedContact;
+      const recipients = [
+        ["Ana", " ANA@example.invalid ", "Logística"],
+        ["Almacén", "ana@example.invalid", "Recibo"],
+        ["Bruno", "bruno@example.invalid", "Producción"],
+        ["Diana", "diana@example.invalid", "Compras"],
+        ["Elena", "", "Dirección"],
+        ["Luis", "luis@example.invalid", "Supervisión"],
+        ["Julia", "julia@example.invalid", "Calidad"],
+      ].map(([name, email, purpose], i) => ({ id: String(i), name, email, purpose }));
+      const posts = [];
+      const tickets = [{ id: "existing", email: "julia@example.invalid", site_id: null, expires_at: "2099-01-01" }];
       await page.route("**/*", async (route) => {
         const u = new URL(route.request().url());
         if (u.origin !== "https://integraq.test") return route.abort();
+        if (multiInvite && u.pathname.endsWith("/portal-access") && route.request().method() === "POST") {
+          const body = route.request().postDataJSON();
+          posts.push(body);
+          if (posts.length === 1) return route.fulfill({ status: 429, json: {} });
+          const id = "ticket-" + posts.length;
+          tickets.unshift({ id, email: body.email, site_id: body.site, expires_at: "2099-01-01" });
+          return route.fulfill({ json: { id, path: "/registro#" + id, verificationCode: "code-" + id } });
+        }
         if (contactEditor && u.pathname === "/api/suppliers/audits" && route.request().method() === "POST") {
           savedContact = route.request().postDataJSON();
           return route.fulfill({ json: { saved: true } });
@@ -431,11 +452,12 @@ try {
           const yes = u.searchParams.get("supplier") === company.id;
           return route.fulfill({
             json: {
-              users: [],
-              invitations: [],
+              users: multiInvite && yes ? [{ id: "user", full_name: "Luis", email: "luis@example.invalid", status: "active" }] : [],
+              invitations: multiInvite && yes ? tickets : [],
               accessReady: true,
-              contacts: yes ? profile.contacts : [],
-              sites: [],
+              contacts: !yes ? [] : !multiInvite ? profile.contacts
+                : u.searchParams.has("recipients") || posts.length ? recipients : [],
+              sites: multiInvite && yes ? [{id:"north", name:"Norte"}] : [],
               reports: !yes ? [] : before
                 ? reports.map((r) => ({
                   ...r,
@@ -492,6 +514,70 @@ try {
         return route.abort();
       });
       page.setDefaultTimeout(10000);
+      if (multiInvite) {
+        page.on("dialog", dialog => dialog.accept());
+        await page.goto("https://integraq.test/");
+        await page.getByRole("button", { name: "Seleccionar proveedor" }).click();
+        await page.getByRole("button", { name: /Textiles del Centro/ }).click();
+        const accessPage = page.getByRole("button", { name: "Usuarios con acceso", exact: true });
+        const openInvite = page.getByRole("button", { name: "Invitar usuario", exact: true });
+        await accessPage.click();
+        await openInvite.click();
+        const form = page.getByRole("dialog", { name: "Enviar invitación al portal" });
+        const send = form.getByRole("button", { name: "Crear invitaciones" });
+        const checkbox = name => form.getByRole("checkbox", { name });
+        assert.equal(await send.isDisabled(), true);
+        assert.equal(await checkbox(/Elena.*Sin correo electrónico/).isDisabled(), true);
+        assert.equal(await checkbox(/Luis.*Acceso activo/).isDisabled(), true);
+        assert.equal(await checkbox(/Julia.*Invitación pendiente/).isDisabled(), true);
+        await checkbox(/^Ana /).check();
+        await form.getByText("1 destinatario seleccionado", { exact: true }).waitFor();
+        assert.equal(await checkbox(/^Almacén /).isChecked(), true);
+        await checkbox(/^Bruno /).check();
+        await form.getByText("2 destinatarios seleccionados").waitFor();
+        const all = checkbox("Seleccionar todos los elegibles");
+        assert.equal(await all.evaluate(node => node.indeterminate), true);
+        await all.check();
+        await form.getByText("3 destinatarios seleccionados").waitFor();
+        await all.uncheck();
+        assert.equal(await send.isDisabled(), true);
+        await form.getByLabel("Sucursal").selectOption("north");
+        await all.check();
+        assert.ok(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+        const footer = await send.boundingBox();
+        const dialogBox = await form.boundingBox();
+        assert.ok(footer.y + footer.height <= dialogBox.y + dialogBox.height);
+        if (output) await page.screenshot({path: path.join(output, `U07-R6-${mobile ? "movil" : "escritorio"}.png`)});
+        await send.click();
+        await form.getByRole("alert").getByText(/ana@example.invalid.*tres emisiones/).waitFor();
+        await form.getByText("1 destinatario seleccionado", { exact: true }).waitFor();
+        await send.click();
+        await form.waitFor({state:"hidden"});
+        assert.deepEqual(posts.map(p => p.email), ["ana@example.invalid", "bruno@example.invalid", "diana@example.invalid", "ana@example.invalid"]);
+        assert.ok(posts.every(p => p.supplier === company.id && p.site === "north" && p.action === "invite"));
+        const receipt = page.getByRole("article", {name: "Invitación de diana@example.invalid"});
+        await receipt.getByText("Copiar código de verificación").waitFor();
+        const mail = new URL(await receipt.getByRole("link", { name: "Preparar correo individual" }).getAttribute("href"));
+        assert.equal(decodeURIComponent(mail.pathname), "diana@example.invalid");
+        assert.match(mail.searchParams.get("body"), /registro#ticket-3/);
+        assert.deepEqual([...mail.searchParams.keys()], ["subject", "body"]);
+        assert.doesNotMatch(mail.searchParams.get("body"), /code-ticket|ana@example|bruno@example/);
+        await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+        await receipt.getByRole("button", {name:"Copiar código de verificación"}).click();
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "code-ticket-3");
+        await receipt.getByRole("button", {name:"Copiar enlace"}).click();
+        assert.equal(await page.evaluate(() => navigator.clipboard.readText()), "https://integraq.test/registro#ticket-3");
+        await page.getByRole("button", {name:/PR-01 · Textiles/}).click();
+        await page.getByRole("button", {name:/Hilatura Norte/}).click();
+        await accessPage.click();
+        await openInvite.click();
+        await form.getByText("Sin contactos activos en el expediente.").waitFor();
+        assert.ok(await send.isDisabled());
+        assert.deepEqual(errors, []);
+        await page.close();
+        console.log("PASS U07-R6: multi-selection, same mailbox, eligibility, partial retry, private delivery, supplier switch · " + (mobile ? "mobile" : "desktop"));
+        continue;
+      }
       if (contactEditor) {
         await page.goto("https://integraq.test/");
         const publish = page.getByRole("checkbox", {name:"Mostrar este contacto en el Portal de Proveedores"});

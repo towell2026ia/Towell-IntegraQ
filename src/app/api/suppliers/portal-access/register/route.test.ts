@@ -37,10 +37,27 @@ it("issues only a reservation and two separate proofs, without creating an Auth 
   const url = new URL(result.path, "http://localhost");
   const invite = new URLSearchParams(url.hash.slice(1)).get("invite");
   expect(url.hash).not.toContain(result.verificationCode);
-  expect(m.asUser).toHaveBeenCalledWith("iq_supplier_portal_issue", expect.objectContaining({
+  expect(m.asUser).toHaveBeenCalledWith("iq_supplier_portal_issue_selected", expect.objectContaining({
+    p_replace: null,
     p_link: invitationLocator(invite), p_digest: invitationDigest(invite, result.verificationCode),
   }));
   expect(m.createUser).not.toHaveBeenCalled();
+});
+
+it("issues distinct private proofs for contacts of the same company and targets reissue by invitation", async () => {
+  m.asUser.mockResolvedValue({data:{id:"new",enroll:true}, error:null});
+  const first = await (await issue(request({action:"invite", supplier:"same", email:" A@example.invalid " }))).json();
+  const second = await (await issue(request({action:"reissue", id:"pending", supplier:"same", email:"b@example.invalid"}))).json();
+  expect(first.path).not.toEqual(second.path);
+  expect(first.verificationCode).not.toEqual(second.verificationCode);
+  expect(JSON.stringify(second)).not.toContain(first.verificationCode);
+  expect(second.path).not.toContain(second.verificationCode);
+  expect(m.asUser).toHaveBeenCalledWith("iq_supplier_portal_issue_selected", expect.objectContaining({
+    p_supplier:"same", p_email:"a@example.invalid", p_replace:null,
+  }));
+  expect(m.asUser).toHaveBeenCalledWith("iq_supplier_portal_issue_selected", expect.objectContaining({
+    p_supplier:"same", p_email:"b@example.invalid", p_replace:"pending",
+  }));
 });
 
 it("charges even malformed codes against the same invitation at both steps", async () => {

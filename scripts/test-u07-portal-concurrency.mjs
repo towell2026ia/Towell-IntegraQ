@@ -156,3 +156,21 @@ assert.equal(seesPeer(),"t");
 sql(asAdmin + `select iq_supplier_portal_access('${supplier}','${member}','revoke');`);
 assert.throws(()=>sql(asMember + 'select iq_supplier_portal_own_profile();'),/PORTAL_SCOPE/);
 console.log("PASS: contact package committed, supplier master private, live publication scope and revocation verified");
+
+sql(readFileSync("docs/database/proposals/IQ-PROV-U07-R6.sql", "utf8"));
+function issuePeer(replaces = null) {
+  const proof = ticket();
+  return asAdmin + `select iq_supplier_portal_issue_selected('${supplier}',null,'${peer.email}',
+    '${proof.digest}','${proof.link}',${replaces ? "'" + replaces + "'" : "null"})->>'id';`;
+}
+async function reserveOnce(replaces = null) {
+  const concurrent = await race([issuePeer(replaces), issuePeer(replaces)]);
+  const issued = concurrent.filter(result => result.status === 0);
+  assert.equal(issued.length, 1);
+  assert.equal(concurrent.filter(result => result.err.includes("INVITATION_CHANGED")).length, 1);
+  return issued[0].result;
+}
+const firstPeerInvitation = await reserveOnce();
+await reserveOnce(firstPeerInvitation);
+assert.equal(sql(`select count(*) from supplier_portal_invitations where email='${peer.email}';`), "2");
+console.log("PASS: concurrent selection and explicit reissue each reserve exactly one invitation");
