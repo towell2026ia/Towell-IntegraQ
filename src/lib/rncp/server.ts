@@ -189,21 +189,25 @@ export async function readAuthorizedReport(context: RncpContext, id: string) {
   return row;
 }
 
-export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false, timing?: (phase: string, ms: number) => void) {
+export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false, timing?: (phase: string, ms: number) => void, supplierId?: string) {
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
   const listStart = performance.now();
   let rows: ReportRow[];
   if (requestedId) {
     rows = [await readAuthorizedReport(context, requestedId)];
   } else {
+    const scoped = <T extends string>(selection:T, count=false) => {
+      const query=reportQuery(context, selection, count);
+      return supplierId ? query.eq("supplier_id",supplierId).is("deleted_at",null) : query;
+    };
     rows = await reportListRows<ReportRow>(
-      () => reportQuery(context, reportFields).order("id").limit(500),
-      last => reportQuery(context, "id").gt("id", last).order("id").limit(1),
-      () => paginatedRows<ReportRow>((from, to) => reportQuery(context, reportFields, true).order("id").range(from, to)),
+      () => scoped(reportFields).order("id").limit(500),
+      last => scoped("id").gt("id", last).order("id").limit(1),
+      () => paginatedRows<ReportRow>((from, to) => scoped(reportFields, true).order("id").range(from, to)),
     );
   }
   timing?.("reports", performance.now() - listStart);
-  if (!requestedId && rows.some(row => row.organization_id !== context.organizationId)) {
+  if (!requestedId && rows.some(row => row.organization_id !== context.organizationId || (supplierId && row.supplier_id!==supplierId))) {
     throw new RncpError("Expediente no autorizado.", 403);
   }
   const detail = Boolean(requestedId);
@@ -237,4 +241,82 @@ export async function readRncpSettings(context: RncpContext) {
   const defaults: RncpSettings = { alertRules: defaultAlertRules, inspectorIds: [], emailEnabled: false, semanticAiApproved: false, followupEnabled: false };
   return { settings: { ...defaults, ...(settingsRow?.payload ?? {}), emailEnabled: false } as RncpSettings,
     settingsRevision: settingsRow?.revision ?? 0, reviews: reviewsRow?.payload ?? {}, reviewsRevision: reviewsRow?.revision ?? 0 };
+}
+
+
+/** Summaries for authorized parent IDs only. File contents and private notes stay in the detail route. */
+export async function portalActionSummaries(
+  ctx: RncpContext,
+  reportIds: string[],
+) {
+  type Row = {
+    id: string;
+    report_id: string;
+    description: string;
+    responsible_name: string | null;
+    due_date: string | null;
+    executed_at: string | null;
+    status: string;
+    evidence: { count: number }[];
+  };
+  const rows: Row[] = [];
+  for (let i = 0; i < reportIds.length; i += 100) {
+    const batch = reportIds.slice(i, i + 100);
+    rows.push(
+      ...await paginatedRows<Row>((from, to) =>
+        ctx.supabase.from("supplier_rncp_actions")
+          .select(
+            "id,report_id,description,responsible_name,due_date,executed_at,status,evidence:supplier_rncp_action_evidence(count)",
+            { count: "exact" },
+          )
+          .in("report_id", batch).order("id").range(from, to)
+      ),
+    );
+  }
+  return rows.map((a) => ({
+    id: a.id,
+    parent: a.report_id,
+    description: a.description,
+    owner: a.responsible_name,
+    due: a.due_date,
+    completed: a.executed_at,
+    state: a.status,
+    files: a.evidence?.[0]?.count ?? null,
+  }));
+}
+
+/** Call only with audit events already authorized for this request. */
+export async function auditEvidenceCounts(
+  ctx: RncpContext,
+  eventIds: string[],
+) {
+  const counts = new Map<string, Set<string>>();
+  for (let i = 0; i < eventIds.length; i += 100) {
+    const ids = eventIds.slice(i, i + 100);
+    const files = await paginatedRows<
+      { id: string; event_id: string; action_key: string }
+    >((from, to) =>
+      ctx.admin
+        .from("supplier_audit_portal_evidence")
+        .select(
+          "id:file_id,event_id,action_key,file:file_objects!inner(workspace_id,resource_type,bucket_id,deleted_at)",
+          { count: "exact" },
+        )
+        .in("event_id", ids).eq("file.workspace_id", ctx.organizationId).eq(
+          "file.bucket_id",
+          "integraq-private",
+        )
+        .eq("file.resource_type", "supplier_audit_portal_evidence").is(
+          "file.deleted_at",
+          null,
+        )
+        .order("file_id").range(from, to)
+    );
+    for (const f of files) {
+      const key = f.event_id + ":" + f.action_key;
+      if (!counts.has(key)) counts.set(key, new Set());
+      counts.get(key)!.add(f.id);
+    }
+  }
+  return counts;
 }

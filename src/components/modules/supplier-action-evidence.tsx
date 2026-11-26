@@ -1,4 +1,6 @@
 "use client";
+import { Download, Eye, Paperclip } from "lucide-react";
+import css from "./supplier-portal.module.css";
 import { useEffect, useState } from "react";
 type Action = { id: string; description: string };
 type Item = {
@@ -11,24 +13,27 @@ type Item = {
 };
 const url = "/api/suppliers/portal-evidence";
 async function checked<T>(r: Response): Promise<T> {
-  if (!r.ok)
+  if (!r.ok) {
     throw new Error(
       "No se pudo completar la operación. Actualiza el expediente y comprueba tu acceso.",
     );
+  }
   return r.json();
 }
 export function SupplierActionEvidence({
   event,
   actions,
   review = false,
+  initialAction = "",
   onChange,
 }: {
   event: string;
   actions: Action[];
   review?: boolean;
+  initialAction?: string;
   onChange?: () => void;
 }) {
-  const [open, setOpen] = useState(false),
+  const [open, setOpen] = useState(Boolean(initialAction)),
     [rows, setRows] = useState<Item[] | null>(null),
     [refresh, reload] = useState(0),
     [error, setError] = useState(""),
@@ -43,11 +48,15 @@ export function SupplierActionEvidence({
     })
       .then((r) => checked<{ items: Item[] }>(r))
       .then((b) => {
-        if (!c.signal.aborted) setRows(b.items);
+        if (!c.signal.aborted) {
+          setRows(b.items);
+          setError("");
+        }
       })
       .catch(() => {
-        if (!c.signal.aborted)
+        if (!c.signal.aborted) {
           setError("No se pudieron consultar las evidencias.");
+        }
       });
     return () => c.abort();
   }, [event, open, refresh]);
@@ -93,9 +102,12 @@ export function SupplierActionEvidence({
       <button
         className="button button-secondary"
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          setRows(null);
+          setOpen(!open);
+        }}
       >
-        Evidencias de la auditoría
+        <Paperclip size={15} /> Evidencias de la auditoría
       </button>
       {open && (
         <>
@@ -112,31 +124,27 @@ export function SupplierActionEvidence({
           {rows
             ?.filter((i) => !filter || i.status === filter)
             .map((i) => (
-              <article key={i.id}>
+              <article key={i.id} className={css.attachment}>
                 <strong>{i.name}</strong>
                 <p>
                   {actions.find((a) => a.id === i.action)?.description} ·{" "}
-                  {i.date} ·{" "}
-                  {
-                    {
-                      pending: "Pendiente",
-                      accepted: "Aceptada",
-                      returned: "Devuelta",
-                    }[i.status]
-                  }{" "}
-                  {i.note}
+                  {i.date} · {{
+                    pending: "Pendiente",
+                    accepted: "Aceptada",
+                    returned: "Devuelta",
+                  }[i.status]} {i.note}
                 </p>
                 <button
                   className="button button-secondary"
                   onClick={() => void file(i, false)}
                 >
-                  Ver
+                  <Eye size={14} /> Ver
                 </button>{" "}
                 <button
                   className="button button-secondary"
                   onClick={() => void file(i, true)}
                 >
-                  Descargar
+                  <Download size={14} /> Descargar
                 </button>
                 {review && i.status === "pending" && (
                   <form
@@ -189,11 +197,13 @@ export function SupplierActionEvidence({
                 const f = new FormData(el);
                 void operation(async () => {
                   for (const entry of f.getAll("files")) {
-                    if (!(entry instanceof File) || !entry.size)
+                    if (!(entry instanceof File) || !entry.size) {
                       throw new Error("Selecciona un archivo.");
+                    }
                     const upload = new FormData();
-                    for (const field of ["action", "date"])
+                    for (const field of ["action", "date"]) {
                       upload.set(field, String(f.get(field)));
+                    }
                     upload.set("event", event);
                     upload.set("file", entry);
                     await checked(
@@ -207,7 +217,7 @@ export function SupplierActionEvidence({
               <div className="rncp-form-grid">
                 <label>
                   Acción
-                  <select name="action" required>
+                  <select name="action" defaultValue={initialAction} required>
                     <option value="">Seleccionar acción</option>
                     {actions.map((a) => (
                       <option key={a.id} value={a.id}>

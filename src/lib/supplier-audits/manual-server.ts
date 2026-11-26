@@ -1,3 +1,4 @@
+import {auditEvidenceCounts,rncpContext} from "@/lib/rncp/server";
 import "server-only";
 import { assertAuditWritable, auditContext, auditEvent, auditRpcError, SupplierAuditError, type AuditContext } from "./server";
 import { checkManualReferences, manualCommand, parseManualRecord, uuid, type ManualAuditSnapshot, type PortalAudit } from "./manual";
@@ -80,12 +81,96 @@ export async function supplierAuditPortalContext() {
 export async function readSupplierAuditPortal() {
   const context = await supplierAuditPortalContext();
   // Supplier/org/site come from the active DB profile; never from query parameters.
-  const result = await context.supabase.rpc("iq_supplier_audit_portal_list"); manualRpcError(result.error);
-  if (result.data?.version !== 1 || !Array.isArray(result.data.audits)) throw new SupplierAuditError("Consulta de auditorías no disponible.", 503);
+  const result = await context.supabase.rpc("iq_supplier_audit_portal_list");
+  manualRpcError(result.error);
+  if (result.data?.version !== 1 || !Array.isArray(result.data.audits)) {
+    throw new SupplierAuditError("Consulta de auditorías no disponible.", 503);
+  }
   const audits = result.data.audits as PortalAudit[];
-  if (audits.some(a => a.supplierId !== context.supplierId || !uuid(a.eventId) || a.files.some(f => f.resource_id !== a.eventId))) throw new SupplierAuditError("No se pudo verificar el alcance del portal.", 403);
+  if (
+    audits.some((a) =>
+      a.supplierId !== context.supplierId || !uuid(a.eventId) ||
+      a.files.some((f) => f.resource_id !== a.eventId)
+    )
+  ) {
+    throw new SupplierAuditError(
+      "No se pudo verificar el alcance del portal.",
+      403,
+    );
+  }
+  // Only enrich events already published by the portal RPC. The user's ordinary RLS
+  // client must independently authorize the date; never fill a missing row as admin.
+  const calendar = new Map<
+    string,
+    { planned_date: string | null; state: string }
+  >();
+  for (let i = 0; i < audits.length; i += 100) {
+    const ids = audits.slice(i, i + 100).map((a) => a.eventId);
+    const result = await context.supabase.from("supplier_audit_events").select(
+      "id,planned_date,state",
+    )
+      .eq("supplier_id", context.supplierId).in("id", ids).is(
+        "withdrawn_at",
+        null,
+      );
+    if (!result.error) {
+      for (const row of result.data ?? []) calendar.set(row.id, row);
+    }
+  }
+  const withActions = audits.filter((a) => a.actions.length).map((a) =>
+    a.eventId
+  );
+  let counts = new Map<string, Set<string>>();
+  if (withActions.length) {
+    const current = await rncpContext("view", true);
+    if (
+      !current.supplier ||
+      current.profile.external_party_id !== context.supplierId ||
+      current.session.authUserId !== context.session.authUserId ||
+      (current.profile.external_site_id ?? null) !==
+        (context.session.externalParty?.siteId ?? null)
+    ) throw new SupplierAuditError("Acceso no disponible.", 403);
+    counts = await auditEvidenceCounts(current, withActions);
+  }
   // Explicit projection prevents source_payload, internal notes and audit logs leaking.
-  return { audits: audits.map(a => ({ eventId: a.eventId, supplierId: a.supplierId, auditDate: a.auditDate, classification: a.classification, methodology: a.methodology, score: a.score, actions: a.actions.map(x => ({ id: x.id, description: x.description, responsibleName: x.responsibleName, commitmentDate: x.commitmentDate, status: x.status, completedDate: x.completedDate, evidenceFileIds: x.evidenceFileIds })), files: a.files.map(f => ({ id: f.id, resource_id: f.resource_id, resource_type: f.resource_type, original_name: f.original_name, version: f.version, is_current: f.is_current, created_at: f.created_at, size_bytes: f.size_bytes })) })) };
+  return {
+    scheduleAvailable: calendar.size === audits.length,
+    audits: audits.map((a) => ({
+      eventId: a.eventId,
+      plannedDate: calendar.get(a.eventId)?.planned_date ?? null,
+      state: calendar.get(a.eventId)?.state ??
+        (a.auditDate ? "performed" : undefined),
+      supplierId: a.supplierId,
+      auditDate: a.auditDate,
+      classification: a.classification,
+      methodology: a.methodology,
+      score: a.score,
+      actions: a.actions.map((x) => ({
+        id: x.id,
+        description: x.description,
+        responsibleName: x.responsibleName,
+        commitmentDate: x.commitmentDate,
+        status: x.status,
+        completedDate: x.completedDate,
+        evidenceFileIds: x.evidenceFileIds,
+        evidenceCount:
+          new Set([
+            ...x.evidenceFileIds,
+            ...(counts.get(a.eventId + ":" + x.id) ?? []),
+          ]).size,
+      })),
+      files: a.files.map((f) => ({
+        id: f.id,
+        resource_id: f.resource_id,
+        resource_type: f.resource_type,
+        original_name: f.original_name,
+        version: f.version,
+        is_current: f.is_current,
+        created_at: f.created_at,
+        size_bytes: f.size_bytes,
+      })),
+    })),
+  };
 }
 export async function supplierAuditPortalFile(eventId: string, fileId: string, download: boolean) {
   if (!uuid(eventId) || !uuid(fileId)) throw new SupplierAuditError("Documento no disponible.", 404);

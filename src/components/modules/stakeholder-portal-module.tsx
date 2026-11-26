@@ -11,7 +11,6 @@ import { rncpIdFromSearch } from "@/lib/rncp/link";
 import { followupCommand } from "@/lib/rncp/client";
 
 import {
-  CalendarDays,
   CheckCircle2,
   ClipboardCheck,
   FileCheck2,
@@ -26,11 +25,13 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { useRncpReports } from "@/hooks/use-rncp-reports";
 import { useSupplierAssessments } from "@/hooks/use-supplier-assessments";
-import { SupplierAuditPortal } from "./supplier-audit-portal";
+import { SupplierAuditPortal,usePortalAudits,PortalDocument,downloadPortalAuditFile } from "./supplier-audit-portal";
 import {
   resolvePortalCompany,
   type PortalCompany,
 } from "@/lib/portal-access";
+import { auditClassifications } from "@/lib/supplier-audits/manual";
+import type { SupplierAuditFile } from "@/lib/supplier-audits/model";
 import type { ActiveSession } from "@/lib/session-data";
 import { RncpEvidenceFile } from "./rncp-evidence-file";
 import { saveRncpResponseAction, uploadRncpEvidence, type RncpReport } from "@/lib/rncp-data";
@@ -39,6 +40,8 @@ import type { CorrectiveAction } from "@/lib/types";
 import { loadPublishedCorrectiveActions, type PublishedCorrectiveAction } from "@/lib/root-cause-publication";
 import portalStyles from "@/components/modules/stakeholder-portal.module.css";
 
+import { auditLabel,AuditTrends,ActionList,Dashboard,Empty,OwnProfile,Panel,PortalFrame,ReportList,inPeriod,type ActionItem,type Section } from "./supplier-portal-view";
+import { rncpEffectiveness } from "@/lib/rncp/effectiveness";
 type PortalKind = "customer" | "supplier";
 
 type CustomerPublication = { id: string; customer_id: string | null; display_name: string; description: string | null; version: number; status: "draft" | "published" | "withdrawn" | "superseded"; file_id: string; original_name?: string; size_bytes?: number; revision: number; withdrawal_reason?: string | null; created_at: string; published_at?: string | null; withdrawn_at?: string | null; created_by_name?: string; published_by_name?: string; withdrawn_by_name?: string };
@@ -274,18 +277,18 @@ function SupplierPortal({
   company: PortalCompany;
   actorId: string;
 }) {
-  const [view, setView] = useState<"rncp" | "audits" | "plans">(() =>
+  const [view, setView] = useState<Section>(() =>
     typeof window !== "undefined" && rncpIdFromSearch(window.location.search)
       ? "plans"
-      : "rncp",
+      : "home"
   );
   const [selectedReportId, setSelectedReportId] = useState(() =>
     typeof window === "undefined"
       ? ""
-      : rncpIdFromSearch(window.location.search),
+      : rncpIdFromSearch(window.location.search)
   );
   const [evidenceType, setEvidenceType] = useState(() =>
-    selectedReportId ? "rncp" : "",
+    selectedReportId ? "rncp" : ""
   );
   const [evidenceRevision, setEvidenceRevision] = useState(0);
   const [selectedAction, setSelectedAction] = useState<string | null>(null);
@@ -296,8 +299,16 @@ function SupplierPortal({
   const [saving, setSaving] = useState(false);
   const rncpDirectory = useRncpReports(true, "portal");
   const [year, setYear] = useState(() => String(new Date().getFullYear()));
-  const [auditDates, setAuditDates] = useState<string[]>([]);
-  const assessmentDirectory = useSupplierAssessments(view === "audits");
+  const auditDirectory = usePortalAudits(company.companyId);
+  const [profileDoc, setProfileDoc] = useState<
+    { event: string; file: SupplierAuditFile } | null
+  >(null);
+  const [selectedEvent, setSelectedEvent] = useState("");
+  const [auditAction, setAuditAction] = useState("");
+  const auditDates = (auditDirectory.audits ?? []).flatMap((a) =>
+    [a.auditDate ?? a.plannedDate].filter((d): d is string => !!d)
+  );
+  const assessmentDirectory = useSupplierAssessments(true);
   const allReports = rncpDirectory.reports.filter(
     (report) =>
       !report.deletedAt &&
@@ -314,8 +325,7 @@ function SupplierPortal({
     detailId,
   );
   const selectedReport = detail.reports.find((r) => r.id === detailId);
-  const actionId =
-    selectedAction ??
+  const actionId = selectedAction ??
     selectedReport?.actions.find(
       (a) =>
         a.createdBy === actorId &&
@@ -332,7 +342,7 @@ function SupplierPortal({
     new Set([
       String(new Date().getFullYear()),
       ...allReports.flatMap((r) =>
-        r.reportDate ? [r.reportDate.slice(0, 4)] : [],
+        r.reportDate ? [r.reportDate.slice(0, 4)] : []
       ),
       ...assessments.map((a) => a.assessmentDate.slice(0, 4)),
       ...auditDates.map((d) => d.slice(0, 4)),
@@ -340,19 +350,82 @@ function SupplierPortal({
   )
     .sort()
     .reverse();
-  const states = reports.map((r) => reportOperationalState(r));
-  const closed = states.filter((s) => s === "closed").length,
-    late = states.filter((s) => s === "late").length;
-  const nextCommitment = reports
-    .filter((report) => report.responseDueDate && report.status !== "closed")
-    .sort((left, right) =>
-      (left.responseDueDate ?? "").localeCompare(right.responseDueDate ?? ""),
-    )[0];
-
-  const [readOnlyDetail,setReadOnlyDetail]=useState(false);
-  function openReport(id:string,readOnly:boolean){
-    setSelectedReportId(id);setReadOnlyDetail(readOnly);setFiles([]);setRequestId(crypto.randomUUID());
-    setSelectedAction(null);setEvidenceType("rncp");setView("plans");setError("");setNotice("");
+  const records = reports.map((r) => ({
+    id: r.id,
+    folio: r.folio,
+    date: r.reportDate,
+    description: r.description,
+    classification: r.classification,
+    state: reportOperationalState(r),
+    deadline: r.responseDeadline ?? r.responseDueDate,
+    progress: r.firstValidProgressAt,
+    returned: r.validationOutcome === "rejected" && !r.closedAt,
+    awaitingResponse: r.origin === "native" && !!r.notifiedAt &&
+      !r.completeSubmittedAt && !r.closedAt,
+    draft: r.status === "draft",
+  }));
+  const audits =
+    auditDirectory.audits?.filter((a) =>
+      inPeriod(a.auditDate ?? a.plannedDate, year)
+    ).map(
+      (a) => ({
+        id: a.eventId,
+        date: a.auditDate ?? a.plannedDate ?? null,
+        state: a.state ?? (a.auditDate ? "performed" : "unknown"),
+        method: a.methodology,
+        score: a.score,
+      }),
+    ) ?? null;
+  const allActions: ActionItem[] = [
+    ...allReports.flatMap((r) =>
+      (r.portalActions ?? []).map((a) => ({
+        ...a,
+        origin: "RNCP" as const,
+        folio: r.folio,
+        date: r.reportDate,
+      }))
+    ),
+    ...(auditDirectory.audits ?? []).flatMap((a) =>
+      a.actions.map((x) => ({
+        id: x.id,
+        parent: a.eventId,
+        origin: "Auditoría" as const,
+        folio: "Auditoría · " + (a.auditDate ?? "Sin fecha"),
+        date: a.auditDate ?? a.plannedDate ?? null,
+        description: x.description,
+        owner: x.responsibleName,
+        due: x.commitmentDate,
+        completed: x.completedDate,
+        state: x.status,
+        files: x.evidenceCount,
+      }))
+    ),
+  ];
+  const openAudit = (id: string, action = "") => {
+    setAuditAction(action);
+    setSelectedEvent(id);
+    setView("plans");
+    setEvidenceType("audit");
+  };
+  const openAction = (a: ActionItem) => {
+    if (a.origin === "RNCP") {
+      openReport(a.parent, false);
+      setSelectedAction(a.id);
+    } else openAudit(a.parent, a.id);
+  };
+  const actionsReady = !rncpDirectory.loading && !rncpDirectory.error &&
+    auditDirectory.audits !== null;
+  const [readOnlyDetail, setReadOnlyDetail] = useState(false);
+  function openReport(id: string, readOnly: boolean) {
+    setSelectedReportId(id);
+    setReadOnlyDetail(readOnly);
+    setFiles([]);
+    setRequestId(crypto.randomUUID());
+    setSelectedAction(null);
+    setEvidenceType("rncp");
+    setView("plans");
+    setError("");
+    setNotice("");
   }
   async function submitPlan(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -363,19 +436,22 @@ function SupplierPortal({
     const element = event.currentTarget;
     const form = new FormData(element);
     try {
-      if (files.length && !form.get("executedAt"))
+      if (files.length && !form.get("executedAt")) {
         throw new Error(
           "Indica la fecha de cumplimiento para adjuntar evidencias.",
         );
-      if (selectedReport.origin === "historical")
+      }
+      if (selectedReport.origin === "historical") {
         throw new Error(
           "El registro importado conserva su seguimiento histórico.",
         );
+      }
       if (selectedReport.origin === "native") {
-        if (!selectedReport.notifiedAt)
+        if (!selectedReport.notifiedAt) {
           throw new Error(
             "Calidad todavía no ha registrado la comunicación formal y su plazo. No se guardó ningún avance.",
           );
+        }
         const documentTypes = Object.fromEntries(
           (selectedReport.responseRequirements?.documents ?? []).map((name) => [
             name,
@@ -403,18 +479,20 @@ function SupplierPortal({
           },
         );
         setSelectedAction(result.actionId);
-        for (const file of files)
+        for (const file of files) {
           await uploadRncpEvidence(
             result.actionId,
             file,
             String(form.get("executedAt") ?? ""),
           );
+        }
         setFiles([]);
-        if (form.get("status") === "submitted")
+        if (form.get("status") === "submitted") {
           await followupCommand("submit_delivery", {
             reportId: selectedReport.id,
             payload: { actionId: result.actionId },
           });
+        }
         setEvidenceRevision((v) => v + 1);
         await Promise.all([detail.refresh(), rncpDirectory.refresh()]);
         setNotice(
@@ -446,14 +524,16 @@ function SupplierPortal({
         },
       );
       setSelectedAction(result.actionId);
-      for (const file of files)
+      for (const file of files) {
         await uploadRncpEvidence(
           result.actionId,
           file,
           String(form.get("executedAt") ?? ""),
         );
-      if (values.status !== "in_progress")
+      }
+      if (values.status !== "in_progress") {
         await saveRncpResponseAction({ ...values, actionId: result.actionId });
+      }
       setEvidenceRevision((v) => v + 1);
       await Promise.all([detail.refresh(), rncpDirectory.refresh()]);
       setFiles([]);
@@ -489,175 +569,214 @@ function SupplierPortal({
     setFiles((current) => [...current, ...Array.from(selected)]);
   }
   return (
-    <>
-      <PortalHeading
-        title="Portal de proveedores"
-        account={`${company.companyName}${company.siteName ? ` · ${company.siteName}` : ""}`}
-        description="RNCP, auditorías, planes de acción, plazos y evidencias de la cuenta."
-      />
-      <label>
-        Año{" "}
-        <select
-          value={year}
-          onChange={(e) => {
-            if (
-              files.length &&
-              !window.confirm(
-                "¿Descartar los archivos seleccionados al cambiar de año?",
-              )
-            )
-              return;
-            setYear(e.target.value);
-            setSelectedReportId("");
-            setSelectedAction(null);
-            setRequestId(crypto.randomUUID());
-            setFiles([]);
-          }}
-        >
-          {years.map((y) => (
-            <option key={y}>{y}</option>
-          ))}
-          <option value="all">Todos</option>
-        </select>
-      </label>
-      {view === "rncp" && !rncpDirectory.loading && !rncpDirectory.error && (
-        <div className="metric-grid">
-          {[
-            ["Total RNCP", reports.length],
-            ["Abiertos", reports.length - closed - late],
-            ["Cerrados", closed],
-            ["Tardíos", late],
-          ].map(([label, value]) => (
-            <article className="metric metric-blue" key={label}>
-              <div>
-                <strong>{value}</strong>
-                <span>{label}</span>
-              </div>
-            </article>
-          ))}
-        </div>
+    <PortalFrame
+      name={company.companyName}
+      sub={company.siteName}
+      years={years}
+      year={year}
+      onYear={(y) => {
+        if (
+          files.length &&
+          !window.confirm(
+            "¿Descartar los archivos seleccionados al cambiar de año?",
+          )
+        ) return;
+        setYear(y);
+        setFiles([]);
+        setSelectedReportId("");
+        setSelectedAction(null);
+        setSelectedEvent("");
+        setRequestId(crypto.randomUUID());
+      }}
+      section={view}
+      onSection={(v) => {
+        setView(v);
+        if (v === "plans") {
+          setEvidenceType("");
+          setReadOnlyDetail(false);
+          setSelectedEvent("");
+        }
+        setProfileDoc(null);
+      }}
+    >
+      {rncpDirectory.error && (
+        <p role="alert">
+          No se pudieron consultar los RNCP.{" "}
+          <button onClick={() => void rncpDirectory.refresh()}>
+            Reintentar
+          </button>
+        </p>
       )}
-      {nextCommitment ? (
-        <section className="portal-deadline-band">
-          <CalendarDays size={18} />
-          <div>
-            <strong>
-              Próximo compromiso: {formatDate(nextCommitment.responseDueDate!)}
-            </strong>
-            <p>Respuesta pendiente para {nextCommitment.folio}.</p>
-          </div>
-          <span
-            className={`quality-state ${nextCommitment.late ? "danger" : "warning"}`}
-          >
-            {nextCommitment.late ? "Tardío" : "En tiempo"}
-          </span>
-        </section>
-      ) : null}
-      <div
-        className="quality-view-tabs portal-tabs"
-        aria-label="Vistas del portal de proveedores"
-      >
-        <button
-          className={view === "rncp" ? "active" : ""}
-          type="button"
-          onClick={() => setView("rncp")}
-        >
-          Mis RNCP
-        </button>
-        <button
-          className={view === "audits" ? "active" : ""}
-          type="button"
-          onClick={() => setView("audits")}
-        >
-          Mis auditorías y calificaciones
-        </button>
-        <button
-          className={view === "plans" ? "active" : ""}
-          type="button"
-          onClick={() => {
-            setEvidenceType("");setReadOnlyDetail(false);
-            setView("plans");
-          }}
-        >
-          Mis evidencias
-        </button>
-      </div>
-      {view === "rncp" ? (
-        <section className="portal-record-list">
-          <header>
-            <div>
-              <h3>Reportes de no calidad asignados</h3>
-              <p>Publicados desde Gestión de calidad de proveedores.</p>
-            </div>
-            <FileText size={19} />
-          </header>
-          {rncpDirectory.loading ? (
-            <progress aria-label="Cargando reportes" />
-          ) : rncpDirectory.error ? (
+      {rncpDirectory.loading && <progress aria-label="Cargando RNCP" />}
+      {view === "home" && (
+        <>
+          {auditDirectory.error && (
             <p role="alert">
-              No se pudieron consultar los reportes.{" "}
-              <button onClick={() => void rncpDirectory.refresh()}>
+              Auditorías no disponibles.{" "}
+              <button onClick={auditDirectory.refresh}>Reintentar</button>
+            </p>
+          )}
+          {assessmentDirectory.error && (
+            <p role="alert">
+              Evaluaciones no disponibles.{" "}
+              <button onClick={() => void assessmentDirectory.refresh()}>
                 Reintentar
               </button>
             </p>
-          ) : (
-            reports.map((record) => (
-              <article key={record.id}>
-                <div>
-                  <code>{record.folio}</code>
-                  <h4>{record.findingType ?? "Reporte de no calidad"}</h4>
-                  <p>
-                    {record.materialOrService ?? "Material pendiente"}
-                    {record.siteName ? ` · ${record.siteName}` : ""}
-                  </p>
-                  {record.description&&<p>{record.description}</p>}
-                  <button className="button button-secondary" onClick={()=>openReport(record.id,true)}>Ver reporte</button>
-                  <button className="button button-secondary portal-report-link" onClick={()=>openReport(record.id,false)}><Send size={14}/> {record.status==="closed"||record.origin==="historical"?"Consultar plan":"Responder o consultar plan"}</button>
-                </div>
-                <dl>
-                  <div>
-                    <dt>Fecha</dt>
-                    <dd>
-                      {record.reportDate
-                        ? formatDate(record.reportDate)
-                        : "Pendiente"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Plazo</dt>
-                    <dd>
-                      {record.responseDueDate
-                        ? formatDate(record.responseDueDate)
-                        : "Pendiente"}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Clasificación</dt>
-                    <dd>{record.classification ?? "Sin clasificación"}</dd>
-                  </div>
-                  {record.firstValidProgressAt && (
-                    <div>
-                      <dt>Primer avance</dt>
-                      <dd>{formatDate(record.firstValidProgressAt)}</dd>
-                    </div>
-                  )}
-                </dl>
-                <span
-                  className={`quality-state ${reportOperationalState(record)==="late" ? "danger" : reportOperationalState(record)==="closed" ? "success" : "warning"}`}
-                >
-                  {portalStatus(record)}
-                </span>
-              </article>
-            ))
           )}
-          {!rncpDirectory.loading &&
-          !rncpDirectory.error &&
-          reports.length === 0 ? (
-            <PortalEmpty message="No hay reportes de no calidad asignados a esta empresa y sucursal." />
-          ) : null}
-        </section>
-      ) : null}
-      {view === "plans" && (
+          <Dashboard
+            upcomingAvailable={auditDirectory.scheduleAvailable}
+            reports={rncpDirectory.loading || rncpDirectory.error
+              ? null
+              : records}
+            percent={rncpDirectory.loading || rncpDirectory.error
+              ? null
+              : rncpEffectiveness(reports, new Date().getTime()).percent}
+            audits={audits}
+            actions={actionsReady
+              ? allActions.filter((a) => inPeriod(a.date, year))
+              : null}
+            latestAssessment={assessments.filter((a) =>
+              inPeriod(a.assessmentDate, year)
+            ).sort((a, b) => b.assessmentDate.localeCompare(a.assessmentDate))
+              .find((a) => a.score != null)?.score}
+            otherPeriods={allActions.some((a) =>
+              !inPeriod(a.date, year) &&
+              !["closed", "accepted"].includes(a.state)
+            )}
+            onOther={() => {
+              setYear("all");
+              setView("plans");
+              setEvidenceType("");
+            }}
+            openReport={(id) => openReport(id, true)}
+            openAudit={openAudit}
+            openAction={openAction}
+          />
+        </>
+      )}
+      {view === "profile" && (
+        <>
+          <OwnProfile name={company.companyName} />
+          <Panel title="Documentos autorizados">
+            {auditDirectory.error || assessmentDirectory.error
+              ? (
+                <p role="alert">
+                  No se pudieron consultar todos los documentos.
+                </p>
+              )
+              : null}
+            {auditDirectory.audits?.flatMap((a) =>
+              a.files.map((f) => (
+                <div key={f.id} className="configuration-actions">
+                  <strong>{f.original_name}</strong>
+                  <button
+                    className="button button-secondary"
+                    onClick={() =>
+                      setProfileDoc({ event: a.eventId, file: f })}
+                  >
+                    Ver documento
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    onClick={() =>
+                      void downloadPortalAuditFile(a.eventId, f).catch(() =>
+                        setError("No se pudo descargar el documento.")
+                      )}
+                  >
+                    Descargar
+                  </button>
+                </div>
+              ))
+            )}
+            {assessments.filter((a) => a.sourceFile).map((a) => (
+              <div className="configuration-actions" key={a.id}>
+                <strong>{a.sourceFile?.name}</strong>
+                <button
+                  className="button button-secondary"
+                  onClick={() =>
+                    void openAssessmentFile(a.id)}
+                >
+                  Ver documento
+                </button>
+                <button
+                  className="button button-secondary"
+                  onClick={() =>
+                    void openAssessmentFile(a.id, true)}
+                >
+                  Descargar
+                </button>
+              </div>
+            ))}
+            {auditDirectory.audits && !assessmentDirectory.loading &&
+              !assessmentDirectory.error && !auditDirectory.audits.some((a) =>
+                a.files.length
+              ) && !assessments.some((a) => a.sourceFile) && (
+              <Empty>Sin informes publicados para esta cuenta.</Empty>
+            )}
+            {profileDoc && (
+              <>
+                <button onClick={() => setProfileDoc(null)}>
+                  Cerrar documento
+                </button>
+                <PortalDocument
+                  eventId={profileDoc.event}
+                  file={profileDoc.file}
+                />
+              </>
+            )}
+            {error && <p role="alert">{error}</p>}
+          </Panel>
+        </>
+      )}
+      {view === "rncp" && !rncpDirectory.loading && !rncpDirectory.error && (
+        <ReportList
+          rows={records}
+          open={(id) => openReport(id, true)}
+          respond={(id) => openReport(id, false)}
+        />
+      )}
+      {view === "plans" && !evidenceType && (
+        <>
+          {actionsReady && (
+            <ActionList
+              rows={allActions.filter((a) => inPeriod(a.date, year))}
+              onOpen={openAction}
+            />
+          )}
+          {!actionsReady && auditDirectory.error && (
+            <p role="alert">
+              Acciones de auditoría no disponibles.{" "}
+              <button onClick={auditDirectory.refresh}>Reintentar</button>
+            </p>
+          )}
+          {!actionsReady && auditDirectory.error && !rncpDirectory.error &&
+            !rncpDirectory.loading && (
+            <Panel title="Acciones de RNCP disponibles">
+              <ActionList
+                rows={allActions.filter((a) =>
+                  a.origin === "RNCP" && inPeriod(a.date, year)
+                )}
+                onOpen={openAction}
+              />
+            </Panel>
+          )}
+          {!actionsReady && rncpDirectory.error && auditDirectory.audits && (
+            <Panel title="Acciones de auditoría disponibles">
+              <ActionList
+                rows={allActions.filter((a) =>
+                  a.origin === "Auditoría" && inPeriod(a.date, year)
+                )}
+                onOpen={openAction}
+              />
+            </Panel>
+          )}
+          {!actionsReady && !rncpDirectory.error && !auditDirectory.error && (
+            <progress aria-label="Cargando acciones" />
+          )}
+        </>
+      )}
+      {view === "plans" && !evidenceType && (
         <SupplierEvidenceList
           key={year}
           year={year}
@@ -669,7 +788,10 @@ function SupplierPortal({
           Gestionar un expediente{" "}
           <select
             value={evidenceType}
-            onChange={(e) => {setReadOnlyDetail(false);setEvidenceType(e.target.value)}}
+            onChange={(e) => {
+              setReadOnlyDetail(false);
+              setEvidenceType(e.target.value);
+            }}
           >
             <option value="">Seleccionar tipo</option>
             <option value="rncp">RNCP</option>
@@ -680,158 +802,214 @@ function SupplierPortal({
       {(view === "audits" ||
         (view === "plans" && evidenceType === "audit")) && (
         <SupplierAuditPortal
-          identity={company.companyId}
+          key={selectedEvent}
+          directory={auditDirectory}
+          selectedEvent={selectedEvent}
+          initialAction={auditAction}
           year={year}
-          onDates={setAuditDates}
           onEvidenceChange={() => setEvidenceRevision((v) => v + 1)}
           evidenceOnly={view === "plans"}
         />
       )}
-      {view === "audits" ? (
-        <>
-          <section className="supplier-portal-audit">
-            <header>
-              <div>
-                <h3>Auditorías y evaluaciones autorizadas</h3>
-                <p>
-                  Resultados publicados por Calidad para esta empresa y
-                  sucursal.
-                </p>
-              </div>
-              <FileCheck2 size={19} />
-            </header>
-            {assessmentDirectory.loading ? (
-              <PortalEmpty message="Consultando resultados autorizados…" />
-            ) : (
-              <div className="quality-table-wrap">
-                <table className="quality-table">
-                  <thead>
-                    <tr>
-                      <th>Fecha</th>
-                      <th>Tipo</th>
-                      <th>Resultado</th>
-                      <th>Clasificación</th>
-                      <th>Archivo</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {assessments
-                      .filter(
+      {view === "audits"
+        ? (
+          <>
+            <AuditTrends
+              rows={(auditDirectory.audits ?? []).filter((a) =>
+                inPeriod(a.auditDate ?? a.plannedDate, year)
+              ).map((a) => ({
+                date: a.auditDate ?? a.plannedDate ?? null,
+                score: a.score,
+                method: a.methodology,
+                kind: auditClassifications[a.classification],
+              }))}
+            />
+            <Panel title="Próximas auditorías">
+              {audits?.filter((a) =>
+                ["scheduled", "confirmed", "rescheduled"].includes(a.state)
+              ).map((a) => (
+                <button
+                  className="button button-secondary"
+                  key={a.id}
+                  onClick={() => openAudit(a.id)}
+                >
+                  {a.date ?? "Fecha pendiente"} · {auditLabel(a.state)}
+                </button>
+              ))}
+              {!audits?.some((a) =>
+                ["scheduled", "confirmed", "rescheduled"].includes(a.state)
+              ) && (
+                <Empty>
+                  {auditDirectory.scheduleAvailable
+                    ? "Sin fechas programadas publicadas para este período."
+                    : "Programación no disponible para este alcance."}
+                </Empty>
+              )}
+            </Panel>
+            <section className="supplier-portal-audit">
+              <header>
+                <div>
+                  <h3>Auditorías y evaluaciones autorizadas</h3>
+                  <p>
+                    Resultados publicados por Calidad para esta empresa y
+                    sucursal.
+                  </p>
+                </div>
+                <FileCheck2 size={19} />
+              </header>
+              {assessmentDirectory.loading
+                ? <progress aria-label="Cargando resultados" />
+                : (
+                  <div className="quality-table-wrap">
+                    <table className="quality-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Tipo</th>
+                          <th>Resultado</th>
+                          <th>Clasificación</th>
+                          <th>Archivo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {assessments
+                          .filter(
+                            (a) =>
+                              year === "all" ||
+                              a.assessmentDate.slice(0, 4) === year,
+                          )
+                          .map((assessment) => (
+                            <tr key={assessment.id}>
+                              <td>{formatDate(assessment.assessmentDate)}</td>
+                              <td>
+                                {supplierAssessmentTypeLabel(
+                                  assessment.assessmentType,
+                                )}
+                              </td>
+                              <td>
+                                <strong>
+                                  {assessment.score === undefined
+                                    ? "Sin puntuación"
+                                    : `${assessment.score}%`}
+                                </strong>
+                              </td>
+                              <td>
+                                {assessment.classification ??
+                                  "Sin clasificación"}
+                              </td>
+                              <td>
+                                {assessment.sourceFile
+                                  ? (
+                                    <>
+                                      <button
+                                        className="evidence-link"
+                                        onClick={() =>
+                                          void openAssessmentFile(
+                                            assessment.id,
+                                          )}
+                                        type="button"
+                                      >
+                                        <FileText size={14} /> Ver archivo
+                                      </button>{" "}
+                                      <button
+                                        type="button"
+                                        className="evidence-link"
+                                        onClick={() =>
+                                          void openAssessmentFile(
+                                            assessment.id,
+                                            true,
+                                          )}
+                                      >
+                                        Descargar
+                                      </button>
+                                    </>
+                                  )
+                                  : (
+                                    "Sin archivo"
+                                  )}
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                    {!assessmentDirectory.error && !assessments.some(
                         (a) =>
                           year === "all" ||
                           a.assessmentDate.slice(0, 4) === year,
                       )
-                      .map((assessment) => (
-                        <tr key={assessment.id}>
-                          <td>{formatDate(assessment.assessmentDate)}</td>
-                          <td>
-                            {supplierAssessmentTypeLabel(
-                              assessment.assessmentType,
-                            )}
-                          </td>
-                          <td>
-                            <strong>
-                              {assessment.score === undefined
-                                ? "Sin puntuación"
-                                : `${assessment.score}%`}
-                            </strong>
-                          </td>
-                          <td>
-                            {assessment.classification ?? "Sin clasificación"}
-                          </td>
-                          <td>
-                            {assessment.sourceFile ? (
-                              <>
-                                <button
-                                  className="evidence-link"
-                                  onClick={() =>
-                                    void openAssessmentFile(assessment.id)
-                                  }
-                                  type="button"
-                                >
-                                  <FileText size={14} /> Ver archivo
-                                </button>{" "}
-                                <button
-                                  type="button"
-                                  className="evidence-link"
-                                  onClick={() =>
-                                    void openAssessmentFile(assessment.id, true)
-                                  }
-                                >
-                                  Descargar
-                                </button>
-                              </>
-                            ) : (
-                              "Sin archivo"
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-                {!assessments.some(
-                  (a) =>
-                    year === "all" || a.assessmentDate.slice(0, 4) === year,
-                ) ? (
-                  <PortalEmpty message="No hay resultados autorizados para esta empresa y sucursal." />
-                ) : null}
-              </div>
-            )}
-            {error || assessmentDirectory.error ? (
-              <div className="form-error" role="alert">
-                {error || assessmentDirectory.error}
-              </div>
-            ) : null}
-          </section>
-        </>
-      ) : null}
-      {view === "plans" && evidenceType === "rncp" ? (
-        detail.loading ? (
-          <progress aria-label="Cargando expediente" />
-        ) : detail.error ? (
-          <p role="alert">
-            No se pudo consultar el expediente.{" "}
-            <button onClick={() => void detail.refresh()}>Reintentar</button>
-          </p>
-        ) : (
-          <SupplierRncpResponse
-            key={detailId}
-            readOnlyDetail={readOnlyDetail}
-            actionId={actionId}
-            onAction={(id) => {
-              setSelectedAction(id);
-              setRequestId(crypto.randomUUID());
-              setFiles([]);
-            }}
-            actorId={actorId}
-            error={error || rncpDirectory.error}
-            files={files}
-            onAddFiles={addFiles}
-            onSelectReport={(id) => {
-              if (
-                files.length &&
-                !window.confirm(
-                  "Hay archivos pendientes. Cambiar de RNCP descarta sólo esta selección local. ¿Continuar?",
+                      ? (
+                        <PortalEmpty message="No hay resultados autorizados para esta empresa y sucursal." />
+                      )
+                      : null}
+                  </div>
+                )}
+              {error || assessmentDirectory.error
+                ? (
+                  <div className="form-error" role="alert">
+                    No se pudieron consultar los resultados.{" "}
+                    <button onClick={() => void assessmentDirectory.refresh()}>
+                      Reintentar
+                    </button>
+                  </div>
                 )
-              )
-                return;
-              setFiles([]);
-              setSelectedAction(null);
-              setRequestId(crypto.randomUUID());
-              setSelectedReportId(id);
-            }}
-            notice={notice}
-            onSubmit={submitPlan}
-            report={selectedReport}
-            reports={reports}
-            saving={saving}
-          />
+                : null}
+            </section>
+          </>
         )
-      ) : null}
-    </>
+        : null}
+      {view === "plans" && evidenceType === "rncp"
+        ? (
+          detail.loading
+            ? <progress aria-label="Cargando expediente" />
+            : detail.error
+            ? (
+              <p role="alert">
+                No se pudo consultar el expediente.{" "}
+                <button onClick={() => void detail.refresh()}>
+                  Reintentar
+                </button>
+              </p>
+            )
+            : (
+              <SupplierRncpResponse
+                key={detailId}
+                readOnlyDetail={readOnlyDetail}
+                actionId={actionId}
+                onAction={(id) => {
+                  setSelectedAction(id);
+                  setRequestId(crypto.randomUUID());
+                  setFiles([]);
+                }}
+                actorId={actorId}
+                error={error || rncpDirectory.error}
+                files={files}
+                onAddFiles={addFiles}
+                onSelectReport={(id) => {
+                  if (
+                    files.length &&
+                    !window.confirm(
+                      "Hay archivos pendientes. Cambiar de RNCP descarta sólo esta selección local. ¿Continuar?",
+                    )
+                  ) {
+                    return;
+                  }
+                  setFiles([]);
+                  setSelectedAction(null);
+                  setRequestId(crypto.randomUUID());
+                  setSelectedReportId(id);
+                }}
+                notice={notice}
+                onSubmit={submitPlan}
+                report={selectedReport}
+                reports={reports}
+                saving={saving}
+              />
+            )
+        )
+        : null}
+    </PortalFrame>
   );
 }
-
 function SupplierRncpResponse({
   readOnlyDetail,
   actionId,
@@ -924,7 +1102,7 @@ function SupplierRncpResponse({
               {report.late ? "Tardía" : portalStatus(report)}
             </span>
           </div>
-          <SupplierReportFiles id={report.id} />
+          <SupplierReportFiles key={report.id} id={report.id} />
           {locked ? (
             <p>
               Expediente de sólo consulta: histórico, sin notificación formal,
@@ -953,7 +1131,7 @@ function SupplierRncpResponse({
               </select>
             </label>
           )}
-          {!readOnlyDetail&&!locked&&<form
+          {!readOnlyDetail&&!locked&&(!actionId||previous)&&<form
             key={actionId}
             onSubmit={(event) => {
               if (photosPending) {

@@ -1,5 +1,6 @@
 "use client";
 
+import { ExternalPortalShell } from "./modules/supplier-portal-view";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ContinuityProvider } from "@/components/workspace-continuity";
@@ -79,7 +80,7 @@ export function IntegraQApp({ initialSession }: IntegraQAppProps) {
   };
 
   if (!initialSession||signedOut||authIdentity&&authIdentity!==initialSession.authUserId) return <LoginScreen error={error} onSignIn={signIn} />;
-  if(initialSession.userType==="Proveedor")return <main className="workspace-main"><header className="module-heading"><strong>IntegraQ</strong><span>{initialSession.name}</span><button className="button button-secondary" onClick={()=>void signOut()}>Cerrar sesión</button></header>{error&&<p role="alert">{error}</p>}<StakeholderPortalModule kind="supplier" session={initialSession} actions={[]}/></main>;
+  if(initialSession.userType==="Proveedor")return <ExternalPortalShell name={initialSession.name} signOut={()=>void signOut()}> {error&&<p role="alert">{error}</p>}<StakeholderPortalModule kind="supplier" session={initialSession} actions={[]}/></ExternalPortalShell>;
   const identity=continuityIdentity(initialSession);
   return <ContinuityProvider key={`${identity}:${sessionAccessKey(initialSession)}`} session={initialSession}>{error?<p role="alert">{error}</p>:null}<IntegraQWorkspace onSignOut={signOut} session={initialSession} /></ContinuityProvider>;
 }

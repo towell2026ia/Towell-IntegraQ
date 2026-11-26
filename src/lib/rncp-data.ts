@@ -43,7 +43,9 @@ export interface RncpResponseAction {
   evidences: RncpEvidence[];
 }
 
+export type PortalActionSummary={id:string;parent:string;description:string;owner?:string|null;due?:string|null;completed?:string|null;state:string;files?:number|null};
 export interface RncpReport {
+  portalActions?: PortalActionSummary[];
   classification?: import("./rncp/flow").RncpClassification;
   firstValidProgressAt?: string;
   requirementsComplete?: boolean;

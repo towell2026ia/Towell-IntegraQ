@@ -3,7 +3,7 @@ import { isRncpClassification } from "@/lib/rncp/flow";
 import { compareRncpFolios } from "@/lib/rncp/folio";
 import { NextResponse } from "next/server";
 import { photoFailure, photoRpcError, requirePhotoV2 } from "@/lib/rncp/initial-photo-server";
-import { paginatedRows, reportListRows, rncpContext, RncpError } from "@/lib/rncp/server";
+import { portalActionSummaries, paginatedRows, reportListRows, rncpContext, RncpError } from "@/lib/rncp/server";
 
 import type { RncpHistoryEvent, RncpReport, RncpResponseAction, RncpResponseStatus, RncpStatus } from "@/lib/rncp-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
@@ -112,8 +112,10 @@ export async function GET(request?: Request) {
     }
     if (directory) {
       const flowReady = await flowContract;
+      const summaries=portal ? await portalActionSummaries(context,rows.map(r=>r.id)) : [];
       const reports = rows.sort(compareRncpFolios).map(row => ({
         ...mapReport(row, [], []),
+        ...(portal ? {portalActions:summaries.filter(a=>a.parent===row.id)} : {}),
         requirementsComplete: requirements[row.id] === true,
       }));
       return NextResponse.json({ reports, flowReady }, { headers: { "Cache-Control": "private, no-store" } });

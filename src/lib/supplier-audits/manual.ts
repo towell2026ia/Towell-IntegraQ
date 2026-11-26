@@ -18,9 +18,9 @@ export interface ManualAuditSnapshot {
   history: Array<{ id: string; at: string; actorName: string; reason: string; before: ManualAuditRecord | null; after: ManualAuditRecord }>;
 }
 export interface PortalAudit {
-  eventId: string; supplierId: string; auditDate: string | null; classification: ManualClassification;
+  eventId: string; supplierId: string; auditDate: string | null; plannedDate?:string|null; state?:string; classification: ManualClassification;
   methodology: ManualAuditRecord["methodology"]; score: number | null;
-  actions: AuditCorrectiveAction[]; files: SupplierAuditFile[];
+  actions: (AuditCorrectiveAction & {evidenceCount?:number})[]; files: SupplierAuditFile[];
 }
 export const emptyManualRecord = (): ManualAuditRecord => ({ classification: null, discrepancy: "", methodology: null, auditDate: null, evaluatorName: "", score: null, actions: [], approvedFileIds: [], portalVisible: false });
 export const uuid = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(v);

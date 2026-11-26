@@ -20,7 +20,7 @@ beforeEach(() => {
  m.context.mockResolvedValue({ organizationId: org, canManage: true, supabase: { rpc: m.rpc }, admin: { from: m.from } }); m.event.mockResolvedValue(event());
  m.rpc.mockImplementation(async (name: string) => ({ error: null, data: name === "iq_supplier_audit_manual_read" ? snapshot() : { eventId: id, revision: 8, requestId: file } }));
  m.session.mockResolvedValue({ authUserId: id, userType: "Proveedor", workspaceMode: "production", externalParty: { kind: "supplier", companyId: supplier } });
- m.createClient.mockResolvedValue({ rpc: m.rpc }); m.sign.mockResolvedValue({ error: null, data: { signedUrl: "https://private.example.test/signed" } }); m.admin.mockReturnValue({ storage: { from: vi.fn().mockReturnValue({ createSignedUrl: m.sign }) } });
+ m.createClient.mockResolvedValue({ rpc: m.rpc, from: m.from }); m.sign.mockResolvedValue({ error: null, data: { signedUrl: "https://private.example.test/signed" } }); m.admin.mockReturnValue({ storage: { from: vi.fn().mockReturnValue({ createSignedUrl: m.sign }) } });
 });
 describe("manual audit server and HTTP", () => {
  it("reads using internal scoped context and never modifies a record", async () => { expect((await readManual(id)).revision).toBe(7); expect(m.context).toHaveBeenCalledWith("view"); expect(m.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_manual_read", { p_event: id }); });
@@ -44,7 +44,19 @@ describe("manual audit server and HTTP", () => {
 describe("supplier-specific portal and private file signing", () => {
  const portal = () => ({ version: 1, audits: [{ eventId: id, supplierId: supplier, auditDate: "2025-11-19", classification: "manufacturer", methodology: "V1", score: 99.1667, actions: [], files: [fileRow()], source_payload: { secretInternalNote: "must not leak" } }] });
  const authorizedFile = () => ({ eventId: id, id: file, supplierId: supplier, organizationId: org, bucket: "integraq-private", path: `${org}/supplier-audits/${id}/${file}/original.pdf`, authorized: true, name: "original.pdf" });
- it("uses the session supplier and excludes all internal metadata", async () => { m.rpc.mockResolvedValue({ data: portal(), error: null }); const data = await readSupplierAuditPortal(); expect(data.audits[0].score).toBe(99.1667); expect(JSON.stringify(data)).not.toContain("secretInternalNote"); expect(m.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_portal_list"); });
+ it("uses the session supplier and excludes all internal metadata", async () => { m.rpc.mockResolvedValue({ data: portal(), error: null }); const data = await readSupplierAuditPortal(); expect(data.audits[0].score).toBe(99.1667); expect(data.scheduleAvailable).toBe(false); expect(m.filters).toContainEqual(["supplier_id", supplier]); expect(m.admin).not.toHaveBeenCalled(); expect(JSON.stringify(data)).not.toContain("secretInternalNote"); expect(m.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_portal_list"); });
+ it("loads the schedule only for already published events with the supplier session", async () => {
+   m.rpc.mockResolvedValue({ data: portal(), error: null });
+   const query = { select: vi.fn().mockReturnThis(), eq: vi.fn().mockReturnThis(), in: vi.fn().mockReturnThis(), is: vi.fn().mockResolvedValue({ data: [{ id, planned_date: "2026-12-03", state: "scheduled" }] }) };
+   m.from.mockReturnValueOnce(query);
+   const data = await readSupplierAuditPortal();
+   expect(query.in).toHaveBeenCalledWith("id", [id]);
+   expect(query.eq).toHaveBeenCalledWith("supplier_id", supplier);
+   expect(query.is).toHaveBeenCalledWith("withdrawn_at", null);
+   expect(data.scheduleAvailable).toBe(true);
+   expect(data.audits[0].plannedDate).toBe("2026-12-03");
+   expect(m.admin).not.toHaveBeenCalled();
+ });
  it.each(["Cliente", "Usuario interno", "Administrador"])("does not grant supplier scope to %s", async userType => { m.session.mockResolvedValue({ authUserId: id, userType, externalParty: { kind: "supplier", companyId: supplier } }); await expect(readSupplierAuditPortal()).rejects.toMatchObject({ status: 403 }); expect(m.rpc).not.toHaveBeenCalled(); });
  it("rejects unauthenticated readers", async () => { m.session.mockResolvedValue(null); await expect(readSupplierAuditPortal()).rejects.toMatchObject({ status: 401 }); });
  it("rejects cross-supplier data before exposing any part of the response", async () => { const data = portal(); data.audits[0].supplierId = org; m.rpc.mockResolvedValue({ data, error: null }); await expect(readSupplierAuditPortal()).rejects.toMatchObject({ status: 403 }); });

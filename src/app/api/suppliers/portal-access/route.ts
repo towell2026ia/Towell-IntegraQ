@@ -1,5 +1,14 @@
-import { invitationLocator, newInvitationProof } from "@/lib/supplier-audits/invitation-proof";
-import { rncpContext, RncpError } from "@/lib/rncp/server";
+import {
+  invitationLocator,
+  newInvitationProof,
+} from "@/lib/supplier-audits/invitation-proof";
+import {
+  auditEvidenceCounts,
+  loadMatrixReports,
+  portalActionSummaries,
+  rncpContext,
+  RncpError,
+} from "@/lib/rncp/server";
 import { auditContext, auditSuppliers } from "@/lib/supplier-audits/server";
 import { visibleSupplierContacts } from "@/lib/supplier-audits/contacts";
 import type { SupplierContacts } from "@/lib/supplier-audits/model";
@@ -13,18 +22,71 @@ function failed(error: unknown) {
   const status = error instanceof RncpError ? error.status : 503;
   return reply(
     {
-      error:
-        status === 409
-          ? "La cuenta, el contacto o la invitación cambiaron. Actualiza el expediente."
-          : status === 403
-            ? "Acceso no autorizado."
-            : "No se pudo completar la consulta. Vuelve a intentarlo.",
+      error: status === 409
+        ? "La cuenta, el contacto o la invitación cambiaron. Actualiza el expediente."
+        : status === 403
+        ? "Acceso no autorizado."
+        : "No se pudo completar la consulta. Vuelve a intentarlo.",
     },
     status,
   );
 }
 export async function GET(request: Request) {
   try {
+    if (new URL(request.url).searchParams.has("self")) {
+      const ctx = await rncpContext("view", true);
+      if (!ctx.supplier || !ctx.profile.external_party_id) {
+        throw new RncpError("Alcance", 403);
+      }
+      const sessionUser = await ctx.supabase.auth.getUser();
+      const identity = sessionUser.data.user;
+      if (
+        sessionUser.error || !identity?.email_confirmed_at ||
+        identity.id !== ctx.session.authUserId
+      ) {
+        throw new RncpError("Identidad", 403);
+      }
+      let siteQuery = ctx.admin.from("external_company_sites").select("name")
+        .eq("company_id", ctx.profile.external_party_id).eq("active", true);
+      if (ctx.profile.external_site_id) {
+        siteQuery = siteQuery.eq("id", ctx.profile.external_site_id);
+      }
+      const [company, sites] = await Promise.all([
+        ctx.admin.from("organizations").select(
+          "name,code,category,contact_email,metadata",
+        ).eq("id", ctx.profile.external_party_id).eq("kind", "supplier").eq(
+          "active",
+          true,
+        ).single(),
+        siteQuery,
+      ]);
+      if (!company.data || company.error || sites.error) {
+        throw new RncpError("Consulta", 503);
+      }
+      const metadata = company.data.metadata?.supplierQualityContacts ?? {};
+      // The directory has no externally publishable contact flag. Only return the verified account's own entry.
+      const contacts = visibleSupplierContacts({
+        ...metadata,
+        email: metadata.email || company.data.contact_email || "",
+      })
+        .filter((c) =>
+          !c.retired && c.email &&
+          c.email.trim().toLowerCase() === identity.email?.trim().toLowerCase()
+        )
+        .map((c) => ({
+          name: c.name,
+          email: c.email,
+          purpose: c.purpose || c.position,
+          phone: c.phone,
+        }));
+      return reply({
+        name: company.data.name,
+        code: company.data.code,
+        category: company.data.category,
+        sites: sites.data.map((s) => s.name),
+        contacts,
+      });
+    }
     const ctx = await rncpContext("admin");
     const id = new URL(request.url).searchParams.get("supplier");
     if (!id) {
@@ -43,11 +105,12 @@ export async function GET(request: Request) {
     const allowed = await ctx.supabase.rpc("iq_supplier_portal_admin", {
       p_supplier: id,
     });
-    if (allowed.error || allowed.data !== ctx.organizationId)
+    if (allowed.error || allowed.data !== ctx.organizationId) {
       throw new RncpError(
         "Alcance",
         allowed.error && allowed.error.code !== "42501" ? 503 : 403,
       );
+    }
     const [company, profiles, invites, sites, reports, audits, assessments] =
       await Promise.all([
         ctx.admin
@@ -65,7 +128,9 @@ export async function GET(request: Request) {
           .eq("workspace_mode", "production"),
         ctx.admin
           .from("supplier_portal_invitations")
-          .select("id,email,created_at,expires_at,withdrawn_at,accepted_at,blocked_at")
+          .select(
+            "id,email,created_at,expires_at,withdrawn_at,accepted_at,blocked_at",
+          )
           .eq("supplier_id", id)
           .eq("organization_id", ctx.organizationId)
           .order("created_at", { ascending: false }),
@@ -74,29 +139,29 @@ export async function GET(request: Request) {
           .select("id,name")
           .eq("company_id", id)
           .eq("active", true),
-        ctx.supabase
-          .from("supplier_rncp_reports")
-          .select("id,folio,report_date,status,portal_visible")
-          .eq("organization_id", ctx.organizationId)
-          .eq("supplier_id", id)
-          .is("deleted_at", null)
-          .order("report_date", { ascending: false }),
+        loadMatrixReports(ctx, undefined, true, undefined, id),
         ctx.admin
           .from("supplier_audit_events")
-          .select("id,planned_date,actual_date,state,manual_record")
+          .select(
+            "id,planned_date,actual_date,state,withdrawn_at,manual_record",
+          )
           .eq("organization_id", ctx.organizationId)
           .eq("supplier_id", id),
         ctx.admin
           .from("supplier_assessments")
-          .select("id,assessment_date,score,classification,portal_visible")
-          .eq("supplier_id", id),
+          .select(
+            "id,assessment_date,score,classification,portal_visible,source_file_id",
+          )
+          .eq("supplier_id", id)
+          .is("audit_event_id", null),
       ]);
     if (
-      [company, profiles, sites, reports, audits, assessments].some(
+      [company, profiles, sites, audits, assessments].some(
         (x) => x.error,
       )
-    )
+    ) {
       throw new RncpError("Consulta", 503);
+    }
     const users = await Promise.all(
       (profiles.data ?? []).map(async (p) => {
         const identity = await ctx.admin.auth.admin.getUserById(p.id);
@@ -107,6 +172,12 @@ export async function GET(request: Request) {
           lastAccess: identity.data.user.last_sign_in_at,
         };
       }),
+    );
+    const counts = await auditEvidenceCounts(
+      ctx,
+      (audits.data ?? []).filter((a) =>
+        a.manual_record?.record?.actions?.length
+      ).map((a) => a.id),
     );
     const contacts = (company.data?.metadata?.supplierQualityContacts ??
       {}) as Partial<SupplierContacts>;
@@ -119,17 +190,42 @@ export async function GET(request: Request) {
         email: contacts.email || company.data?.contact_email || "",
       })
         .filter((c) => !c.retired && c.email)
-        .map((c) => ({ email: c.email, name: c.name })),
+        .map((c) => ({
+          email: c.email,
+          name: c.name,
+          phone: c.phone,
+          purpose: c.purpose || c.position,
+        })),
       sites: sites.data,
-      reports: reports.data,
+      reports,
+      actions: await portalActionSummaries(ctx, reports.map((r) => r.id)),
       audits: (audits.data ?? []).map((a) => ({
         id: a.id,
         date: a.actual_date ?? a.planned_date,
-        state: a.state,
+        state: a.withdrawn_at ? "withdrawn" : a.state,
+        score: a.manual_record?.record?.score?.value ?? null,
+        method: a.manual_record?.record?.methodology ?? null,
+        kind: ({
+          manufacturer: "Fabricante",
+          distributor: "Distribuidor",
+          service: "Servicio",
+        } as Record<string, string>)[
+          a.manual_record?.record?.classification
+        ] ?? null,
         actions: (a.manual_record?.record?.actions ?? []).map(
-          (x: { id: string; description: string }) => ({
+          (
+            x: import("@/lib/supplier-audits/manual").AuditCorrectiveAction,
+          ) => ({
             id: x.id,
             description: x.description,
+            state: x.status,
+            owner: x.responsibleName,
+            due: x.commitmentDate,
+            completed: x.completedDate,
+            files: new Set([
+              ...(x.evidenceFileIds ?? []),
+              ...(counts.get(a.id + ":" + x.id) ?? []),
+            ]).size,
           }),
         ),
       })),
@@ -144,19 +240,21 @@ export async function POST(request: Request) {
     const ctx = await rncpContext("admin");
     const body = await request.json();
     const { supplier, site, action, id } = body;
-    const email =
-      typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const email = typeof body.email === "string"
+      ? body.email.trim().toLowerCase()
+      : "";
     if (action !== "invite") {
       const result = await ctx.supabase.rpc("iq_supplier_portal_access", {
         p_supplier: supplier,
         p_id: id,
         p_action: action,
       });
-      if (result.error)
+      if (result.error) {
         throw new RncpError(
           "Operación",
           result.error.code === "42501" ? 403 : 409,
         );
+      }
       return reply({ saved: true });
     }
     const { invite, code, digest } = newInvitationProof();
@@ -167,13 +265,18 @@ export async function POST(request: Request) {
       p_digest: digest,
       p_link: invitationLocator(invite),
     });
-    if (reservation.error?.message === "REISSUE_LIMIT")
-      return reply({ error: "Se alcanzó el límite de tres emisiones para este correo en 24 horas." }, 429);
-    if (reservation.error)
+    if (reservation.error?.message === "REISSUE_LIMIT") {
+      return reply({
+        error:
+          "Se alcanzó el límite de tres emisiones para este correo en 24 horas.",
+      }, 429);
+    }
+    if (reservation.error) {
       throw new RncpError(
         "Invitación",
         reservation.error.code === "42501" ? 403 : 409,
       );
+    }
     const fragment = new URLSearchParams({ invite });
     if (reservation.data.enroll) fragment.set("enroll", "1");
     return reply({

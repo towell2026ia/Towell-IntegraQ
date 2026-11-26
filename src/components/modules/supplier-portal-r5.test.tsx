@@ -71,7 +71,9 @@ describe("U07-R5 portal entry", () => {
     ];
     const html = page("Proveedor");
     expect(html).toContain(item.folio);
-    expect(html).toContain("Mis evidencias");
+    expect(html).toContain("Planes de acción y evidencias");
+    expect(html).toContain("Mi expediente");
+    expect(html).toContain('aria-current="page"');
     expect(html).not.toMatch(
       /OTRO-AÑO|OTRA-EMPRESA|PRIVADO|Seleccionar proveedor/,
     );
