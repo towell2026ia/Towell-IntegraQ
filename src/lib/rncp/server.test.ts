@@ -44,7 +44,7 @@ describe("live RNCP authorization before privileged queries", () => {
   it.each([["42501", 403], ["57014", 503]])("distinguishes a scope rejection from a failed lookup (%s)", async (code, status) => {
     state.scopeError = { code }; await expect(rncpContext()).rejects.toMatchObject({ status });
   });
-  it("only explicitly allowed endpoints can accept supplier identity", async () => { state.profile.user_type = "supplier"; state.profile.external_party_id = "supplier-a"; state.owner.kind = "supplier"; expect((await rncpContext("update", true)).supplier).toBe(true); await expect(rncpContext("admin", true)).rejects.toMatchObject({ status: 403 }); });
+  it("only explicitly allowed endpoints can accept supplier identity", async () => { state.profile.user_type = "supplier"; state.profile.external_party_id = "supplier-a"; state.owner.kind = "supplier"; state.session={...state.session!,userType:"Proveedor",externalParty:{kind:"supplier",companyId:"supplier-a",companyName:"Proveedor A"}}; expect((await rncpContext("update", true)).supplier).toBe(true); await expect(rncpContext("admin", true)).rejects.toMatchObject({ status: 403 }); });
   it("denies direct alert review, settings and evaluation by an internal non-admin", async () => { for (const command of ["config", "review_alert", "evaluate"]) { const result = await followup(new Request("https://test.invalid", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command }) })); expect(result.status).toBe(403); } expect(state.privilegedTables).toEqual([]); });
 });
 

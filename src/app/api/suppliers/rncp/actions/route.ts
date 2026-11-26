@@ -9,6 +9,10 @@ export async function POST(request: Request) {
   const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
   if (!payload || typeof payload.reportId !== "string") return NextResponse.json({ error: "Solicitud de acción no válida." }, { status: 400 });
   const supabase = await createClient();
+  if(session.userType==="Proveedor"){
+    const allowed=await supabase.rpc("iq_supplier_portal_report",{p_report:payload.reportId});
+    if(allowed.error||!allowed.data)return NextResponse.json({error:"Expediente no autorizado."},{status:403});
+  }
   const result = await supabase.rpc("save_supplier_rncp_action", {
     requested_action_id: typeof payload.actionId === "string" ? payload.actionId : null,
     requested_report_id: payload.reportId,

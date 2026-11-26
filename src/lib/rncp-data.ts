@@ -13,6 +13,7 @@ export interface RncpHistoryEvent {
 export type RncpResponseStatus = "pending" | "in_progress" | "submitted" | "accepted" | "rejected" | "closed";
 
 export interface RncpEvidence {
+  performedOn?:string;
   id: string;
   fileName: string;
   mimeType: string;
@@ -104,8 +105,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   return payload;
 }
 
-export async function loadRncpReports(view: "detail" | "directory" = "detail", signal?: AbortSignal) {
-  const response = await fetch(view === "directory" ? "/api/suppliers/rncp?view=directory" : "/api/suppliers/rncp", { cache: "no-store", signal });
+export async function loadRncpReports(view: "detail" | "directory" | "portal" = "detail", signal?: AbortSignal, reportId?: string) {
+  const response = await fetch("/api/suppliers/rncp" + (reportId ? "?reportId=" + encodeURIComponent(reportId) : view === "detail" ? "" : "?view=" + view), { cache: "no-store", signal });
   return parseResponse<{ reports: RncpReport[]; flowReady?: boolean }>(response);
 }
 
@@ -150,15 +151,15 @@ export async function reviewRncpResponseAction(actionId: string, decision: "acce
   return parseResponse<{ action: Pick<RncpResponseAction, "id" | "reportId" | "status"> }>(response);
 }
 
-export async function uploadRncpEvidence(actionId: string, file: File) {
+export async function uploadRncpEvidence(actionId: string, file: File, performedOn?:string) {
   if (!file.size || file.size > 4 * 1024 * 1024) throw new Error("Selecciona una evidencia válida de hasta 4 MB, sujeta a la política del sistema.");
-  const form = new FormData(); form.set("actionId", actionId); form.set("file", file);
+  const form = new FormData(); form.set("actionId", actionId); form.set("file", file);if(performedOn)form.set("performedOn",performedOn);
   const response = await fetch("/api/suppliers/rncp/evidence", { method: "POST", body: form });
   return parseResponse<{ evidence: RncpEvidence }>(response);
 }
 
-export async function getRncpEvidenceUrl(fileId: string) {
-  const response = await fetch(`/api/suppliers/rncp/evidence/${encodeURIComponent(fileId)}`, { cache: "no-store" });
+export async function getRncpEvidenceUrl(fileId: string,download=false) {
+  const response = await fetch(`/api/suppliers/rncp/evidence/${encodeURIComponent(fileId)}${download?"?download=1":""}`, { cache: "no-store" });
   return parseResponse<{ signedUrl: string; expiresIn: number }>(response);
 }
 

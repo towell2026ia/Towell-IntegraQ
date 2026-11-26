@@ -15,6 +15,11 @@ export async function GET(request: Request) {
     }
     const id = params.get("reportId");
     if (!id) throw new RncpError("Selecciona un expediente.");
+    if(context.supplier){
+      const files=await context.supabase.rpc("iq_supplier_portal_report_files",{p_report:id});
+      if(files.error)throw new RncpError("No se pudieron consultar los archivos.",files.error.code==="42501"?403:503);
+      return NextResponse.json({originalFiles:(files.data??[]).filter((f:{kind:string})=>f.kind==="supplier_rncp_original").map((f:{id:string;name:string})=>({id:f.id,fileName:f.name}))},{headers:{"Cache-Control":"private, no-store"}})
+    }
     const reports = await loadMatrixReports(context, id);
     type Action = { id: string; description: string; root_cause: string | null; action_plan: string | null; containment: string | null; commitments: string | null; status: string; created_at: string; validated_at: string | null; validation_comment: string | null };
     const actions = await paginatedRows<Action>((from, to) => context.admin.from("supplier_rncp_actions").select("id,description,root_cause,action_plan,containment,commitments,status,created_at,validated_at,validation_comment", { count: "exact" }).eq("report_id", id).order("id").range(from, to));
@@ -68,11 +73,11 @@ export async function POST(request: Request) {
     }
     const reportId = typeof body.reportId === "string" ? body.reportId : "";
     if (!/^[a-f0-9-]{36}$/i.test(reportId)) throw new RncpError("Identificador de RNCP inválido.");
-    await loadMatrixReports(context, reportId);
+    if(context.supplier){const allowed=await context.supabase.rpc("iq_supplier_portal_report",{p_report:reportId});if(allowed.error)throw new RncpError("Expediente no disponible.",403)}else await loadMatrixReports(context, reportId);
     const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
     if (command === "save_response") {
       if (!context.supplier) throw new RncpError("El avance debe registrarse con la identidad del proveedor autorizado.", 403);
-      const result = await context.supabase.rpc("iq_rncp_save_response", { p_action_id: body.actionId ?? null, p_report_id: reportId, p_payload: payload });
+      const result = body.requestId ? await context.supabase.rpc("iq_supplier_portal_save_response",{p_request:body.requestId,p_action:body.actionId??null,p_report:reportId,p_payload:payload}) : await context.supabase.rpc("iq_rncp_save_response", { p_action_id: body.actionId ?? null, p_report_id: reportId, p_payload: payload });
       if (result.error) throw new RncpError("El avance no se guardó: verifica expediente, campos y permisos.", 409);
       return NextResponse.json({ actionId: result.data });
     }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { canAccessModule } from "@/lib/access-policy";
 import { NextResponse } from "next/server";
 
 import { canPerformModuleAction } from "@/lib/module-permissions";
@@ -22,6 +23,7 @@ export async function GET() {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
   const internalAccess = canPerformModuleAction(session, "suppliers", "view");
+  if(session.userType==="Proveedor"&&!canAccessModule(session,"supplier-portal"))return NextResponse.json({error:"Acceso no autorizado."},{status:403});
   const supplierAccess = session.userType === "Proveedor" && session.externalParty?.kind === "supplier";
   if (!internalAccess && !supplierAccess) return NextResponse.json({ error: "No tienes permiso para consultar evaluaciones de proveedores." }, { status: 403 });
   const admin = createAdminClient();

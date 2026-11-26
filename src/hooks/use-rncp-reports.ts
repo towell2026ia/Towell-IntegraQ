@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { loadRncpReports, type RncpReport } from "@/lib/rncp-data";
 
-export function useRncpReports(enabled = true, view: "detail" | "directory" = "detail") {
+export function useRncpReports(enabled = true, view: "detail" | "directory" | "portal" = "detail", reportId?: string) {
   const [reports, setReports] = useState<RncpReport[]>([]);
   const [loading, setLoading] = useState(true);
   const [flowReady, setFlowReady] = useState(false);
@@ -22,7 +22,7 @@ export function useRncpReports(enabled = true, view: "detail" | "directory" = "d
     setLoading(true);
     setError("");
     try {
-      const result = await loadRncpReports(view, controller.signal);
+      const result = await loadRncpReports(view, controller.signal, reportId);
       if (controller.signal.aborted) return [];
       if (view === "directory") directoryLoadedAt.current = Date.now();
       setFlowReady(result.flowReady === true);
@@ -37,7 +37,7 @@ export function useRncpReports(enabled = true, view: "detail" | "directory" = "d
     } finally {
       if (!controller.signal.aborted) { pending.current = null; setLoading(false); }
     }
-  }, [enabled, view]);
+  }, [enabled, view, reportId]);
 
   useEffect(() => {
     if (!enabled || (view === "directory" && Date.now() - directoryLoadedAt.current < 60_000)) return;

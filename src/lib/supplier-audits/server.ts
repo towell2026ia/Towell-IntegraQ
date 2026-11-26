@@ -68,7 +68,7 @@ export async function auditSuppliers(context: AuditContext) {
   auditRpcError(owner.error);
   if (owner.count === null) throw new SupplierAuditError("No se pudo verificar el alcance del catálogo de proveedores. Reintenta.", 503);
   const soleInternalOrganization = owner.count === 1 && owner.data?.[0]?.id === context.organizationId;
-  const suppliers = await auditPages<AuditSupplier>((from, to) => context.admin.from("organizations").select("id,code,name,active,owning_organization_id,contact_name,contact_email,metadata,updated_at", { count: "exact" }).eq("kind", "supplier").order("id").range(from, to));
+  const suppliers = await auditPages<AuditSupplier>((from, to) => context.admin.from("organizations").select("id,code,name,category,active,owning_organization_id,contact_name,contact_email,metadata,updated_at", { count: "exact" }).eq("kind", "supplier").order("id").range(from, to));
   return suppliers.filter(s => s.owning_organization_id === context.organizationId || s.owning_organization_id === null && soleInternalOrganization)
     .map(s => ({ ...s, metadata: { supplierQualityContacts: s.metadata?.supplierQualityContacts ?? null } }));
 }

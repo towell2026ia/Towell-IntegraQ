@@ -76,26 +76,33 @@ type ActionRow = {
 };
 
 type EvidenceFileRow = { id: string; original_name: string; mime_type: string | null; size_bytes: number | null; uploaded_by: string; created_at: string };
-type EvidenceLinkRow = { id: string; action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
+type EvidenceLinkRow = { performed_on?:string|null; id: string; action_id: string; file: EvidenceFileRow | EvidenceFileRow[] | null };
 
 export async function GET(request?: Request) {
   try {
     const context = await rncpContext("view",true);
     const { supabase } = context;
-    const directory = request && new URL(request.url).searchParams.get("view") === "directory" && !context.supplier;
-    const flowContract = directory && process.env.RNCP_FLOW_ENABLED === "true"
+    const params = request ? new URL(request.url).searchParams : null;
+    const reportId = params?.get("reportId");
+    const portal = context.supplier && params?.get("view") === "portal";
+    const directory = portal || (params?.get("view") === "directory" && !context.supplier);
+    const flowContract = !portal && directory && process.env.RNCP_FLOW_ENABLED === "true"
       ? requireRncpFlow(context).then(() => true, () => false) : Promise.resolve(false);
     const fields = "id,organization_id,folio,supplier_id,site_id,report_date,material_or_service,finding_type,rejected_quantity,description,immediate_disposition,response_due_date,responsible_name,status,portal_visible,submitted_at,closed_at,created_at,updated_at,deleted_at,delete_reason,classification,first_valid_progress_at,source_kind,historical_status,notified_at,response_deadline,complete_submitted_at,validated_at,validation_outcome,response_requirements,supplier:organizations!supplier_rncp_reports_supplier_id_fkey(code,name),site:external_company_sites!supplier_rncp_reports_site_id_fkey(code,name)";
-    const reportQuery = <T extends string>(selection: T, withCount = false) => supabase.from("supplier_rncp_reports")
+    const reportQuery = <T extends string>(selection: T, withCount = false) => { let query = supabase.from("supplier_rncp_reports")
       .select(selection, withCount ? { count: "exact" } : {})
       .eq(context.supplier ? "supplier_id" : "organization_id", context.supplier ? context.profile.external_party_id! : context.organizationId);
+      if(context.supplier){query=query.eq("organization_id",context.organizationId).eq("portal_visible",true).is("deleted_at",null).neq("status","draft");const site=context.profile.external_site_id;if(site)query=query.eq("site_id",site)}
+      return reportId ? query.eq("id",reportId) : query;
+    };
     const complete = () => paginatedRows<ReportRow>((from, to) => reportQuery(fields, true).order("id").range(from, to));
     const rows = directory ? await reportListRows<ReportRow>(
       () => reportQuery(fields).order("id").limit(500),
       last => reportQuery("id").gt("id", last).order("id").limit(1),
       complete,
     ) : await complete();
-    if (rows.some(row => context.supplier ? row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
+    if(reportId && !rows.length) throw new RncpError("Expediente no disponible.",403);
+    if (rows.some(row => context.supplier ? row.organization_id!==context.organizationId || row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) || row.status==="draft" || Boolean(context.profile.external_site_id && context.profile.external_site_id!==row.site_id) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
     const requirements: Record<string,boolean> = {};
     const nativeIds=rows.filter(r=>r.source_kind==="native" && (!directory || (r.notified_at && r.complete_submitted_at && r.validation_outcome !== "rejected"))).map(r=>r.id);
     for(let offset=0;offset<nativeIds.length;offset+=500){
@@ -117,11 +124,11 @@ export async function GET(request?: Request) {
       const ids=rows.slice(offset,offset+100).map(row=>row.id);
       actions.push(...await paginatedRows<ActionRow>((from,to) => supabase.from("supplier_rncp_actions").select("*", { count: "exact" }).in("report_id",ids).order("id").range(from,to)));
       // Privileged audit reads are restricted to IDs already authorized by report RLS.
-      audits.push(...await paginatedRows<AuditRow>((from,to) => admin.from("audit_log").select("id,resource_id,action,user_name_snapshot,created_at,reason", { count: "exact" }).eq("resource_type","supplier_rncp_report").in("resource_id",ids).order("id").range(from,to)));
+      if (!context.supplier) audits.push(...await paginatedRows<AuditRow>((from,to) => admin.from("audit_log").select("id,resource_id,action,user_name_snapshot,created_at,reason", { count: "exact" }).eq("resource_type","supplier_rncp_report").in("resource_id",ids).order("id").range(from,to)));
     }
     for(let offset=0;offset<actions.length;offset+=100){
       const ids=actions.slice(offset,offset+100).map(action=>action.id);
-      evidenceLinks.push(...await paginatedRows<EvidenceLinkRow>((from,to) => supabase.from("supplier_rncp_action_evidence").select("id,action_id,file:file_objects!supplier_rncp_action_evidence_file_id_fkey(id,original_name,mime_type,size_bytes,uploaded_by,created_at)",{count:"exact"}).in("action_id",ids).order("id").range(from,to)));
+      evidenceLinks.push(...await paginatedRows<EvidenceLinkRow>((from,to) => supabase.from("supplier_rncp_action_evidence").select("id,action_id,performed_on,file:file_objects!supplier_rncp_action_evidence_file_id_fkey(id,original_name,mime_type,size_bytes,uploaded_by,created_at)",{count:"exact"}).in("action_id",ids).order("id").range(from,to)));
     }
     return NextResponse.json({ reports: rows.sort(compareRncpFolios).map(row => ({...mapReport(row,
       audits.filter(audit=>audit.resource_id===row.id).sort((a,b)=>b.created_at.localeCompare(a.created_at)),
@@ -231,7 +238,7 @@ function mapAction(row: ActionRow, evidenceLinks: EvidenceLinkRow[]): RncpRespon
     validatedAt: row.validated_at ?? undefined, createdAt: row.created_at,
     evidences: evidenceLinks.flatMap((link) => {
       const file = first(link.file); if (!file) return [];
-      return [{ id: file.id, fileName: file.original_name, mimeType: file.mime_type ?? "application/octet-stream", sizeBytes: file.size_bytes ?? 0, uploadedBy: file.uploaded_by, uploadedAt: file.created_at }];
+      return [{ performedOn:link.performed_on??undefined,id: file.id, fileName: file.original_name, mimeType: file.mime_type ?? "application/octet-stream", sizeBytes: file.size_bytes ?? 0, uploadedBy: file.uploaded_by, uploadedAt: file.created_at }];
     }),
   };
 }

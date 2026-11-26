@@ -182,6 +182,6 @@ export async function getVerifiedSessionContext(timing?: (phase: string, ms: num
   };
   return { session, supabase, profile: profile && {
     id: claims.sub, organization_id: profile.organization_id, user_type: profile.user_type,
-    status: profile.status, workspace_mode: profile.workspace_mode, external_party_id: profile.external_party_id,
+    status: profile.status, workspace_mode: profile.workspace_mode, external_party_id: profile.external_party_id, external_site_id:profile.external_site_id,
   } };
 }

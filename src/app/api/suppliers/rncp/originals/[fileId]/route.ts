@@ -12,6 +12,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ file
       if (context.profile.user_type !== "administrator" || file.workspace_id !== context.organizationId) throw new RncpError("Archivo pendiente exclusivo de administración.", 403);
     } else {
       if (!file.resource_id) throw new RncpError("Referencia documental incompleta.", 409);
+      if(context.supplier){
+        const approved=await context.supabase.rpc("iq_supplier_portal_report_files",{p_report:file.resource_id});
+        if(approved.error||!approved.data?.some((f:{id:string})=>f.id===fileId))throw new RncpError("Archivo no autorizado.",403);
+      }
       const report = await readAuthorizedReport(context, file.resource_id);
       if (file.workspace_id !== report.organization_id || file.bucket_id !== "integraq-private" || !file.object_path.startsWith(`rncp-originals/${report.organization_id}/`)) throw new RncpError("Referencia de archivo incompatible con el expediente.", 403);
     }

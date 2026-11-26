@@ -8,7 +8,7 @@ vi.mock("@/lib/supabase/auth-session", async importOriginal => ({
 }));
 function client() { return { auth: { getClaims: state.claims }, rpc:state.rpc,from(table: string) {
   let after: string | undefined;
-  const query = { gt: (_field: string, id: string) => { after = id; return query; },
+  const query = { is:()=>query,neq:()=>query,gt: (_field: string, id: string) => { after = id; return query; },
     limit: async (size: number) => ({ data: state.rows.filter(row => after === undefined || String(row.id) > after).slice(0, size), error: null }), select: () => query, order: () => query, eq: (_field: string, id: string) => { state.lookups.push(id); return query; }, maybeSingle: state.current,
     in: (field: string, ids: string[]) => { state.filters.push({ table, field, ids }); return query; },
     range: async () => ({ data: table === "supplier_rncp_reports" ? state.rows : [], count: table === "supplier_rncp_reports" ? state.rows.length : 0, error: null }) };
