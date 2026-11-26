@@ -103,6 +103,10 @@ export async function GET(request?: Request) {
     ) : await complete();
     if(reportId && !rows.length) throw new RncpError("Expediente no disponible.",403);
     if (rows.some(row => context.supplier ? row.organization_id!==context.organizationId || row.supplier_id !== context.profile.external_party_id || !row.portal_visible || Boolean(row.deleted_at) || row.status==="draft" || Boolean(context.profile.external_site_id && context.profile.external_site_id!==row.site_id) : row.organization_id !== context.organizationId)) throw new RncpError("La consulta devolvió expedientes fuera del alcance autorizado.",403);
+    const company = context.supplier ? context.session.externalParty : undefined;
+    if (company?.companyCode && company.companyId === context.profile.external_party_id) {
+      for (const row of rows) row.supplier ??= { code: company.companyCode, name: company.companyName };
+    }
     const requirements: Record<string,boolean> = {};
     const nativeIds=rows.filter(r=>r.source_kind==="native" && (!directory || (r.notified_at && r.complete_submitted_at && r.validation_outcome !== "rejected"))).map(r=>r.id);
     for(let offset=0;offset<nativeIds.length;offset+=500){

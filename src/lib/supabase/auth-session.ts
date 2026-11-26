@@ -97,6 +97,17 @@ export async function getVerifiedSessionContext(timing?: (phase: string, ms: num
   timing?.("permissions", performance.now() - claimsChecked);
   const profile = profileData as ProfileRow | null;
   if (profile?.status === "inactive") return { session: null, supabase, profile: null, failure: "inactive" as const };
+  // A supplier membership can read its public identity without receiving the private directory row.
+  if (profile?.user_type === "supplier" && profile.workspace_mode === "production" &&
+      profile.external_party_id && !profile.external_party) {
+    const identity = await supabase.rpc("iq_supplier_portal_own_profile", { p_identity_only: true });
+    if (identity.data && !identity.error) {
+      profile.external_party = identity.data;
+    } else if (!["PGRST202", "42883"].includes(identity.error?.code ?? "")) {
+      return { session: null, supabase, profile: null,
+        failure: identity.error?.code === "42501" ? "inactive" as const : "unavailable" as const };
+    }
+  }
   const userMetadata = (claims.user_metadata ?? {}) as Record<string, unknown>;
   const appMetadata = (claims.app_metadata ?? {}) as Record<string, unknown>;
   const fullName =

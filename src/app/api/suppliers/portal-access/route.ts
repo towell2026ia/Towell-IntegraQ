@@ -31,6 +31,49 @@ function failed(error: unknown) {
     status,
   );
 }
+async function previousOwnProfile(ctx: Awaited<ReturnType<typeof rncpContext>>, email?: string) {
+  if (!ctx.profile.external_party_id) throw new RncpError("Alcance", 403);
+  let siteQuery = ctx.admin.from("external_company_sites").select("name")
+    .eq("company_id", ctx.profile.external_party_id).eq("active", true);
+  if (ctx.profile.external_site_id) {
+    siteQuery = siteQuery.eq("id", ctx.profile.external_site_id);
+  }
+  const [company, sites] = await Promise.all([
+    ctx.admin.from("organizations").select(
+      "name,code,category,contact_email,metadata",
+    ).eq("id", ctx.profile.external_party_id).eq("kind", "supplier").eq(
+      "active",
+      true,
+    ).single(),
+    siteQuery,
+  ]);
+  if (!company.data || company.error || sites.error) {
+    throw new RncpError("Consulta", 503);
+  }
+  const metadata = company.data.metadata?.supplierQualityContacts ?? {};
+  // During the code-first transition the verified account keeps its existing self-contact view.
+  const contacts = visibleSupplierContacts({
+    ...metadata,
+    email: metadata.email || company.data.contact_email || "",
+  })
+    .filter((c) =>
+      !c.retired && c.email &&
+      c.email.trim().toLowerCase() === email?.trim().toLowerCase()
+    )
+    .map((c) => ({
+      name: c.name,
+      email: c.email,
+      purpose: c.purpose || c.position,
+      phone: c.phone,
+    }));
+  return reply({
+    name: company.data.name,
+    code: company.data.code,
+    category: company.data.category,
+    sites: sites.data.map((s) => s.name),
+    contacts,
+  });
+}
 export async function GET(request: Request) {
   try {
     if (new URL(request.url).searchParams.has("self")) {
@@ -46,48 +89,23 @@ export async function GET(request: Request) {
       ) {
         throw new RncpError("Identidad", 403);
       }
-      let siteQuery = ctx.admin.from("external_company_sites").select("name")
-        .eq("company_id", ctx.profile.external_party_id).eq("active", true);
-      if (ctx.profile.external_site_id) {
-        siteQuery = siteQuery.eq("id", ctx.profile.external_site_id);
+      const profile = await ctx.supabase.rpc("iq_supplier_portal_own_profile");
+      if (["PGRST202", "42883"].includes(profile.error?.code ?? "")) return await previousOwnProfile(ctx, identity.email);
+      if (profile.error || !profile.data) {
+        throw new RncpError("Expediente", profile.error?.code === "42501" ? 403 : 503);
       }
-      const [company, sites] = await Promise.all([
-        ctx.admin.from("organizations").select(
-          "name,code,category,contact_email,metadata",
-        ).eq("id", ctx.profile.external_party_id).eq("kind", "supplier").eq(
-          "active",
-          true,
-        ).single(),
-        siteQuery,
-      ]);
-      if (!company.data || company.error || sites.error) {
-        throw new RncpError("Consulta", 503);
-      }
-      const metadata = company.data.metadata?.supplierQualityContacts ?? {};
-      // The directory has no externally publishable contact flag. Only return the verified account's own entry.
-      const contacts = visibleSupplierContacts({
-        ...metadata,
-        email: metadata.email || company.data.contact_email || "",
-      })
-        .filter((c) =>
-          !c.retired && c.email &&
-          c.email.trim().toLowerCase() === identity.email?.trim().toLowerCase()
-        )
-        .map((c) => ({
-          name: c.name,
-          email: c.email,
-          purpose: c.purpose || c.position,
-          phone: c.phone,
-        }));
-      return reply({
-        name: company.data.name,
-        code: company.data.code,
-        category: company.data.category,
-        sites: sites.data.map((s) => s.name),
-        contacts,
-      });
+      return reply(profile.data);
     }
     const ctx = await rncpContext("admin");
+    const contactSupplier = new URL(request.url).searchParams.get("contactSettings");
+    if (contactSupplier !== null) {
+      const settings = await ctx.supabase.rpc("iq_supplier_contact_publication_settings", { p_supplier: contactSupplier });
+      if (["PGRST202", "42883"].includes(settings.error?.code ?? "")) return reply({ available: false });
+      if (settings.error || !settings.data) {
+        throw new RncpError("Contactos", settings.error?.code === "42501" ? 403 : 503);
+      }
+      return reply(settings.data);
+    }
     const id = new URL(request.url).searchParams.get("supplier");
     if (!id) {
       const rows = await auditSuppliers(await auditContext("admin"));

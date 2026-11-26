@@ -28,6 +28,7 @@ const org="00000000-0000-4000-8000-000000000001", supplier="20000000-0000-4000-8
 const secondOrg="00000000-0000-4000-8000-000000000002", secondSupplier="20000000-0000-4000-8000-000000000002";
 const secondAdmin="10000000-0000-4000-8000-000000000005";
 const email="member@example.invalid", site=randomUUID(), otherSite=randomUUID();
+const registeredContact = { id:randomUUID(), name:"Portal member", email, position:"", phone:"", purpose:"", notifyRncp:false };
 const actor = id => `set "request.jwt.claim.sub"='${id}';`;
 const asAdmin = "set role authenticated;"+actor(admin);
 const asMember = "set role authenticated;"+actor(member);
@@ -37,7 +38,7 @@ sql(`insert into external_company_sites(id,company_id,code,name) values
  update profiles set external_site_id='${site}',external_party_kind='supplier' where id='${member}';
  update auth.users set email='${email}' where id='${member}';
  update organizations set metadata=jsonb_set(metadata,'{supplierQualityContacts}',
-   jsonb_build_object('contacts',jsonb_build_array(jsonb_build_object('id','r5-ci','email','${email}','retired',false))))
+   jsonb_build_object('contacts',jsonb_build_array('${JSON.stringify(registeredContact)}'::jsonb)))
  where id='${supplier}';`);
 
 // Hold a barrier until pg_locks proves every worker is waiting in its own backend.
@@ -125,3 +126,33 @@ try {
   if (!session.stdin.writableEnded) session.stdin.end();
 }
 console.log("PASS: authorized report, company/site isolation and loss of access with the same identity after revocation");
+
+// Verify the contact-only proposal in the SAME disposable PostgreSQL job.
+const r2 = readFileSync("docs/database/proposals/IQ-PROV-U07-R2.sql", "utf8");
+const startContacts = r2.indexOf("-- IQ-PROV-CONTACTOS-LEGACY-GUARD.sql |");
+const endContacts = r2.indexOf("-- IQ-PROV-MEJORAS-02-audit-withdrawal.sql |");
+assert.ok(startContacts > 0 && endContacts > startContacts);
+sql(r2.slice(startContacts,endContacts));
+sql(`alter table public.organizations enable row level security;
+  create policy fixture_supplier_directory_read on public.organizations for select to authenticated
+    using (id in (select public.current_organization_ids()) or public.is_administrator());`);
+sql(readFileSync("docs/database/proposals/IQ-PROV-PORTAL-CONTACTOS-VISIBILIDAD.sql", "utf8"));
+sql(asAdmin + `select iq_supplier_portal_access('${supplier}','${member}','reactivate');`);
+const peer = { id:randomUUID(), name:"Contacto de prueba", position:"", phone:"", purpose:"", notifyRncp:false, email:"peer@example.invalid" };
+const rows = [registeredContact, peer];
+function saveVisibility(sites) {
+  const changes = JSON.stringify({[peer.id]:{scope:"sites",sites}});
+  return sql(asAdmin + `select iq_supplier_save_contact_publications('${supplier}','${JSON.stringify({contacts:rows})}'::jsonb,
+    (select updated_at from organizations where id='${supplier}'),'Alcance por sucursal','${changes}'::jsonb);`);
+}
+assert.equal(sql(asMember + `select count(*) from organizations where id='${supplier}';`),"0");
+assert.equal(sql(asMember + "select iq_supplier_portal_own_profile(true)->>'kind';"),"supplier");
+const seesPeer = () => sql(asMember + `select exists(select 1 from jsonb_array_elements(iq_supplier_portal_own_profile()->'contacts') c where c->>'email'='${peer.email}');`);
+assert.equal(seesPeer(),"f");
+saveVisibility([otherSite]);
+assert.equal(seesPeer(),"f");
+saveVisibility([site]);
+assert.equal(seesPeer(),"t");
+sql(asAdmin + `select iq_supplier_portal_access('${supplier}','${member}','revoke');`);
+assert.throws(()=>sql(asMember + 'select iq_supplier_portal_own_profile();'),/PORTAL_SCOPE/);
+console.log("PASS: contact package committed, supplier master private, live publication scope and revocation verified");

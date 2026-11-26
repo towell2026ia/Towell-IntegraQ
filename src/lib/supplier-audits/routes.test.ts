@@ -43,6 +43,17 @@ describe("supplier audit API authorization", () => {
   expect((await POST(request({ command: "contacts", id: "supplier-1", updatedAt: "2026-11-17T00:00:00Z", reason: "Actualizar directorio", payload: { contacts } }))).status).toBe(200);
   expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_audit_contacts_v2", { p_supplier: "supplier-1", p_expected_updated_at: "2026-11-17T00:00:00Z", p_reason: "Actualizar directorio", p_contacts: { contacts } });
  });
+ it("keeps publication decisions exclusive to administrators with supplier edit permission", async () => {
+  vi.stubEnv("SUPPLIER_CONTACTS_V2_ENABLED", "true");
+  mocks.context.mockResolvedValue({ canManage: true, administrator: false, supabase: { rpc: mocks.rpc } });
+  const body = { command: "contacts", id: "one", updatedAt: "2026-11-17", reason: "Publicar contacto", payload: { contacts: [], visibilityChanges: {} } };
+  expect((await POST(request(body))).status).toBe(403);
+  expect(mocks.rpc).not.toHaveBeenCalled();
+  mocks.context.mockResolvedValue({ canManage: true, administrator: true, supabase: { rpc: mocks.rpc } });
+  expect((await POST(request(body))).status).toBe(200);
+  expect(mocks.rpc).toHaveBeenCalledExactlyOnceWith("iq_supplier_save_contact_publications", { p_supplier: "one",
+    p_expected_updated_at: "2026-11-17", p_reason: "Publicar contacto", p_contacts: { contacts: [] }, p_changes: {} });
+ });
  it("does not fall back to the legacy RPC when the collection contract is absent", async () => {
   vi.stubEnv("SUPPLIER_CONTACTS_V2_ENABLED", "true");
   mocks.context.mockResolvedValue({ organizationId: "org-1", canManage: true, administrator: false, supabase: { rpc: mocks.rpc } });

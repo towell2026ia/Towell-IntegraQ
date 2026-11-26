@@ -178,7 +178,7 @@ try {
   // A registered contact without an Auth identity can receive an invitation.
   await q("reset role");
   await q("update organizations set metadata=$2::jsonb where id=$1", [
-    a, JSON.stringify({supplierQualityContacts:{contacts:[{email:"new@example.invalid"}]}}),
+    a, JSON.stringify({supplierQualityContacts:{contacts:[{id:uuid(),name:"Anterior",position:"",purpose:"",phone:"",notifyRncp:false,email:"new@example.invalid"}]}}),
   ]);
   await q("set role authenticated");
   await q("select iq_supplier_portal_issue($1,$2,$3,$4,$5)", [a, site, "new@example.invalid", sha("code/fresh"), sha("fresh")]);
@@ -461,6 +461,122 @@ try {
   console.log(
     "PASS U07-R5.1: committed SQL, five persistent failures, LockRows plan, blocked redemption, reissue budget and lineage, single-use redemption, supplier/site isolation and original U07-R5 regressions (local PGlite).",
   );
+  // Extend this same in-memory PostgreSQL fixture with the existing R2 directory contracts.
+  await db.exec(`alter table organizations add column name text, add column code text, add column category text,
+      add column updated_at timestamptz default now();
+    alter table external_company_sites add column name text;
+    alter table audit_log add column reason text, add column previous_value jsonb, add column new_value jsonb, add column user_name_snapshot text;
+    alter table organizations enable row level security;
+    grant select on organizations to authenticated;
+    create policy read_own_directory on organizations for select to authenticated using (true);
+    grant select(id,user_type) on profiles to authenticated;
+    create function iq_supplier_audit_org() returns uuid language sql stable as $$select organization_id from public.profiles where id=auth.uid()$$;
+    create function iq_supplier_audit_inspector(uuid) returns boolean language sql stable as $$select false$$;
+    create function has_module_permission(text,text) returns boolean language sql stable as $$select public.is_administrator()$$;`);
+  const r2 = readFileSync("docs/database/proposals/IQ-PROV-U07-R2.sql", "utf8");
+  const startContacts = r2.indexOf("-- IQ-PROV-CONTACTOS-LEGACY-GUARD.sql |");
+  const endContacts = r2.indexOf("-- IQ-PROV-MEJORAS-02-audit-withdrawal.sql |");
+  assert.ok(startContacts > 0 && endContacts > startContacts);
+  await db.exec(r2.slice(startContacts,endContacts));
+  const publicationSql = readFileSync("docs/database/proposals/IQ-PROV-PORTAL-CONTACTOS-VISIBILIDAD.sql", "utf8");
+  assert.match(publicationSql, /commit;\s*$/i);
+  const beforeDirectory = await value("select jsonb_agg(to_jsonb(o) order by o.id) from organizations o");
+  await db.exec(publicationSql);
+  assert.deepEqual(await value("select jsonb_agg(to_jsonb(o) order by o.id) from organizations o"), beforeDirectory);
+  assert.equal(await value("select count(*)::int from supplier_contact_publications"), 0);
+  assert.equal(await value("select has_table_privilege('authenticated','supplier_contact_publications','select')"), false);
+  assert.equal(await value("select has_function_privilege('anon','iq_supplier_portal_own_profile(boolean)','execute')"), false);
+
+  const south = uuid(), employee = uuid();
+  await q("insert into external_company_sites(id,company_id,name) values ($1,$2,'Sur')", [south,a]);
+  await q("insert into profiles(id,organization_id,user_type,status) values ($1,$2,'internal','active')", [employee,org]);
+  await q("insert into auth.users(id,email,email_confirmed_at) values ($1,'internal@example.invalid',now())", [employee]);
+  const contact = (email) => ({ id: uuid(), name: "Contacto", email, phone: "123", position: "", purpose: "Calidad", notifyRncp: false });
+  const wide = contact("shared@example.invalid"), northOnly = contact("north@example.invalid"), privateContact = contact("private@example.invalid"),
+    southOnly = contact("south@example.invalid"), internal = contact("internal@example.invalid");
+  const existingEntries = await value("select metadata #> '{supplierQualityContacts,contacts}' from organizations where id=$1",[a]);
+  const foreignContact = contact("two@example.invalid");
+  const entries = [...existingEntries,wide,northOnly,privateContact,southOnly,internal,foreignContact];
+  const reason = "Publicación por contacto autorizado";
+  const as = async id => { await act(id); await q("set role authenticated"); };
+  const revision = async () => {
+    await q("reset role");
+    const rev = await value("select updated_at::text from organizations where id=$1",[a]);
+    await as(admin);
+    return rev;
+  };
+  const put = (rev, changes, rows = entries) => q("select iq_supplier_save_contact_publications($1,$2,$3,$4,$5)",[a,{contacts:rows},rev,reason,changes]);
+  const view = () => value("select iq_supplier_portal_own_profile()");
+  const emails = async () => (await view()).contacts.map(c=>c.email).sort();
+  await as(user);
+  assert.equal(await value("select count(*)::int from organizations where id=$1",[a]),0);
+  assert.equal((await value("select iq_supplier_portal_own_profile(true)")).kind,"supplier");
+  assert.ok(!("contacts" in await value("select iq_supplier_portal_own_profile(true)")));
+  const own = await emails();
+  assert.deepEqual(own, ["one@example.invalid"]);
+  await reject("select iq_supplier_contact_publication_settings($1)", [a]);
+  await reject("select iq_supplier_save_contact_publications($1,$2,now(),$3,$4)", [a,{contacts:entries},reason,{}]);
+  await as(admin);
+  await reject("select iq_supplier_contact_publication_settings($1)", [b]);
+  const firstRevision = await revision();
+  await assert.rejects(put(firstRevision,{[wide.id]:{scope:"company"},[northOnly.id]:{scope:"sites",sites:[siteB]}}), /CONTACT_VISIBILITY_SITES/);
+  assert.equal(await revision(),firstRevision);
+  await q("reset role");
+  await q("update profiles set external_party_id=$1 where id=$2",[b,second]);
+  await as(admin);
+  await assert.rejects(put(firstRevision,{[foreignContact.id]:{scope:"company"}}), /CONTACT_VISIBILITY_INELIGIBLE/);
+  await assert.rejects(put(firstRevision,{[internal.id]:{scope:"company"}}), /CONTACT_VISIBILITY_INELIGIBLE/);
+  await assert.rejects(put(firstRevision,{[wide.id]:{scope:"sites",sites:[]}}), /CONTACT_VISIBILITY_SITES/);
+  await put(firstRevision,{[wide.id]:{scope:"company"},[northOnly.id]:{scope:"sites",sites:[site]},[southOnly.id]:{scope:"sites",sites:[south]}});
+  await assert.rejects(put(firstRevision,{}), /AUDIT_CONFLICT/);
+  const settings = await value("select iq_supplier_contact_publication_settings($1)",[a]);
+  assert.deepEqual(settings.visibility[wide.id],{scope:"company"});
+  assert.deepEqual(settings.visibility[northOnly.id],{scope:"sites",sites:[site]});
+  assert.deepEqual(settings.sites.map(s=>s.id).sort(),[site,south].sort());
+  await as(user);
+  assert.deepEqual(await emails(), [...own,wide.email,northOnly.email].sort());
+  await q("reset role");
+  await q("update profiles set external_site_id=$1 where id=$2",[south,user]);
+  await as(user);
+  assert.deepEqual(await emails(), [...own,wide.email,southOnly.email].sort());
+  await q("reset role");
+  await q("update profiles set external_site_id=null where id=$1",[user]);
+  await as(user);
+  assert.deepEqual(await emails(), [...own,wide.email,northOnly.email,southOnly.email].sort());
+  await q("reset role");
+  await q("update external_company_sites set active=false where id=$1",[south]);
+  await as(user);
+  assert.ok(!(await emails()).includes(southOnly.email));
+  await put(await revision(),{[wide.id]:null});
+  await as(user);
+  assert.ok(!(await emails()).includes(wide.email));
+  // An old client can still save V2 contacts, but a withdrawal/identity change must end its grant.
+  const rev2 = await revision();
+  await q("select iq_supplier_audit_contacts_v2($1,$2,$3,$4)", [a,{contacts:entries.map(c=>c===northOnly?{...c,retired:true}:c)},rev2,reason]);
+  await as(user);
+  assert.deepEqual(await emails(),own);
+  const rev3 = await revision();
+  await q("select iq_supplier_audit_contacts_v2($1,$2,$3,$4)", [a,{contacts:entries},rev3,reason]);
+  await as(user);
+  assert.deepEqual(await emails(),own);
+  await q("reset role");
+  assert.ok(await value("select exists(select 1 from audit_log where action='supplier.contact.visibility.expired' and metadata->>'contactId'=$1)",[northOnly.id]));
+  await put(await revision(),{[wide.id]:{scope:"company"}});
+  await as(user);
+  assert.ok((await emails()).includes(wide.email));
+  await q("reset role");
+  // Even a valid role for another tenant cannot read this supplier's publication.
+  await q("update profiles set external_party_id=$1,organization_id=$2,external_site_id=null where id=$3",[b,otherOrg,user]);
+  await q("update user_roles set organization_id=$1 where user_id=$2",[b,user]);
+  await as(user);
+  const foreignProfile = await view();
+  assert.deepEqual(foreignProfile.contacts,[]);
+  await q("reset role");
+  await q("update profiles set status='inactive' where id=$1",[user]);
+  await as(user);
+  await reject("select iq_supplier_portal_own_profile()");
+  assert.equal(await value("select count(*)::int from organizations where id=$1",[b]),0);
+  console.log("PASS U07-R5.2: complete SQL through COMMIT, existing data preserved, default private, authorized company/site access, rollback, revocation and R2 legacy edits.");
 } finally {
   await db.close();
 }

@@ -11,6 +11,7 @@ const { chromium } = require("playwright");
 const viteRequire = createRequire(require.resolve("vitest/package.json"));
 const { build } = await import(pathToFileURL(viteRequire.resolve("vite")).href);
 const root = process.cwd(), base = "91068cb97833f07686011b9af9a5427e70ef2284";
+const contactEditor = process.argv.includes("--contactos");
 const finalVisual = process.argv.includes("--ajustes-finales");
 const year = String(new Date().getFullYear()),
   previous = String(Number(year) - 1);
@@ -147,7 +148,11 @@ const original = {
   uploadedAt: year + "-04-14T12:00:00Z",
   version: 1,
 };
-const entry = (before) => `
+const entry = (before) => contactEditor ? `
+import React from "react";import {createRoot} from "react-dom/client";import {SupplierContactsForm} from "@/components/modules/supplier-contacts-form";
+import "@/app/globals.css";
+createRoot(document.getElementById("app")).render(<SupplierContactsForm supplier={{id:"qa-a",name:"Textiles del Centro",code:"PR-01",updated_at:"2026-01-01"}}
+  contacts={{ email:"contacto@example.invalid",qualityName:"Contacto",phone:"123" }} canPublish={true} onClose={()=>{}} onChanged={async()=>{}}/>);` : `
 import React from "react";import {createRoot} from "react-dom/client";import {StakeholderPortalModule} from "@/components/modules/stakeholder-portal-module";import {activeSession} from "@/lib/session-data";import "@/app/globals.css";
 ${
   before
@@ -358,9 +363,9 @@ async function checkFinalAdjustments(page, mobile, image) {
 const output = process.env.U07_VISUAL_DIR;
 const browser = await chromium.launch({ channel: "msedge", headless: true });
 try {
-  for (const before of finalVisual ? [false] : [true, false]) {
+  for (const before of contactEditor || finalVisual ? [false] : [true, false]) {
     const assets = await bundle(before);
-    for (const mobile of [false, true]) {
+    for (const mobile of contactEditor ? [false] : [false, true]) {
       const page = await browser.newPage({
         viewport: mobile
           ? { width: 390, height: 844 }
@@ -385,9 +390,14 @@ try {
           });
         }
       };
+      let savedContact;
       await page.route("**/*", async (route) => {
         const u = new URL(route.request().url());
         if (u.origin !== "https://integraq.test") return route.abort();
+        if (contactEditor && u.pathname === "/api/suppliers/audits" && route.request().method() === "POST") {
+          savedContact = route.request().postDataJSON();
+          return route.fulfill({ json: { saved: true } });
+        }
         if (route.request().method() !== "GET") throw Error("Unexpected write");
         if (u.pathname === "/" || u.pathname === "/external") {
           return route.fulfill({
@@ -409,6 +419,9 @@ try {
           });
         }
         if (u.pathname.endsWith("/portal-access")) {
+          if (contactEditor && u.searchParams.get("contactSettings") === company.id) {
+            return route.fulfill({ json: { sites: [{id:"north",name:"Planta Norte"},{id:"south",name:"Planta Sur"}], visibility:{} } });
+          }
           if (u.searchParams.has("self")) {
             return route.fulfill({ json: profile });
           }
@@ -479,6 +492,30 @@ try {
         return route.abort();
       });
       page.setDefaultTimeout(10000);
+      if (contactEditor) {
+        await page.goto("https://integraq.test/");
+        const publish = page.getByRole("checkbox", {name:"Mostrar este contacto en el Portal de Proveedores"});
+        await publish.waitFor();
+        assert.equal(await publish.isChecked(), false);
+        await publish.check();
+        const scope = page.getByRole("combobox", {name:"Alcance de publicación",exact:true});
+        await scope.selectOption("company");
+        await scope.selectOption("sites");
+        await page.getByLabel("Motivo de actualización").fill("Compartir con la sucursal Norte");
+        await page.getByRole("button",{name:"Guardar contactos"}).click();
+        assert.match(await page.getByRole("alert").innerText(),/al menos una sucursal/);
+        assert.equal(savedContact,undefined);
+        await page.getByRole("checkbox",{name:"Planta Norte"}).check();
+        const request = page.waitForResponse(r=>r.url().endsWith("/api/suppliers/audits"));
+        await page.getByRole("button",{name:"Guardar contactos"}).click();
+        await request;
+        assert.deepEqual(savedContact.payload.visibilityChanges,{"legacy-primary":{scope:"sites",sites:["north"]}});
+        assert.equal(savedContact.payload.contacts[0].notifyRncp,false);
+        assert.deepEqual(errors,[]);
+        await page.close();
+        console.log("PASS: contact editor, private default, company and branch scopes, valid form submission (intercepted locally)");
+        continue;
+      }
       if (finalVisual) {
         await checkFinalAdjustments(page, mobile, image);
         assert.deepEqual(errors, []);

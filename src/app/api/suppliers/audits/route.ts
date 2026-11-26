@@ -44,7 +44,13 @@ export async function POST(request: Request) {
       if (process.env.SUPPLIER_CONTACTS_V2_ENABLED === "true") {
         let contacts;
         try { contacts = validateSupplierContacts(body.payload?.contacts); } catch (error) { throw new SupplierAuditError((error as Error).message); }
-        result = await context.supabase.rpc("iq_supplier_audit_contacts_v2", { p_supplier: body.id, p_contacts: { contacts }, p_expected_updated_at: body.updatedAt, p_reason: reason });
+        const args = { p_supplier: body.id, p_contacts: { contacts }, p_expected_updated_at: body.updatedAt, p_reason: reason };
+        if (body.payload.visibilityChanges !== undefined) {
+          if (!context.administrator || !context.canManage) throw new SupplierAuditError("Sólo el administrador puede publicar contactos.", 403);
+          result = await context.supabase.rpc("iq_supplier_save_contact_publications", { ...args, p_changes: body.payload.visibilityChanges });
+        } else {
+          result = await context.supabase.rpc("iq_supplier_audit_contacts_v2", args);
+        }
       } else {
         if (body.payload?.contacts !== undefined) throw new SupplierAuditError("La edición de múltiples contactos aún no está activada. Usa el formulario actual.", 503);
         const supplier = (await auditSuppliers(context)).find(item => item.id === body.id);
