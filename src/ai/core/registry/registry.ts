@@ -32,6 +32,6 @@ export const aiCapabilityRegistry = new AiCapabilityRegistry([
   { id: "audits.plan", name: "Planear auditoría", module: "audits", status: "disabled", requiredPermissions: ["ai.generate_draft"], requiresApproval: true },
   { id: "metrology.guide", name: "Orientar metrología", module: "calibrations", status: "disabled", requiredPermissions: ["ai.suggest"], requiresApproval: false },
   { id: "improvements.suggest", name: "Sugerir mejora", module: "continuous-improvement", status: "disabled", requiredPermissions: ["ai.suggest"], requiresApproval: false },
-  { id: "management.generate_review", name: "Generar revisión por la Dirección", module: "management-review", status: "disabled", requiredPermissions: ["ai.generate_draft"], requiresApproval: true },
+  { id: "management.generate_review", name: "Generar revisión por la Dirección", module: "management-review", status: process.env.INTEGRAQ_MANAGEMENT_REVIEW_AI_ENABLED === "true" ? "enabled" : "disabled", requiredPermissions: ["ai.generate_draft"], requiresApproval: true },
 ]);
 

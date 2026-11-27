@@ -113,7 +113,7 @@ jobs:
       - name: Run only on ephemeral CI database
         run: node scripts/test-document-replacement-db.mjs
       - name: Verify management review decisions and concurrent writes
-        run: node scripts/test-re04-outputs.mjs --native
+        run: node scripts/test-re04-outputs.mjs --native --reports
 
   validate:
     name: Typecheck, lint, tests and build

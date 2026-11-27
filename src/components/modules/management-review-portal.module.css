@@ -61,3 +61,20 @@ button.card:hover, button.card:focus-visible, .year select:focus-visible { borde
 .outputDialog:not([open]) { display: none; }
 .outputDialog { color: var(--ink); max-width: calc(100vw - 24px); }
 .outputDialog::backdrop { background: rgb(14 27 23 / 65%); }
+.annual { margin-block: 1rem; border-top: 1px solid var(--border, #d7e1e6); padding-block: 1rem; min-width: 0; }
+.annualActions { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+.annual small { overflow-wrap: anywhere; }
+.annual h4 { margin-block: 1rem .35rem; }
+.annual details { padding-block: .45rem; }
+.annual summary { cursor: pointer; }
+.sourceList { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,16rem),1fr)); gap: .5rem 1rem; }
+.printReport section { scroll-margin-top: 5rem; }
+.printReport label { display: grid; gap: .25rem; margin-block: .75rem; }
+.printReport button { margin: .25rem; }
+@media print {
+  :global(body):has(.printReport) * { visibility: hidden; }
+  .printReport, .printReport * { visibility: visible !important; }
+  .printReport { position: absolute; inset: 0; width: 100%; }
+  .printReport nav, .printReport button, .printReport :global(.print-hidden) { display: none; }
+  .printReport h4 { break-after: avoid; }
+}

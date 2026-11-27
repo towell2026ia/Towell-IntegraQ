@@ -442,4 +442,8 @@ if (embedded && process.argv.includes("--visual-fixture")) {
     .then((x) => x.rows);
   console.log(JSON.stringify(result.fixture));
 }
+if (process.argv.includes("--reports")) {
+  const {testReviewReports}=await import("./test-re05-reports.mjs");
+  await testReviewReports({execute,session,admin,director,viewer,external,other,org,check,native});
+}
 await embedded?.close();

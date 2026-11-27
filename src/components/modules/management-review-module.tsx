@@ -10,28 +10,21 @@ import {
   Clock3,
   Database,
   Eye,
-  FilePenLine,
   FileText,
   LockKeyhole,
   Printer,
-  Save,
-  Send,
-  Sparkles,
-  X,
 } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 
 import {
-  approveManagementReviewAsOperations,
-  approveManagementReviewAsSgc,
-  type ManagementReviewAiDraft,
-  type ManagementReviewApproval,
   type ManagementReviewRecord,
 } from "@/lib/management-review-data";
 import { ManagementReviewMinutes, useReviewMinutes } from "./management-review-minutes";
 import { hasUnsavedChanges } from "@/lib/workspace-continuity";
 import { getDocumentPermissions } from "@/lib/document-control-data";
+import { createClient } from "@/lib/supabase/client";
+import { AnnualReviewReport } from "./review-annual-report";
 import { ReviewOutputs } from "./review-outputs";
 import { outputYears } from "@/lib/review-output-storage";
 import { ReviewDocuments } from "./review-documents";
@@ -65,7 +58,7 @@ export function ManagementReviewModule(props: ManagementReviewModuleProps) {
   return <ManagementReviewWorkspace {...props} />;
 }
 
-function ManagementReviewWorkspace({ session, records, legacyPending, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords, onOpenSection }: ManagementReviewModuleProps) {
+function ManagementReviewWorkspace({ session, records, legacyPending, sourcesChanged, recordsReady, recordsError, onRetryRecords, onOpenSection }: ManagementReviewModuleProps) {
   const [period, setPeriod] = useContinuityState("review:period", () => new Date().getFullYear());
   const [view, setView] = useState<"portal" | "history" | "attachments" | "acuerdos">("portal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -75,101 +68,29 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
   const [retryOutputs,setRetryOutputs]=useState(0);
   useEffect(()=>{let active=true;outputYears().then(years=>{if(active){setAgreementYears(years);setOutputsFailed(false);}})
     .catch(()=>{if(active)setOutputsFailed(true);});return()=>{active=false;};},[retryOutputs]);
+  const [reportYears,setReportYears]=useState<number[]>([]);
+  useEffect(()=>{
+    let active=true;
+    const load=async()=>{
+      try {
+        const {data,error}=await createClient().rpc("iq_re05_years");
+        if(active && !error && Array.isArray(data)) setReportYears(data.filter(Number.isInteger));
+      } catch { /* El histórico documental conserva sus propios períodos durante la transición. */ }
+    };
+    void load();
+    return ()=>{active=false;};
+  },[session.authUserId, session.organizationId]);
   const manualAllowed = getDocumentPermissions(session, "P-35").view;
-  const [editing, setEditing] = useState(false);
-  const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(null);
-  const [saveError, setSaveError] = useState("");
-  const [approvalComment, setApprovalComment] = useState("");
   const record = records.find((item) => item.id === selectedId) ?? null;
   const displayedSources = record?.sourceSnapshot ?? [];
   const isAdministrator = session.userType === "Administrador";
-  const isOperationsDirector = normalize(session.position) === normalize("Dirección de Operaciones");
   const connectedCount = displayedSources.filter((source) => source.status === "connected").length;
 
-  const updateRecord = (nextRecord: ManagementReviewRecord) => {
-    if (!record) return false;
-    try {
-      onRecordChange(record, nextRecord);
-      setSaveError("");
-      return true;
-    } catch {
-      setSaveError("No se pudo guardar el informe. Conserva tus cambios y comprueba la versión antes de reintentar.");
-      return false;
-    }
-  };
-
-  const startEditing = () => {
-    if (!record || record.status !== "draft" || !isAdministrator) return;
-    setWorkingDraft(structuredClone(record.draft));
-    setEditing(true);
-  };
-
-  const saveDraft = () => {
-    if (!record || !workingDraft) return;
-    if (!updateRecord({
-      ...record,
-      draft: workingDraft,
-      modifiedAt: new Date().toISOString(),
-    })) return;
-    setEditing(false);
-  };
-
-  const approveAsSgc = () => {
-    if (!record) return;
-    if (!updateRecord(
-      approveManagementReviewAsSgc(
-        record,
-        session,
-        approvalComment,
-        new Date().toISOString(),
-      ),
-    )) return;
-    setApprovalComment("");
-    setEditing(false);
-  };
-
-  const approveAsOperations = () => {
-    if (!record) return;
-    if (!updateRecord(
-      approveManagementReviewAsOperations(
-        record,
-        session,
-        approvalComment,
-        new Date().toISOString(),
-      ),
-    )) return;
-    setApprovalComment("");
-  };
-
-  const updateSection = (sectionId: string, content: string) => {
-    if (!workingDraft) return;
-    setWorkingDraft({
-      ...workingDraft,
-      sections: workingDraft.sections.map((section) =>
-        section.id === sectionId ? { ...section, content } : section,
-      ),
-    });
-  };
-
-  const updateDecision = (
-    decisionId: string,
-    field: "description" | "owner" | "dueDate",
-    value: string,
-  ) => {
-    if (!workingDraft) return;
-    setWorkingDraft({
-      ...workingDraft,
-      decisions: workingDraft.decisions.map((decision) =>
-        decision.id === decisionId && !decision.officialDecisionId ? { ...decision, [field]: value } : decision,
-      ),
-    });
-  };
-
-  const allowExit = () => !(editing || approvalComment.trim() || hasUnsavedChanges()) || window.confirm("Hay cambios sin guardar. ¿Deseas salir de esta vista?");
+  const allowExit = () => !hasUnsavedChanges() || window.confirm("Hay cambios sin guardar. ¿Deseas salir de esta vista?");
   if (!record) {
     const currentYear = new Date().getFullYear();
     const years = [...new Set([currentYear, period, ...records.map(item => item.period.year),
-      ...catalog.years,...(agreementYears??[])])]
+      ...catalog.years,...reportYears,...(agreementYears??[])])]
       .filter(year => Number.isInteger(year) && year >= 1900 && year <= currentYear)
       .sort((left, right) => right - left);
     return <div className={styles.portal}>
@@ -201,7 +122,7 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
           })}</div>
         </section>)}</div>
         {outputsFailed && <button className="button button-secondary" onClick={()=>setRetryOutputs(n=>n+1)}>Reintentar consulta de salidas</button>}
-        <footer className={styles.footer}><button type="button" disabled className="button button-secondary"><Sparkles size={16} />Generar Revisión por la Dirección</button><span>Previsto para RE-05</span></footer>
+        <AnnualReviewReport key={session.authUserId + ":" + period} year={period} administrator={isAdministrator}/>
       </> : <>
         {canReturnFromReview(session, true, "management-review") ? <ReviewReturnButton onReturn={() => { if (allowExit()) setView("portal"); }} /> : <button className="button button-secondary" type="button" onClick={() => {if(allowExit())setView("portal");}}><ArrowLeft size={16} />Alcance de Dirección</button>}
         {view === "history" && legacyPending && isAdministrator && <p>Hay informes locales sin identidad comprobada pendientes de conciliación.</p>}
@@ -211,24 +132,24 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
     </div>;
   }
 
-  const draft = editing ? workingDraft : record?.draft;
+  const draft = record.draft;
 
   return (
     <div className="management-review-module">
       {canReturnFromReview(session, view === "history", "management-review") && <ReviewReturnButton onReturn={() => {
         if (!allowExit()) return;
-        setEditing(false); setSelectedId(null); setView("portal"); setApprovalComment(""); setSaveError("");
+        setSelectedId(null); setView("portal");
       }} />}
       <div className="module-heading management-review-heading print-hidden">
         <div>
           <span className="module-kicker">Gobierno del SGC</span>
-          <h2>Revisión ejecutiva generada desde IntegraQ</h2>
+          <h2>Informe histórico de este navegador</h2>
           <p>
-            Expediente único por periodo, con evidencia congelada, edición controlada y autorización secuencial.
+            Consulta del registro local. Sus aprobaciones requieren conciliación documental para reconocerse en el expediente oficial.
           </p>
         </div>
         <div className="module-heading-actions">
-          <button className="button button-secondary" type="button" onClick={() => { if (allowExit()) { setSelectedId(null); setEditing(false); setSaveError(""); setApprovalComment(""); } }}>
+          <button className="button button-secondary" type="button" onClick={() => { if (allowExit()) { setSelectedId(null); } }}>
             <ArrowLeft size={16} />Historial
           </button>
           <span className={`management-review-status status-${record?.status ?? "not-generated"}`}>
@@ -239,7 +160,6 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
       </div>
 
       {sourcesChanged?.(record) && <p className="management-data-change"><AlertCircle size={16} />Hay cambios posteriores a la generación. El acta conserva las fuentes de su revisión.</p>}
-      {saveError && <p role="alert">{saveError}</p>}
       <section className="management-source-panel work-panel print-hidden">
         <header className="management-panel-heading">
           <div>
@@ -272,16 +192,6 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
             <div><Database size={17} /><span><small>Corte de información</small><strong>{formatDateTime(record.generatedAt)}</strong></span></div>
             <div><LockKeyhole size={17} /><span><small>Generación</small><strong>Única y bloqueada</strong></span></div>
             <div className="management-control-actions">
-              {record.status === "draft" && isAdministrator ? (
-                editing ? (
-                  <>
-                    <button className="button button-secondary" type="button" onClick={() => setEditing(false)}><X size={15} />Cancelar</button>
-                    <button className="button button-primary" type="button" onClick={saveDraft}><Save size={15} />Guardar ajustes</button>
-                  </>
-                ) : (
-                  <button className="button button-secondary" type="button" onClick={startEditing}><FilePenLine size={15} />Editar borrador</button>
-                )
-              ) : null}
               <button className="icon-button" type="button" title="Imprimir o guardar como PDF" onClick={() => window.print()}><Printer size={17} /></button>
             </div>
           </section>
@@ -312,13 +222,7 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
               <span className="report-section-number">00</span>
               <div>
                 <h3>Resumen ejecutivo</h3>
-                {editing && workingDraft ? (
-                  <textarea
-                    value={workingDraft.executiveSummary}
-                    onChange={(event) => setWorkingDraft({ ...workingDraft, executiveSummary: event.target.value })}
-                    rows={5}
-                  />
-                ) : <p>{draft?.executiveSummary}</p>}
+                <p>{draft.executiveSummary}</p>
               </div>
             </section>
 
@@ -328,9 +232,7 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
                   <span className="report-section-number">{String(index + 1).padStart(2, "0")}</span>
                   <div>
                     <h3>{section.title.replace(/^\d+\.\s*/, "")}</h3>
-                    {editing ? (
-                      <textarea value={section.content} onChange={(event) => updateSection(section.id, event.target.value)} rows={5} />
-                    ) : <p>{section.content}</p>}
+                    <p>{section.content}</p>
                     {section.sourceIds.length ? (
                       <div className="management-source-references">
                         {section.sourceIds.map((sourceId) => {
@@ -359,9 +261,9 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
                   <tbody>
                     {draft?.decisions.map((decision) => decision.officialDecisionId ? <tr key={decision.id}><td colSpan={4}>Acuerdo oficial · {decision.officialDecisionId}</td></tr> : (
                       <tr key={decision.id}>
-                        <td><code>{decision.id}</code>{editing ? <textarea value={decision.description} onChange={(event) => updateDecision(decision.id, "description", event.target.value)} rows={3} /> : <strong>{decision.description}</strong>}</td>
-                        <td>{editing ? <input value={decision.owner} onChange={(event) => updateDecision(decision.id, "owner", event.target.value)} /> : decision.owner}</td>
-                        <td>{editing ? <input type="date" value={decision.dueDate} onChange={(event) => updateDecision(decision.id, "dueDate", event.target.value)} /> : formatDate(decision.dueDate)}</td>
+                        <td><code>{decision.id}</code><strong>{decision.description}</strong></td>
+                        <td>{decision.owner}</td>
+                        <td>{formatDate(decision.dueDate)}</td>
                         <td><span className={`decision-priority priority-${decision.priority.toLocaleLowerCase("es")}`}>{decision.priority}</span></td>
                       </tr>
                     ))}
@@ -391,66 +293,12 @@ function ManagementReviewWorkspace({ session, records, legacyPending, onRecordCh
             ) : null}
 
             <footer className="management-report-footer">
-              <span>Contexto: {record.contextFingerprint}</span>
+              <span>Histórico local · {record.contextFingerprint}</span>
               <span>Generado por IntegraQ {record.draft.mode === "demo" ? "(modo demostración)" : "con IA conectada"}</span>
             </footer>
           </article>
 
-          {record.status === "operations_approved" ? (
-            <ClosedAuthorizationPanel record={record} />
-          ) : (
-          <section className="management-approval-panel work-panel print-hidden">
-            <header className="management-panel-heading">
-              <div><span className="module-kicker">Validación y aprobación</span><h3>Secuencia obligatoria</h3></div>
-              <span className="management-separation"><LockKeyhole size={14} />Funciones separadas</span>
-            </header>
-            <div className="management-approval-flow">
-              <ApprovalStep
-                number="1"
-                title="Validación del SGC"
-                detail="Administrador"
-                approval={record.approvals[0]}
-                active={record.status === "draft"}
-              />
-              <span className={`approval-connector ${record.approvals[0].status === "approved" ? "complete" : ""}`} />
-              <ApprovalStep
-                number="2"
-                title="Dirección de Operaciones"
-                detail="Usuario designado"
-                approval={record.approvals[1]}
-                active={record.status === "sgc_approved"}
-              />
-              <span className="approval-connector" />
-              <div className="management-approval-step final-step step-locked">
-                <span><LockKeyhole size={17} /></span>
-                <div><strong>Acta autorizada</strong><small>Registro final bloqueado</small></div>
-              </div>
-            </div>
-
-            <div className="management-approval-action">
-                <label>
-                  <span>Comentario de autorización</span>
-                  <textarea value={approvalComment} onChange={(event) => setApprovalComment(event.target.value)} placeholder="Observaciones para la siguiente etapa" rows={3} />
-                </label>
-                {record.status === "draft" ? (
-                  <button className="button button-primary" type="button" disabled={!isAdministrator || editing} onClick={approveAsSgc}>
-                    <Send size={16} />Validar y enviar a Operaciones
-                  </button>
-                ) : (
-                  <button className="button button-primary" type="button" disabled={!isOperationsDirector} onClick={approveAsOperations}>
-                    <CheckCircle2 size={16} />Autorizar revisión
-                  </button>
-                )}
-                <p>
-                  {record.status === "draft"
-                    ? "La validación del SGC bloquea la edición y habilita la aprobación final."
-                    : isOperationsDirector
-                      ? "Esta sesión corresponde a Dirección de Operaciones."
-                      : "Pendiente de ingreso del usuario con puesto Dirección de Operaciones."}
-                </p>
-            </div>
-          </section>
-          )}
+          {record.status === "operations_approved" && <ClosedAuthorizationPanel record={record} />}
     </div>
   );
 }
@@ -521,31 +369,6 @@ function ClosedAuthorizationPanel({ record }: { record: ManagementReviewRecord }
   );
 }
 
-function ApprovalStep({
-  number,
-  title,
-  detail,
-  approval,
-  active,
-}: {
-  number: string;
-  title: string;
-  detail: string;
-  approval: ManagementReviewApproval;
-  active: boolean;
-}) {
-  const complete = approval.status === "approved";
-  return (
-    <div className={`management-approval-step ${complete ? "step-complete" : active ? "step-active" : "step-locked"}`}>
-      <span>{complete ? <Check size={17} /> : number}</span>
-      <div>
-        <strong>{title}</strong>
-        <small>{complete ? `${approval.approverName} · ${formatDateTime(approval.approvedAt ?? "")}` : detail}</small>
-      </div>
-    </div>
-  );
-}
-
 function formatDate(value: string) {
   if (!value) return "Pendiente";
   return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(value));
@@ -554,8 +377,4 @@ function formatDate(value: string) {
 function formatDateTime(value: string) {
   if (!value) return "Pendiente";
   return new Intl.DateTimeFormat("es-MX", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function normalize(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLocaleLowerCase("es");
 }

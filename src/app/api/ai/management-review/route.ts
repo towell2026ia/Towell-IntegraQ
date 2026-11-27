@@ -1,273 +1,250 @@
 import { NextResponse } from "next/server";
+import { getVerifiedSessionContext } from "@/lib/supabase/auth-session";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { canAccessModule } from "@/lib/access-policy";
+import { isExternalUser } from "@/lib/session-data";
+import {
+  authorizeLegacyAiRequest,
+  logLegacyAiRequest,
+} from "@/ai/core/legacy-adapter";
+import { aiCapabilityRegistry } from "@/ai/core/registry";
+import { collectReview } from "@/lib/review-report-collector";
+import { instructionVersion, validPeriod } from "@/lib/review-report";
+import {
+  generateReport,
+  maxOutput,
+  model,
+  type Provider,
+  reportSchema,
+} from "@/ai/core/review-agent";
 
-import { authorizeLegacyAiRequest, logLegacyAiRequest } from "@/ai/core/legacy-adapter";
-import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
-
-import type {
-  ManagementReviewAiDraft,
-  ManagementReviewAiRequest,
-  ManagementReviewDecision,
-  ManagementReviewSection,
-  ManagementReviewSourceSnapshot,
-} from "@/lib/management-review-data";
-
-function isRequest(value: unknown): value is ManagementReviewAiRequest {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ManagementReviewAiRequest>;
-  const context = candidate.context;
-  return Boolean(
-    candidate.task === "management_review" &&
-      context &&
-      typeof context === "object" &&
-      typeof context.capturedAt === "string" &&
-      typeof context.fingerprint === "string" &&
-      context.period &&
-      typeof context.period.year === "number" &&
-      Array.isArray(context.sources) &&
-      context.sources.length > 0,
-  );
-}
-
-function createDemoDraft(request: ManagementReviewAiRequest): ManagementReviewAiDraft {
-  const { context } = request;
-  const connected = context.sources.filter((source) => source.status === "connected");
-  const pending = context.sources.filter((source) => source.status === "pending");
-  const get = (id: ManagementReviewSourceSnapshot["id"]) =>
-    context.sources.find((source) => source.id === id);
-  const sourceText = (...ids: ManagementReviewSourceSnapshot["id"][]) =>
-    ids.map((id) => get(id)?.summary).filter(Boolean).join(" ");
-
-  const sections: ManagementReviewSection[] = [
-    {
-      id: "previous-actions",
-      title: "1. Seguimiento a acuerdos de revisiones anteriores",
-      content:
-        "No existe una fuente estructurada de acuerdos de revisiones anteriores en IntegraQ. En esta primera emisión se debe registrar el punto de partida y convertir las decisiones de esta acta en compromisos trazables para el siguiente periodo.",
-      sourceIds: [],
-    },
-    {
-      id: "context-changes",
-      title: "2. Cambios internos y externos relevantes",
-      content:
-        "La evidencia consolidada permite revisar cambios operativos reflejados en documentos, auditorías, resultados y acciones. El responsable del SGC debe complementar este apartado con cambios normativos, organizacionales, tecnológicos o comerciales que todavía no estén registrados en los módulos.",
-      sourceIds: ["documents", "audits", "customers", "suppliers"],
-    },
-    {
-      id: "performance",
-      title: "3. Desempeño y eficacia del Sistema de Gestión",
-      content: sourceText("documents", "objectives", "root2cause"),
-      sourceIds: ["documents", "objectives", "root2cause"],
-    },
-    {
-      id: "stakeholders",
-      title: "4. Clientes y proveedores",
-      content: sourceText("customers", "suppliers"),
-      sourceIds: ["customers", "suppliers"],
-    },
-    {
-      id: "audits",
-      title: "5. Resultados de auditorías",
-      content: sourceText("audits"),
-      sourceIds: ["audits"],
-    },
-    {
-      id: "monitoring",
-      title: "6. Seguimiento, medición y recursos de control",
-      content: sourceText("objectives", "calibrations"),
-      sourceIds: ["objectives", "calibrations"],
-    },
-    {
-      id: "risks",
-      title: "7. Riesgos, oportunidades y adecuación de recursos",
-      content:
-        "El módulo de Riesgos y oportunidades aún no aporta registros consolidados. La Dirección debe evaluar manualmente los riesgos prioritarios, la suficiencia de personal, infraestructura, competencia y presupuesto, y dejar las decisiones correspondientes en esta revisión.",
-      sourceIds: ["risks"],
-    },
-    {
-      id: "improvement",
-      title: "8. Oportunidades de mejora y decisiones",
-      content:
-        "Las oportunidades se derivan de documentos por atender, indicadores sin captura o fuera de meta, acciones vencidas, hallazgos, RNCP y equipos fuera de vigencia. El futuro módulo de Mejora continua deberá recibir y dar seguimiento a las decisiones autorizadas en esta sección.",
-      sourceIds: ["continuous-improvement", "root2cause", "objectives", "calibrations"],
-    },
-  ];
-
-  const decisions = buildDecisions(context.sources, context.capturedAt);
-  const issueCount = decisions.filter((decision) => decision.priority === "Alta").length;
-
-  return {
-    mode: "demo",
-    executiveSummary: `IntegraQ consolidó ${connected.length} de ${context.sources.length} fuentes para la ${context.period.label.toLocaleLowerCase("es")}. La revisión identifica ${decisions.length} decisiones propuestas, ${issueCount} de prioridad alta, y mantiene ${pending.length} fuentes expresamente pendientes de integración. Este contenido es un borrador asistido y requiere validación del responsable del SGC antes de presentarse a Dirección de Operaciones.`,
-    sections,
-    keyFindings: buildFindings(context.sources),
-    decisions,
-    warnings: [
-      "El contenido fue generado a partir de una fotografía de datos y no se actualizará automáticamente después de su emisión.",
-      "La IA propone redacción y prioridades; las conclusiones y decisiones pertenecen a los autorizadores.",
-      ...pending.map((source) => `${source.label}: ${source.summary}`),
-    ],
-  };
-}
-
-function buildFindings(sources: ManagementReviewSourceSnapshot[]) {
-  return sources
-    .filter((source) => source.status === "connected")
-    .map((source) => `${source.label}: ${source.summary}`)
-    .slice(0, 7);
-}
-
-function buildDecisions(
-  sources: ManagementReviewSourceSnapshot[],
-  capturedAt: string,
-): ManagementReviewDecision[] {
-  const decisions: ManagementReviewDecision[] = [];
-  const due30 = addDays(capturedAt, 30);
-  const due60 = addDays(capturedAt, 60);
-  const metric = (sourceId: string, label: string) => {
-    const value = sources
-      .find((source) => source.id === sourceId)
-      ?.metrics.find((item) => item.label === label)?.value;
-    return Number.parseFloat(value ?? "0") || 0;
-  };
-
-  if (metric("root2cause", "Vencidas") > 0) {
-    decisions.push({
-      id: "DEC-CAPA-01",
-      description: "Regularizar las acciones correctivas vencidas y validar su eficacia con evidencia.",
-      owner: "Gerencia de Calidad",
-      dueDate: due30,
-      priority: "Alta",
-    });
+export const maxDuration = 30;
+const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+const reply = (data: unknown, status = 200) =>
+  NextResponse.json(data, {
+    status,
+    headers: { "Cache-Control": "private, no-store" },
+  });
+const failure = (error: string, status: number) => reply({ error }, status);
+async function access() {
+  const ctx = await getVerifiedSessionContext();
+  if (ctx?.failure === "unavailable") {
+    return failure("No se pudo verificar la sesión.", 503);
   }
-  if (metric("objectives", "Sin captura") > 0 || metric("objectives", "No cumplen") > 0) {
-    decisions.push({
-      id: "DEC-OBJ-01",
-      description: "Completar los resultados faltantes y acordar planes para indicadores fuera de meta.",
-      owner: "Responsables de proceso",
-      dueDate: due30,
-      priority: "Alta",
-    });
+  if (!ctx?.session) {
+    return failure("Inicia sesión para consultar la revisión.", 401);
   }
-  if (metric("documents", "Por atender") > 0) {
-    decisions.push({
-      id: "DEC-DOC-01",
-      description: "Cerrar validaciones y correcciones pendientes de información documentada.",
-      owner: "Responsable del SGC",
-      dueDate: due30,
-      priority: "Media",
-    });
+  const { session, supabase } = ctx;
+  if (
+    isExternalUser(session) || session.workspaceMode !== "production" ||
+    !session.authUserId || !session.organizationId ||
+    !canAccessModule(session, "management-review")
+  ) return failure("Sin acceso a esta revisión.", 403);
+  const admin = session.userType === "Administrador" &&
+    authorizeLegacyAiRequest(session, "management-review", "ai.generate_draft")
+      .allowed;
+  const director = await supabase.rpc("iq_re04_director");
+  if (director.error) {
+    return failure("No se pudieron verificar las atribuciones.", 503);
   }
-  if (metric("calibrations", "Vencidos") > 0) {
-    decisions.push({
-      id: "DEC-CAL-01",
-      description: "Restablecer la vigencia de los equipos de medición vencidos antes de su uso.",
-      owner: "Metrología y proceso usuario",
-      dueDate: due30,
-      priority: "Alta",
-    });
+  if (!admin && director.data !== true) {
+    return failure("Sin acceso al expediente ejecutivo.", 403);
   }
-  if (sources.some((source) => source.status === "pending")) {
-    decisions.push({
-      id: "DEC-SGC-01",
-      description: "Integrar las fuentes pendientes de Riesgos y Mejora continua para la siguiente revisión.",
-      owner: "Responsable del SGC",
-      dueDate: due60,
-      priority: "Media",
-    });
-  }
-  return decisions;
+  return { session, supabase, admin, director: director.data === true };
 }
-
-function addDays(value: string, days: number) {
-  const date = new Date(value);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
+function configured() {
+  return aiCapabilityRegistry.isEnabled("management.generate_review") &&
+    !!process.env.OPENAI_API_KEY;
 }
-
-function normalizeExternalDraft(value: unknown): ManagementReviewAiDraft {
-  const candidate = value as Partial<ManagementReviewAiDraft>;
-  const strings = (input: unknown) =>
-    Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : [];
-  const sections = Array.isArray(candidate.sections)
-    ? candidate.sections.filter(isSection)
-    : [];
-  const decisions = Array.isArray(candidate.decisions)
-    ? candidate.decisions.filter(isDecision)
-    : [];
-
-  return {
-    mode: "external",
-    executiveSummary:
-      typeof candidate.executiveSummary === "string"
-        ? candidate.executiveSummary
-        : "Borrador recibido del servicio de IA.",
-    sections,
-    keyFindings: strings(candidate.keyFindings),
-    decisions,
-    warnings: strings(candidate.warnings),
-  };
-}
-
-function isSection(value: unknown): value is ManagementReviewSection {
-  if (!value || typeof value !== "object") return false;
-  const section = value as Partial<ManagementReviewSection>;
-  return Boolean(
-    typeof section.id === "string" &&
-      typeof section.title === "string" &&
-      typeof section.content === "string" &&
-      Array.isArray(section.sourceIds),
-  );
-}
-
-function isDecision(value: unknown): value is ManagementReviewDecision {
-  if (!value || typeof value !== "object") return false;
-  const decision = value as Partial<ManagementReviewDecision>;
-  return Boolean(
-    typeof decision.id === "string" &&
-      typeof decision.description === "string" &&
-      typeof decision.owner === "string" &&
-      typeof decision.dueDate === "string" &&
-      ["Alta", "Media", "Baja"].includes(decision.priority ?? ""),
-  );
-}
-
-export async function POST(request: Request) {
-  const session = await getAuthenticatedSession();
-  if (!session) return NextResponse.json({ error: "Inicia sesión para generar la revisión." }, { status: 401 });
-  const access = authorizeLegacyAiRequest(session, "management-review", "ai.generate_draft");
-  if (!access.allowed) return NextResponse.json({ error: access.reason }, { status: 403 });
-  const body: unknown = await request.json().catch(() => null);
-  if (!isRequest(body)) {
-    return NextResponse.json(
-      { error: "Se requiere un contexto consolidado válido para generar la revisión." },
-      { status: 400 },
-    );
-  }
-
-  await logLegacyAiRequest({ user: session, module: "management-review", capability: "legacy.management_review", input: { period: body.context.period }, context: { fingerprint: body.context.fingerprint, sources: body.context.sources.map((source) => source.id) }, recordType: "management_review", requiresApproval: true });
-
-  const endpoint =
-    process.env.INTEGRAQ_MANAGEMENT_REVIEW_AI_ENDPOINT ?? process.env.INTEGRAQ_AI_ENDPOINT;
-  const apiKey = process.env.INTEGRAQ_AI_API_KEY;
-  if (!endpoint) return NextResponse.json(createDemoDraft(body));
-
-  try {
-    const externalResponse = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+const provider: Provider = async (input) => {
+  // Mismo SDK y secreto del servidor. Ningún reintento tras una respuesta incierta.
+  const { default: OpenAI } = await import("openai");
+  const client = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    baseURL: "https://api.openai.com/v1",
+    maxRetries: 0,
+    timeout: 18000,
+  });
+  const result = await client.chat.completions.create({
+    model,
+    max_completion_tokens: maxOutput,
+    store: false,
+    messages: [{ role: "system", content: input.instructions }, {
+      role: "user",
+      content: input.message,
+    }],
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        name: "informe_anual",
+        strict: true,
+        schema: reportSchema,
       },
-      body: JSON.stringify(body),
-      cache: "no-store",
-      signal: AbortSignal.timeout(45_000),
-    });
-    if (!externalResponse.ok) {
-      throw new Error(`El servicio de IA respondió ${externalResponse.status}.`);
+    },
+  });
+  const choice = result.choices[0];
+  let body: unknown = null;
+  if (choice?.finish_reason === "stop" && choice.message.content) {
+    try {
+      body = JSON.parse(choice.message.content);
+    } catch { /* La validación registra el rechazo. */ }
+  }
+  return {
+    body,
+    input: result.usage?.prompt_tokens ?? null,
+    output: result.usage?.completion_tokens ?? null,
+  };
+};
+export async function GET(request: Request) {
+  try {
+    const ctx = await access();
+    if (ctx instanceof Response) return ctx;
+    const params = new URL(request.url).searchParams;
+    const year = Number(params.get("year"));
+    if (!validPeriod(year)) return failure("Período inválido.", 400);
+    if (params.get("view") === "sources") {
+      if (!ctx.admin) return failure("Sin acceso al recopilador.", 403);
+      return reply(await collectReview(ctx.supabase, ctx.session, year));
     }
-    return NextResponse.json(normalizeExternalDraft(await externalResponse.json()));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "No fue posible consultar la IA.";
-    return NextResponse.json({ error: message }, { status: 502 });
+    const id = params.get("id");
+    if (id) {
+      if (!uuid.test(id)) return failure("Informe inválido.", 400);
+      const q = await ctx.supabase.from("review_report_runs").select(
+        "id,year,revision,state,snapshot,snapshot_hash,model,instructions,report,review_report_events(sequence,command,stage,actor,position_name,created_at,reason,conclusion,content_hash,proposal,decision_id)",
+      ).eq("year", year).eq("organization_id", ctx.session.organizationId!).eq(
+        "id",
+        id,
+      ).maybeSingle();
+      if (q.error) return failure("El informe no está disponible.", 503);
+      return q.data ? reply(q.data) : failure("Informe no disponible.", 404);
+    }
+    const runs = await ctx.supabase.from("review_report_runs").select(
+      "id,revision,state,started_at,finished_at",
+    ).eq("organization_id", ctx.session.organizationId!).eq("year", year).order(
+      "started_at",
+      { ascending: false },
+    );
+    if (runs.error) {
+      return failure("El expediente central todavía no está disponible.", 503);
+    }
+    const budget = ctx.admin && configured()
+      ? await ctx.supabase.rpc("iq_re05_available")
+      : null;
+    const visibleRuns = runs.data.map((r) =>
+      r.state === "processing" &&
+        Date.now() - Date.parse(r.started_at) > maxDuration * 1000
+        ? { ...r, state: "uncertain" }
+        : r
+    );
+    return reply({
+      runs: visibleRuns,
+      admin: ctx.admin,
+      director: ctx.director,
+      enabled: budget?.data === true &&
+        !runs.data.some((r) => ["processing", "uncertain"].includes(r.state)),
+    });
+  } catch {
+    return failure("No se pudo consultar la revisión.", 503);
+  }
+}
+export async function POST(request: Request) {
+  try {
+    const ctx = await access();
+    if (ctx instanceof Response) return ctx;
+    const b = await request.json().catch(() => null);
+    if (
+      !b || !validPeriod(b.year) || !uuid.test(b.operation) ||
+      typeof b.command !== "string"
+    ) return failure("Solicitud de revisión inválida.", 400);
+    if (b.command !== "generate") {
+      if (
+        !uuid.test(b.run) || !Number.isInteger(b.expected) ||
+        typeof b.reason !== "string" || !b.reason.trim() ||
+        !["edit", "submit", "validate", "authorize", "return", "proposal"]
+          .includes(b.command)
+      ) return failure("Comprueba los datos de la revisión.", 400);
+      const q = await ctx.supabase.rpc("iq_re05_review", {
+        p_id: b.operation,
+        p_run: b.run,
+        p_expected: b.expected,
+        p_command: b.command,
+        p_reason: b.reason,
+        p_text: b.text ?? null,
+        p_proposal: b.proposal ?? null,
+      });
+      if (q.error) {
+        return failure(
+          "No se confirmó el cambio. Comprueba tu permiso, el estado y la versión.",
+          q.error.message.includes("DENIED") ? 403 : 409,
+        );
+      }
+      return reply({ sequence: q.data });
+    }
+    if (!ctx.admin) return failure("Sin autorización para generar.", 403);
+    if (!configured()) {
+      return failure("Generación pendiente de configuración autorizada.", 403);
+    }
+    if (
+      Object.keys(b).some((k) =>
+        !["year", "operation", "command", "fingerprint", "accepted"].includes(k)
+      ) || typeof b.accepted !== "boolean"
+    ) return failure("Solicitud de generación inválida.", 400);
+    const budget = await ctx.supabase.rpc("iq_re05_available");
+    if (budget.data !== true) {
+      return failure("Generación pendiente de presupuesto autorizado.", 403);
+    }
+    const snapshot = await collectReview(ctx.supabase, ctx.session, b.year);
+    if (snapshot.fingerprint !== b.fingerprint) {
+      return failure(
+        "Las fuentes cambiaron. Consulta de nuevo el resumen.",
+        409,
+      );
+    }
+    const ledger = createAdminClient(); // Sólo escritura de la operación ya autorizada. Las fuentes usan el cliente de sesión.
+    const operation = await generateReport(snapshot, b.accepted, true, {
+      async reserve() {
+        const q = await ledger.rpc("iq_re05_reserve", {
+          p_id: b.operation,
+          p_snapshot: snapshot,
+          p_model: model,
+          p_instructions: instructionVersion,
+        });
+        if (q.error) throw Error("No se pudo reservar la generación.");
+        return q.data;
+      },
+      async finish(id, state, report, input, output) {
+        const q = await ledger.rpc("iq_re05_finish", {
+          p_id: id,
+          p_state: state,
+          p_report: report,
+          p_input: input,
+          p_output: output,
+        });
+        if (q.error) throw Error("No se confirmó el registro.");
+      },
+    }, provider);
+    await logLegacyAiRequest({
+      user: ctx.session,
+      module: "management-review",
+      capability: "management.generate_review",
+      input: { operation: operation.id },
+      context: { fingerprint: snapshot.fingerprint },
+      status: operation.state === "completed"
+        ? "success"
+        : operation.state === "failed"
+        ? "failed"
+        : "processing",
+      recordId: operation.id,
+      recordType: "executive_report",
+      model,
+      provider: "openai",
+      requiresApproval: true,
+    });
+    return reply(operation);
+  } catch {
+    return failure(
+      "No se confirmó la operación. Consulta el expediente antes de reintentar.",
+      503,
+    );
   }
 }
