@@ -13,7 +13,7 @@ export function canReadQualityPolicy(session: ActiveSession) {
 // The caller supplies the session's RLS client and only the fields its view needs.
 export function qualityPolicyQuery(db: SupabaseClient, session: ActiveSession, fields: string) {
   if (!canReadQualityPolicy(session)) throw Object.assign(new Error("Sin acceso documental."), { code: "42501" });
-  return db.from("controlled_documents").select(fields + ",process:processes!inner(organization_id)")
+  return db.from("controlled_documents").select(fields + ",process:processes!controlled_documents_process_id_fkey!inner(organization_id)")
     .eq("id", qualityPolicyDocumentId).eq("code", "AV-SGC-0").eq("process_id", policyProcess)
     .eq("process.organization_id", session.organizationId!)
     .or("organization_id.is.null,organization_id.eq." + session.organizationId)

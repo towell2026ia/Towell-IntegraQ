@@ -24,7 +24,12 @@ function fixture(failingTable?: string, docs: DocFixture[] = []) {
     const where: Record<string, unknown> = {};
     let scope = "";
     const q = {
-      select: () => q,
+      select: (columns: string) => {
+        if (table === "controlled_documents" && columns.includes("document_lifecycle!")) {
+          expect(columns).toContain("process:processes!controlled_documents_process_id_fkey!inner(organization_id)");
+        }
+        return q;
+      },
       order: () => q,
       eq: (field: string, v: unknown) => {
         where[field] = v;
