@@ -1,0 +1,8 @@
+.header { flex-wrap: wrap; }
+.policyOverlay :global(.document-preview-modal) { width: min(1180px, 100%); max-width: 100%; min-width: 0; max-height: 92dvh; overflow: auto; }
+.policyOverlay :global(.secure-document-preview-body) { grid-template-columns: minmax(0, 1fr); }
+.policyOverlay :global(.document-preview-modal) footer { flex-wrap: wrap; }
+@media (max-width: 680px) {
+  .policyOverlay :global(.quality-modal-backdrop) { padding: 8px; }
+  .policyOverlay :global(.document-preview-modal) { width: 100%; }
+}

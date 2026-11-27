@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { type ActiveSession, activeSession } from "./session-data";
 vi.mock("server-only", () => ({}));
+import { qualityPolicyDocumentId } from "./quality-policy";
 import { collectReview } from "./review-report-collector";
 
 const admin: ActiveSession = {
@@ -12,17 +13,36 @@ const admin: ActiveSession = {
   authUserId: "actor",
 };
 // Local test adapter for the PostgREST reader. It only implements read operations.
-function fixture(failingTable?: string) {
+type DocFixture = {
+  id: string; code: string; process_id: string; organization_id: string | null; process: { organization_id: string };
+  active: boolean; deleted_at: null; lifecycle: { is_deleted: boolean; lifecycle_status: string } | null;
+  versions: { id: string; status: string; revision: number }[];
+};
+function fixture(failingTable?: string, docs: DocFixture[] = []) {
   const filters: string[] = [];
   function from(table: string) {
+    const where: Record<string, unknown> = {};
+    let scope = "";
     const q = {
       select: () => q,
       order: () => q,
       eq: (field: string, v: unknown) => {
+        where[field] = v;
         filters.push(table + "." + field + "=" + v);
         return q;
       },
-      is: () => q,
+      is: (field: string, value: unknown) => { where[field] = value; return q; },
+      or: (condition: string) => { scope = condition; return q; },
+      async maybeSingle() {
+        expect(where).toMatchObject({ id: qualityPolicyDocumentId, code: "AV-SGC-0", process_id: "P-35",
+          "process.organization_id": "tenant", active: true, deleted_at: null, "versions.status": "current" });
+        expect(scope).toBe("organization_id.is.null,organization_id.eq.tenant");
+        if (table === failingTable) return { data: null, error: { code: "42501" } };
+        const data = docs.find(d => d.id === where.id && d.code === where.code && d.process_id === where.process_id &&
+          d.active && !d.deleted_at && d.process.organization_id === where["process.organization_id"] &&
+          (d.organization_id === null || d.organization_id === "tenant"));
+        return { data, error: null };
+      },
       like: () => q,
       gte: () => q,
       lte: () => q,
@@ -37,6 +57,7 @@ function fixture(failingTable?: string) {
             source_kind: "historical",
             historical_status,
           }))
+          : table === "controlled_documents" ? docs.filter(d => d.organization_id === where.organization_id)
           : table === "indicator_periods"
           ? ["Q1", "Q2"].map((quarter, i) => ({
             id: "p" + i,
@@ -123,6 +144,34 @@ describe("Recopilador RE-05", () => {
     expect(s.sources.find((x) => x.id === "suppliers")?.status).toBe(
       "available",
     );
+  });
+  it("vincula la revisión vigente institucional sin incluirla en el catálogo general de la organización", async () => {
+    const policy: DocFixture = { id: qualityPolicyDocumentId, code: "AV-SGC-0", process_id: "P-35", organization_id: null,
+      process: { organization_id: "tenant" }, active: true, deleted_at: null, lifecycle: null,
+      versions: [{ id: "old", revision: 1, status: "obsolete" }, { id: "official", revision: 2, status: "current" }] };
+    const manual = { ...policy, id: "b5b1c30d-da00-593c-abb7-15832857ef5c", code: "M-SGC-01", organization_id: "tenant",
+      versions: [{ id: "waiting", revision: 1, status: "pending" }] };
+    const { db } = fixture(undefined, [policy, manual, { ...policy, id: "other-null" }]);
+    const read = async () => (await collectReview(db, admin, 2025)).sources;
+    const before = await read();
+    expect(before.find(s => s.id === "policy")).toMatchObject({ status: "available",
+      evidence: [expect.objectContaining({ label: "AV-SGC-0", recordId: policy.id, id: "official" })],
+      records: ["policy:" + policy.id, "policy:official"], metrics: [expect.objectContaining({ value: 2 })] });
+    expect(before.find(s => s.id === "documents")?.records).toEqual(["documents:" + manual.id]);
+    expect(before.find(s => s.id === "manual")?.metrics[0].label).toBe("Revisión en validación");
+    policy.versions[1].status = "obsolete";
+    policy.versions.push({ id: "new", revision: 3, status: "current" });
+    expect((await read()).find(s => s.id === "policy")?.records).toContain("policy:new");
+    policy.lifecycle = { is_deleted: false, lifecycle_status: "obsolete" };
+    expect((await read()).find(s => s.id === "policy")?.status).toBe("empty");
+    policy.lifecycle = null;
+    policy.organization_id = "other";
+    expect((await read()).find(s => s.id === "policy")?.status).toBe("empty");
+    policy.organization_id = null;
+    policy.process.organization_id = "other";
+    expect((await read()).find(s => s.id === "policy")?.status).toBe("empty");
+    const denied = await collectReview(fixture("controlled_documents").db, admin, 2025);
+    expect(denied.sources.find(s => s.id === "policy")).toMatchObject({ status: "forbidden", records: [] });
   });
   it.each(["Cliente", "Proveedor", "Usuario interno"] as const)(
     "deniega recopilar a %s antes de leer",

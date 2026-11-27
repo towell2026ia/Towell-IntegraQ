@@ -285,7 +285,7 @@ export function HomeModule({ onNavigate, sources, loading = false, baseDashboard
         </section>
       ) : null}
 
-      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog indicators={dashboard.qualityObjectives} openIndicator={id => onNavigate("indicators", id)} pending={dashboard.pendingSources?.includes("indicators")} unavailable={dashboard.unavailableSources?.includes("indicators") || !canPerformModuleAction(sources.session, "indicators", "view")} /> : null}
+      {visibleSections.has("quality-objectives") ? <HomeObjectiveCatalog session={sources.session} indicators={dashboard.qualityObjectives} openIndicator={id => onNavigate("indicators", id)} pending={dashboard.pendingSources?.includes("indicators")} unavailable={dashboard.unavailableSources?.includes("indicators") || !canPerformModuleAction(sources.session, "indicators", "view")} /> : null}
 
       {visibleSections.has("alerts") || visibleSections.has("pending-tasks") ? (
       <div className={`home-priority-grid ${!visibleSections.has("alerts") || !visibleSections.has("pending-tasks") ? "home-priority-single" : ""}`}>

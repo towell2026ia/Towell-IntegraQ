@@ -14,6 +14,8 @@ import {
 import type { ActiveSession } from "@/lib/session-data";
 import { createClient } from "@/lib/supabase/client";
 
+import { currentPolicyVersion, qualityPolicyQuery } from "./quality-policy";
+
 const privateBucket = "integraq-private";
 const maximumDocumentSizeBytes = 50 * 1024 * 1024;
 
@@ -112,6 +114,19 @@ export async function loadStoredControlledDocument(documentId: string, activeOnl
   if (error) throw new Error(`No se pudo consultar el expediente (${error.code}): ${errorMessage(error)}`);
   if (!data) throw new Error("El expediente no está disponible para esta sesión.");
   return mapStoredDocument(data as unknown as StoredDocumentRow);
+}
+
+export async function loadCurrentQualityPolicy(session: ActiveSession): Promise<ControlledDocument> {
+  const { data, error } = await qualityPolicyQuery(createClient(), session, detailColumns);
+  if (error) throw error;
+  if (data) {
+    const document = mapStoredDocument(data as unknown as StoredDocumentRow);
+    const version = currentPolicyVersion(document.versions);
+    if (document.lifecycle?.status === "active" && !document.lifecycle.isDeleted && version?.fileObjectId) {
+      return { ...document, versions: [version] };
+    }
+  }
+  throw new Error("La Política de Calidad vigente no está disponible para esta sesión.");
 }
 
 export async function uploadPendingControlledDocument(input: ManualDocumentUploadInput): Promise<ControlledDocument> {

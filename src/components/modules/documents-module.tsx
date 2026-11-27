@@ -24,7 +24,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { qualityPolicyDocumentId } from "@/lib/home-institutional-images";
 import { AuthorizedDocumentPreview, DocumentHistoryModal, statusLabels, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { clearHomeImages } from "./home-institutional-images";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
@@ -35,6 +34,7 @@ import {
   type ProcessCatalogItem,
 } from "@/lib/configuration-data";
 import {
+  canReadControlledCatalog,
   getDocumentPermissions,
   getWorkingVersion,
   getDocumentPreviewVersions,
@@ -56,9 +56,9 @@ import {
   type AppFormValue,
 } from "@/lib/form-data";
 import type { ActiveSession } from "@/lib/session-data";
-import { isAdministrator, isExternalUser } from "@/lib/session-data";
+import { isAdministrator } from "@/lib/session-data";
 import { documentVersionLabel } from "@/lib/document-replacement";
-import { reviewManualId, loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
+import { loadCurrentQualityPolicy, reviewManualId, loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -94,15 +94,6 @@ interface DocumentsModuleProps {
   session: ActiveSession;
   liveCatalog?: boolean;
   cache?: ReturnType<typeof createDocumentCatalogCache>;
-}
-
-function canReadControlledCatalog(session: ActiveSession) {
-  return isAdministrator(session) || (
-    !isExternalUser(session) && (
-      Boolean(session.assignedModuleIds?.includes("documents")) ||
-      Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === "documents" && permission.action === "view"))
-    )
-  );
 }
 
 type CachedRows<T> = Map<string, { value: T; time: number }>;
@@ -145,7 +136,7 @@ function loadCatalogSelection(signal: AbortSignal, key: string) {
 }
 
 export function DocumentsModule(props: DocumentsModuleProps) {
-  if (props.reviewDocument && canReadControlledCatalog(props.session)) return <FocusedCatalog {...props} focusId={props.reviewDocument} />;
+  if (props.reviewDocument && canReadControlledCatalog(props.session)) return <FocusedCatalog key={[props.session.organizationId, props.session.authUserId, props.reviewDocument].join(":")} {...props} focusId={props.reviewDocument} />;
   if (props.reviewDocument) return <p role="status">Sin acceso al documento vigente.</p>;
   if (props.focusId && props.liveCatalog) return <FocusedCatalog key={props.focusId} {...props} focusId={props.focusId} />;
   return <DocumentCatalog {...props} />;
@@ -158,8 +149,8 @@ function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const load = useCallback(async () => {
     if (!props.reviewDocument) return loadStoredControlledDocument(props.focusId);
-    return props.reviewDocument === "policy" ? loadStoredControlledDocument(qualityPolicyDocumentId, true) : loadStoredControlledDocument(reviewManualId);
-  }, [props.focusId, props.reviewDocument]);
+    return props.reviewDocument === "policy" ? loadCurrentQualityPolicy(props.session) : loadStoredControlledDocument(reviewManualId);
+  }, [props.focusId, props.reviewDocument, props.session]);
   const result = useCatalogRead(cache, props.focusId + ":" + attempt, load);
   if (result?.error) return <p role="alert">{props.reviewDocument ? "El documento no está disponible en tu alcance." : result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
   if (!result?.value) return <p role="status">Consultando expediente…</p>;
@@ -178,7 +169,7 @@ function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
     const history = doc.versions.filter(v => allowed.some(a => a.id === v.id) || v.status === "obsolete");
     return <section className="work-panel"><h2>{doc.name}</h2><p>{doc.code} · {selected ? documentVersionLabel(selected) + " · " + statusLabels[selected.status] : manual && doc.versions.some(v => v.status === "pending") && !current.length ? "En validación · Sin revisión vigente" : "Sin revisión vigente disponible"}</p>
       {selected?.status === "current" && <p>Vigente en la fecha de consulta.</p>}
-      {selected?.fileObjectId && <button className="button button-secondary" type="button" onClick={() => setViewerOpen(true)}>Ver documento</button>}
+      {selected?.fileObjectId && <button className="button button-secondary" type="button" onClick={() => { if (!manual) setAttempt(value => value + 1); setViewerOpen(true); }}>Ver documento</button>}
       {manual && permissions.history && <button className="button button-secondary" type="button" onClick={() => setHistoryOpen(true)}>Historial</button>}
       {selected?.fileObjectId && viewerOpen && <AuthorizedDocumentPreview document={{ ...doc, versions: [selected] }} session={props.session} activeOnly onClose={() => setViewerOpen(false)} />}
       {historyOpen && manual && permissions.history && <DocumentHistoryModal document={{ ...doc, versions: history }} canDownload={permissions.download} canRestore={false} onClose={() => setHistoryOpen(false)} onRestore={async () => {}} />}

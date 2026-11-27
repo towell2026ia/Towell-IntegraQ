@@ -11,7 +11,7 @@ import type { MeasurementAsset } from "./types";
 import { QUALITY_OBJECTIVES } from "./indicators/quality-objectives";
 import { localDate, type Output, outputMetrics } from "./review-outputs";
 import { rncpEffectiveness } from "./rncp/effectiveness";
-import { qualityPolicyDocumentId } from "./home-institutional-images";
+import { currentPolicyVersion, qualityPolicyQuery } from "./quality-policy";
 import {
   type Evidence,
   type Metric,
@@ -158,7 +158,7 @@ export async function collectReview(
     id: string;
     revision: number;
     status: string;
-    updated_at: string;
+    updated_at?: string;
   };
   source(
     "documents",
@@ -198,40 +198,39 @@ export async function collectReview(
       );
     },
   );
-  for (
-    const [id, label, documentId] of [[
-      "manual",
-      "Manual de Calidad",
-      "b5b1c30d-da00-593c-abb7-15832857ef5c",
-    ], ["policy", "Política de Calidad", qualityPolicyDocumentId]]
-  ) {
-    source(id, label, "documents", current, async () => {
-      const record = (await documents()).find((r) =>
-        r.id === documentId &&
-        (id !== "manual" || r.code === "M-SGC-01" && r.process_id === "P-35")
-      );
-      const versions = (record?.versions as Version[] | undefined) ?? [];
-      const version = versions.find((v) => v.status === "current") ??
-        (id === "manual"
-          ? versions.filter((v) => v.status === "pending").sort((a, b) =>
-            b.revision - a.revision
-          )[0]
-          : undefined);
-      return {
-        records: version ? [documentId, version.id] : [],
-        metrics: version
-          ? [{
-            label: version.status === "current"
-              ? "Revisión vigente"
-              : "Revisión en validación",
-            value: version.revision,
-            unit: "revisión",
-            rule: "Versión del expediente oficial",
-          }]
-          : [],
-      };
-    });
+  function documentSource(documentId: string, version: Version | undefined): Result {
+    return {
+      records: version ? [documentId, version.id] : [],
+      metrics: version ? [{
+        label: version.status === "current" ? "Revisión vigente" : "Revisión en validación",
+        value: version.revision,
+        unit: "revisión",
+        rule: "Versión del expediente oficial",
+      }] : [],
+    };
   }
+  source("manual", "Manual de Calidad", "documents", current, async () => {
+    const id = "b5b1c30d-da00-593c-abb7-15832857ef5c";
+    const record = (await documents()).find(r => r.id === id && r.code === "M-SGC-01" && r.process_id === "P-35");
+    const versions = (record?.versions as Version[] | undefined) ?? [];
+    return documentSource(id, versions.find(v => v.status === "current") ??
+      versions.filter(v => v.status === "pending").sort((a, b) => b.revision - a.revision)[0]);
+  });
+  source("policy", "Política de Calidad", "documents", current, async () => {
+    const { data, error } = await qualityPolicyQuery(db, session,
+      "id,versions:controlled_document_versions!controlled_document_versions_document_id_fkey(id,revision,status),lifecycle:document_lifecycle!document_lifecycle_document_id_fkey(is_deleted,lifecycle_status)");
+    if (error) throw error;
+    if (!data) return { records: [], metrics: [] };
+    type Lifecycle = { is_deleted: boolean; lifecycle_status: string };
+    const policy = data as unknown as { id: string; versions: Version[]; lifecycle: Lifecycle | Lifecycle[] | null };
+    const states = Array.isArray(policy.lifecycle) ? policy.lifecycle : policy.lifecycle ? [policy.lifecycle] : [];
+    if (states.some(state => state.is_deleted || state.lifecycle_status !== "active")) return { records: [], metrics: [] };
+    const version = currentPolicyVersion(policy.versions);
+    const source = documentSource(policy.id, version);
+    if (version) source.evidence = [{ id: version.id, label: "AV-SGC-0", recordId: policy.id,
+      status: "Vigente", value: version.revision, unit: "revisión" }];
+    return source;
+  });
   for (
     const [id, label, table] of [[
       "organization",

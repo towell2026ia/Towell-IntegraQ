@@ -3,6 +3,7 @@ import documentImportManifest from "@/lib/document-import-manifest.json";
 import {
   canAccessProcess,
   isAdministrator,
+  isExternalUser,
   type DocumentAccessRole,
   type ActiveSession,
 } from "@/lib/session-data";
@@ -184,6 +185,15 @@ export const documentPermissionAssignments: DocumentPermissionAssignment[] = [
     },
   },
 ];
+
+export function canReadControlledCatalog(session: ActiveSession) {
+  return isAdministrator(session) || (
+    !isExternalUser(session) && (
+      Boolean(session.assignedModuleIds?.includes("documents")) ||
+      Boolean(session.moduleActionPermissions?.some((permission) => permission.moduleId === "documents" && permission.action === "view"))
+    )
+  );
+}
 
 export function getDocumentPermissions(
   session: ActiveSession,

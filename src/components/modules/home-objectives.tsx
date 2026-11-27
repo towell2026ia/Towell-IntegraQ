@@ -1,13 +1,27 @@
 "use client";
 
-import { LoaderCircle, Target, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BookOpen, LoaderCircle, Target, X } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { statusLabels } from "@/lib/indicator-data";
 import { institutionalQualityObjectives, type HomeObjectiveIndicator } from "@/lib/home-objective-groups";
 import styles from "./home-objectives.module.css";
+import policyStyles from "./quality-policy-dialog.module.css";
+import type { ActiveSession } from "@/lib/session-data";
+import { canReadQualityPolicy } from "@/lib/quality-policy";
 
-export function HomeObjectives({ indicators = [], openIndicator, pending = false, unavailable = false }: { indicators?: HomeObjectiveIndicator[]; openIndicator?: (id: string) => void; pending?: boolean; unavailable?: boolean } = {}) {
+const PolicyDialog = dynamic(() => import("./quality-policy-dialog").then(module => module.QualityPolicyDialog));
+
+export function HomeObjectives({ session, indicators = [], openIndicator, pending = false, unavailable = false }: { session?: ActiveSession; indicators?: HomeObjectiveIndicator[]; openIndicator?: (id: string) => void; pending?: boolean; unavailable?: boolean } = {}) {
   const [selected, setSelected] = useState<number | null>(null);
+
+  const [policyOpen, setPolicyOpen] = useState(false);
+  const policyButton = useRef<HTMLButtonElement>(null);
+  const hasPolicyAccess = session && canReadQualityPolicy(session);
+  const closePolicy = useCallback(() => {
+    setPolicyOpen(false);
+    policyButton.current?.focus({ preventScroll: true });
+  }, []);
 
   const members = selected === null ? [] : indicators.filter(item => item.objective === institutionalQualityObjectives[selected]);
   useEffect(() => {
@@ -20,7 +34,10 @@ export function HomeObjectives({ indicators = [], openIndicator, pending = false
   }, [selected]);
 
   return <section className="home-dashboard-section home-objectives-section" aria-label="Objetivos de Calidad">
-    <header className="home-section-header"><span><Target size={17} /></span><div><small>Dirección estratégica</small><h3>Objetivos de Calidad</h3></div><strong>{institutionalQualityObjectives.length}</strong></header>
+    <header className={`home-section-header ${policyStyles.header}`}><span><Target size={17} /></span><div><small>Dirección estratégica</small><h3>Objetivos de Calidad</h3></div><strong>{institutionalQualityObjectives.length}</strong>
+      {hasPolicyAccess && <button type="button" className="button button-secondary" ref={policyButton} aria-haspopup="dialog" onClick={() => setPolicyOpen(true)}><BookOpen size={15} aria-hidden />Consultar Política de Calidad</button>}
+    </header>
+    {policyOpen && hasPolicyAccess && <PolicyDialog key={session.authUserId + ":" + session.organizationId} session={session} onClose={closePolicy} />}
     <div className={styles.groups}>{institutionalQualityObjectives.map((objective, index) =>
       <button className={styles.group} type="button" key={objective} onClick={() => setSelected(index)} aria-label={`Ver objetivo ${index + 1}: ${objective}`}>
         <span className={styles.number}>{String(index + 1).padStart(2, "0")}</span>
