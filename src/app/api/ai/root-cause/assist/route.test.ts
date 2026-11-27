@@ -41,18 +41,18 @@ beforeEach(() => {
   m.permission.mockReturnValue({ allowed: true });
   m.retrieve.mockResolvedValue({ documents: [], warnings: [] });
   m.audit.mockResolvedValue(undefined);
-  m.modelRetrieve.mockResolvedValue({ id: "gpt-5-nano" });
+  m.modelRetrieve.mockResolvedValue({ id: "gpt-6-luna" });
   m.responsesCreate.mockResolvedValue(completedResponse());
   vi.stubEnv("ROOT2CAUSE_AI_ENABLED", "false");
   vi.stubEnv("OPENAI_API_KEY", "test-key-not-returned-to-client");
 });
 
-describe("Root2Cause GPT-5 nano endpoint", () => {
+describe("Root2Cause GPT-6 Luna endpoint", () => {
   it("checks account model access on the existing route without enabling generation or consuming tokens", async () => {
     const response = await GET(new Request("https://integraq.invalid/api/ai/root-cause/assist?processId=P-08"));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ model: "gpt-5-nano", available: true, generationEnabled: false });
-    expect(m.modelRetrieve).toHaveBeenCalledWith("gpt-5-nano");
+    expect(await response.json()).toEqual({ model: "gpt-6-luna", available: true, generationEnabled: false });
+    expect(m.modelRetrieve).toHaveBeenCalledWith("gpt-6-luna");
     expect(m.responsesCreate).not.toHaveBeenCalled();
   });
 
@@ -60,7 +60,7 @@ describe("Root2Cause GPT-5 nano endpoint", () => {
     m.modelRetrieve.mockRejectedValue({ status: 404 });
     const response = await GET(new Request("https://integraq.invalid/api/ai/root-cause/assist?processId=P-08"));
     expect(response.status).toBe(503);
-    expect((await response.json()).error).toContain("gpt-5-nano");
+    expect((await response.json()).error).toContain("gpt-6-luna");
     expect(m.responsesCreate).not.toHaveBeenCalled();
   });
 
@@ -83,21 +83,21 @@ describe("Root2Cause GPT-5 nano endpoint", () => {
     expect(m.responsesCreate).not.toHaveBeenCalled();
   });
 
-  it("uses only gpt-5-nano with Responses, structured output, no response storage, bounded output and idempotency", async () => {
+  it("uses only gpt-6-luna with Responses, structured output, no response storage, bounded output and idempotency", async () => {
     vi.stubEnv("ROOT2CAUSE_AI_ENABLED", "true");
     const response = await POST(req(body));
     expect(response.status).toBe(200);
     expect(m.clientOptions[0]).toMatchObject({ apiKey: "test-key-not-returned-to-client", timeout: 27_000, maxRetries: 0 });
     expect(m.modelRetrieve).not.toHaveBeenCalled();
     const [parameters, requestOptions] = m.responsesCreate.mock.calls[0] as [Record<string, unknown>, Record<string, unknown>];
-    expect(parameters).toMatchObject({ model: "gpt-5-nano", max_output_tokens: 1500, store: false });
+    expect(parameters).toMatchObject({ model: "gpt-6-luna", reasoning: { effort: "low" }, max_output_tokens: 1500, store: false });
     expect(parameters.text).toMatchObject({ format: { type: "json_schema", name: "root2cause_proposal", strict: true } });
     expect(requestOptions.idempotencyKey).toMatch(/^root2cause-[a-f0-9]{64}$/);
     const result = await response.json();
     expect(result.stages).toHaveLength(1);
     expect(JSON.stringify(result)).not.toContain("test-key-not-returned-to-client");
     expect(m.audit).toHaveBeenCalledWith(expect.objectContaining({
-      provider: "openai", model: "gpt-5-nano", status: "success",
+      provider: "openai", model: "gpt-6-luna", status: "success",
       metadata: expect.objectContaining({ inputUnits: 120, outputUnits: 45, totalUnits: 165 }),
     }));
   });
@@ -142,7 +142,7 @@ describe("Root2Cause GPT-5 nano endpoint", () => {
     m.responsesCreate.mockRejectedValueOnce({ status: 404 });
     const response = await POST(req(body));
     expect(response.status).toBe(503);
-    expect((await response.json()).error).toContain("gpt-5-nano");
+    expect((await response.json()).error).toContain("gpt-6-luna");
     expect(m.modelRetrieve).not.toHaveBeenCalled();
     expect(m.responsesCreate).toHaveBeenCalledTimes(1);
   });

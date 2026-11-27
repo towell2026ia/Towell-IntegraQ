@@ -40,7 +40,6 @@ export const reportSchema = obj({
   limitations: strings,
   warnings: strings,
 });
-export const model = "gpt-4.1-mini-2025-04-14";
 export const maxOutput = 4000;
 export const maxInput = 24000;
 export function agentInput(s: Snapshot) {

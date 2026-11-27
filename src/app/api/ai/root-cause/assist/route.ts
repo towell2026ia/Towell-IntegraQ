@@ -9,8 +9,8 @@ import { isExternalUser } from "@/lib/session-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { normalizeProposal, stageFields } from "@/lib/root2cause/assistant";
 import { retrieveRootCauseDocuments } from "@/lib/root2cause/context-server";
+import { qualityAgentBaseURL, qualityAgentModel as MODEL, reasoningEffort } from "@/ai/core/agent-model";
 
-const MODEL = "gpt-5-nano";
 const MAX_REQUEST_CHARS = 100_000;
 const MAX_INPUT_BYTES = 64 * 1024;
 export const maxDuration = 30;
@@ -82,7 +82,7 @@ export async function GET(request: Request) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return json({ error: "Falta configurar OPENAI_API_KEY como secreto del servidor." }, 503);
   try {
-    await new OpenAI({ apiKey, timeout: 15_000, maxRetries: 0 }).models.retrieve(MODEL);
+    await new OpenAI({ apiKey, baseURL: qualityAgentBaseURL, timeout: 15_000, maxRetries: 0 }).models.retrieve(MODEL);
     return json({ model: MODEL, available: true, generationEnabled: process.env.ROOT2CAUSE_AI_ENABLED === "true" }, 200);
   } catch (error) {
     const mapped = mapModelAvailabilityError(error);
@@ -185,7 +185,7 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
   }
   try {
     signal.throwIfAborted();
-    const client = new OpenAI({ apiKey, timeout: REQUEST_BUDGET_MS, maxRetries: 0 });
+    const client = new OpenAI({ apiKey, baseURL: qualityAgentBaseURL, timeout: REQUEST_BUDGET_MS, maxRetries: 0 });
     const proposalSchema = schemaFor(body.mode, Number(body.step));
     const outputLimit = body.mode === "step" ? 1_500 : 4_000;
     const input = {
@@ -213,7 +213,7 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
     // UTF-8 byte length is a conservative upper bound for text token count; include prompt/schema overhead too.
     const inputBytes = Buffer.byteLength(payload, "utf8") + Buffer.byteLength(instructions, "utf8") + Buffer.byteLength(JSON.stringify(proposalSchema), "utf8") + 1_024;
     if (inputBytes > MAX_INPUT_BYTES) {
-      return { status: 413, data: { error: "El contexto autorizado supera el límite de entrada de GPT-5 nano. Reduce el contenido del análisis o las evidencias documentales." } };
+      return { status: 413, data: { error: `El contexto autorizado supera el límite de entrada de ${MODEL}. Reduce el contenido del análisis o las evidencias documentales.` } };
     }
 
     const bucket = Math.floor(Date.now() / (5 * 60_000));
@@ -224,7 +224,7 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
       instructions,
       input: payload,
       max_output_tokens: outputLimit,
-      reasoning: {effort:"minimal"},
+      reasoning: { effort: reasoningEffort.root2cause },
       store: false,
       text: { format: { type: "json_schema", name: "root2cause_proposal", strict: true, schema: proposalSchema } },
     }, { idempotencyKey, signal }));
@@ -255,11 +255,11 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
     }));
 
     if (response.status !== "completed" || !response.output_text.trim()) {
-      throw new AssistError(502, "GPT-5 nano devolvió una respuesta incompleta o vacía. El expediente no se modificó.");
+      throw new AssistError(502, `${MODEL} devolvió una respuesta incompleta o vacía. El expediente no se modificó.`);
     }
     let decoded: unknown;
     try { decoded = JSON.parse(response.output_text); }
-    catch { throw new AssistError(502, "La respuesta estructurada de GPT-5 nano no pudo validarse. El expediente no se modificó."); }
+    catch { throw new AssistError(502, `La respuesta estructurada de ${MODEL} no pudo validarse. El expediente no se modificó.`); }
     const proposal = normalizeProposal(decoded, documents, body.mode === "step" ? Number(body.step) : undefined);
     proposal.warnings.push(...warnings);
     return { status: 200, data: proposal as unknown as Record<string, unknown> };
@@ -267,11 +267,11 @@ async function generateProposal({ session, body, origin, customerId, apiKey, req
     if (error instanceof AssistError) return { status: error.status, data: { error: error.message } };
     const status = (error as { status?: number })?.status;
     if (status === 429) return { status: 429, data: { error: "OpenAI alcanzó el límite de solicitudes o cuota. No se reintentó automáticamente." } };
-    if (status === 404) return { status: 503, data: { error: "gpt-5-nano no está disponible para generar respuestas en esta cuenta. No se seleccionó otro modelo." } };
-    if (status === 401 || status === 403) return { status: 503, data: { error: "La credencial del servidor no tiene autorización para usar GPT-5 nano." } };
+    if (status === 404) return { status: 503, data: { error: `${MODEL} no está disponible para generar respuestas en esta cuenta. No se seleccionó otro modelo.` } };
+    if (status === 401 || status === 403) return { status: 503, data: { error: `La credencial del servidor no tiene autorización para usar ${MODEL}.` } };
     if (status === 400) return { status: 502, data: { error: "OpenAI rechazó el contexto o el esquema estructurado de Root2Cause." } };
     console.error("Falló la solicitud autorizada de Root2Cause a OpenAI.", { status: status ?? null, type: (error as { name?: string })?.name ?? "Error" });
-    return { status: 502, data: { error: "No se pudo generar una propuesta con GPT-5 nano. El análisis existente se conservó." } };
+    return { status: 502, data: { error: `No se pudo generar una propuesta con ${MODEL}. El análisis existente se conservó.` } };
   } finally { console.info("root2cause.assist.duration_ms", {mode:body.mode, ...timings}); }
 }
 
@@ -294,9 +294,9 @@ async function resolveCustomer(session: NonNullable<Awaited<ReturnType<typeof ge
 
 function mapModelAvailabilityError(error: unknown): AssistError {
   const status = (error as { status?: number })?.status;
-  if (status === 404) return new AssistError(503, "La cuenta OpenAI no tiene disponible el modelo requerido gpt-5-nano. No se seleccionó otro modelo.");
-  if (status === 401 || status === 403) return new AssistError(503, "La cuenta o clave de OpenAI no tiene autorización para consultar gpt-5-nano.");
-  return new AssistError(502, "No se pudo verificar el acceso de la cuenta OpenAI a gpt-5-nano. No se inició la generación.");
+  if (status === 404) return new AssistError(503, `La cuenta OpenAI no tiene disponible el modelo requerido ${MODEL}. No se seleccionó otro modelo.`);
+  if (status === 401 || status === 403) return new AssistError(503, `La cuenta o clave de OpenAI no tiene autorización para consultar ${MODEL}.`);
+  return new AssistError(502, `No se pudo verificar el acceso de la cuenta OpenAI a ${MODEL}. No se inició la generación.`);
 }
 
 function respond(result: ApiResult) { return NextResponse.json(result.data, { status: result.status, headers: { "Cache-Control": "no-store" } }); }

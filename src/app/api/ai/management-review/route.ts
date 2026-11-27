@@ -1,3 +1,4 @@
+import { qualityAgentBaseURL, qualityAgentModel as model, reasoningEffort } from "@/ai/core/agent-model";
 import { NextResponse } from "next/server";
 import { getVerifiedSessionContext } from "@/lib/supabase/auth-session";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -13,7 +14,6 @@ import { instructionVersion, validPeriod } from "@/lib/review-report";
 import {
   generateReport,
   maxOutput,
-  model,
   type Provider,
   reportSchema,
 } from "@/ai/core/review-agent";
@@ -52,6 +52,8 @@ async function access() {
   }
   return { session, supabase, admin, director: director.data === true };
 }
+class AnnualLimitError extends Error {}
+
 function configured() {
   return aiCapabilityRegistry.isEnabled("management.generate_review") &&
     !!process.env.OPENAI_API_KEY;
@@ -61,38 +63,30 @@ const provider: Provider = async (input) => {
   const { default: OpenAI } = await import("openai");
   const client = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
-    baseURL: "https://api.openai.com/v1",
+    baseURL: qualityAgentBaseURL,
     maxRetries: 0,
     timeout: 18000,
   });
-  const result = await client.chat.completions.create({
+  const result = await client.responses.create({
     model,
-    max_completion_tokens: maxOutput,
+    reasoning: { effort: reasoningEffort.managementReview },
+    max_output_tokens: maxOutput,
     store: false,
-    messages: [{ role: "system", content: input.instructions }, {
-      role: "user",
-      content: input.message,
-    }],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "informe_anual",
-        strict: true,
-        schema: reportSchema,
-      },
-    },
+    instructions: input.instructions,
+    input: input.message,
+    text: { format: { type: "json_schema", name: "informe_anual", strict: true, schema: reportSchema } },
   });
-  const choice = result.choices[0];
   let body: unknown = null;
-  if (choice?.finish_reason === "stop" && choice.message.content) {
+  if (result.status === "completed" && result.output_text &&
+      !result.output.some(item => item.type === "message" && item.content.some(part => part.type === "refusal"))) {
     try {
-      body = JSON.parse(choice.message.content);
+      body = JSON.parse(result.output_text);
     } catch { /* La validación registra el rechazo. */ }
   }
   return {
     body,
-    input: result.usage?.prompt_tokens ?? null,
-    output: result.usage?.completion_tokens ?? null,
+    input: result.usage?.input_tokens ?? null,
+    output: result.usage?.output_tokens ?? null,
   };
 };
 export async function GET(request: Request) {
@@ -128,7 +122,7 @@ export async function GET(request: Request) {
       return failure("El expediente central todavía no está disponible.", 503);
     }
     const budget = ctx.admin && configured()
-      ? await ctx.supabase.rpc("iq_re05_available")
+      ? await ctx.supabase.rpc("iq_ia01_available", { p_year: year, p_model: model })
       : null;
     const visibleRuns = runs.data.map((r) =>
       r.state === "processing" &&
@@ -209,6 +203,7 @@ export async function POST(request: Request) {
           p_model: model,
           p_instructions: instructionVersion,
         });
+        if (q.error?.message.includes("IA01_ANNUAL_LIMIT")) throw new AnnualLimitError();
         if (q.error) throw Error("No se pudo reservar la generación.");
         return q.data;
       },
@@ -241,7 +236,8 @@ export async function POST(request: Request) {
       requiresApproval: true,
     });
     return reply(operation);
-  } catch {
+  } catch (error) {
+    if (error instanceof AnnualLimitError) return failure("El período requiere una autorización extraordinaria.", 409);
     return failure(
       "No se confirmó la operación. Consulta el expediente antes de reintentar.",
       503,

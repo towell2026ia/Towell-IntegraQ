@@ -169,4 +169,40 @@ export async function testReviewReports(
   console.log(
     "RE05: COMMIT, aislamiento, reserva, recuperación, edición y autorización comprobados.",
   );
+  // Keep the complete RE-05 transition tests above, then install IA-01 on the same fixture.
+  await execute(readFileSync("docs/database/proposals/IQ-IA-01-MODELO.sql", "utf8"));
+  await execute("update public.review_report_allowances set model='gpt-6-luna',monthly_generations=20");
+  const annual = { ...snap, year: 2024 };
+  const luna = (id, fingerprint = annual.fingerprint) =>
+    reserve(id, { ...annual, fingerprint }).replace(model, "gpt-6-luna");
+  const available = "public.iq_ia01_available(2024,'gpt-6-luna')";
+  const first = randomUUID();
+  await assert.rejects(service(luna(first)), /PROCESSING_NOT_AUTHORIZED/);
+  await reset();
+  await check(admin, "not " + available, "IA01 tratamiento pendiente");
+  await execute("update public.review_report_allowances set luna_processing_authorized_at=now()");
+  await check(admin, available, "IA01 presupuesto, tratamiento y cupo ordinario");
+  await Promise.all([service(luna(first)), service(luna(first))]);
+  const complete = (id) => execute("select public.iq_re05_finish('" + id + "','completed','{}',100,40)");
+  await complete(first);
+  await check(admin, "not " + available, "IA01 cupo anual agotado");
+  await service(luna(first));
+  await assert.rejects(service(luna(randomUUID(), "e".repeat(64))), /ANNUAL_LIMIT/);
+  await reset();
+  const grant = "insert into public.review_report_extra_approvals(organization_id,year,generation_number,authorized_by,reason) values('" +
+    organization + "',2024,2,'" + admin + "','Autorización expresa de prueba aislada')";
+  await assert.rejects(execute(session(admin,grant)), /permission denied/);
+  await reset();
+  await execute(grant);
+  await check(admin, available, "IA01 autorización extraordinaria de un solo uso");
+  const extra = randomUUID();
+  await Promise.all([service(luna(extra)),service(luna(extra))]);
+  await complete(extra);
+  await service(luna(extra));
+  await check(admin, "(select count(*)=2 and count(cost_usd)=0 and sum(input_tokens)=200 from public.review_report_runs where year=2024)",
+    "IA01 dos operaciones únicas sin imputar la tarifa anterior");
+  await assert.rejects(service(luna(randomUUID(), "f".repeat(64))), /ANNUAL_LIMIT/);
+  await reset();
+  await check(admin, "not " + available, "IA01 autorización extraordinaria agotada");
+
 }
