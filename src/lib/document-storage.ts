@@ -102,20 +102,8 @@ export async function inspectControlledDocumentCode(code: string, processId: str
   return data as DocumentCodeMatch | null;
 }
 
-// The SGC master identifies its manual by process, controlled code and document type.
-export async function currentReviewManualId(signal?: AbortSignal): Promise<string | null> {
-  let query = createClient().from("controlled_documents").select(
-    "id,lifecycle:document_lifecycle(lifecycle_status,is_deleted),versions:controlled_document_versions(status)",
-  ).eq("process_id", "P-35").eq("code", "M-SGC-01").eq("document_type_id", "manual")
-    .eq("active", true).is("deleted_at", null).eq("versions.status", "current").limit(2);
-  if (signal) query = query.abortSignal(signal);
-  const { data, error } = await query;
-  if (error) throw new Error("No se pudo comprobar la vigencia del manual.");
-  if (data?.length !== 1) return null;
-  const doc = data[0];
-  const lifecycle = firstRelation(doc.lifecycle);
-  return doc.versions.length === 1 && !lifecycle?.is_deleted && (!lifecycle || lifecycle.lifecycle_status === "active") ? doc.id : null;
-}
+// M-SGC-01 in the P-35 master. Validate its controlled identity again on read.
+export const reviewManualId = "b5b1c30d-da00-593c-abb7-15832857ef5c";
 
 export async function loadStoredControlledDocument(documentId: string, activeOnly = false) {
   let query = createClient().from("controlled_documents").select(detailColumns).eq("id", documentId);

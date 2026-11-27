@@ -20,7 +20,7 @@ export interface ReviewVisit {
 
 export const managementReviewGroups: { group: string; sections: ReviewSection[] }[] = [
   { group: "Liderazgo y contexto", sections: [
-    { id: "manual", title: "Manual de Calidad", description: "Documento vigente del sistema de gestión.", icon: BookOpen, module: "documents", view: "current-manual", availability: "Disponible" },
+    { id: "manual", title: "Manual de Calidad", description: "Expediente M-SGC-01 y revisiones autorizadas.", icon: BookOpen, module: "documents", view: "current-manual", availability: "Disponible" },
     { id: "policy", title: "Política de Calidad", description: "Compromisos vigentes de la organización.", icon: ScrollText, module: "documents", view: "current-policy", availability: "Disponible" },
     { id: "risks", title: "Riesgos y oportunidades", description: "FODA y planificación estratégica.", icon: Compass, module: "risks", view: "swot", availability: "Disponible" },
     { id: "objectives", title: "Objetivos e indicadores", description: "Metas y desempeño por proceso.", icon: Target, module: "indicators", view: "dashboard", availability: "Disponible" },
@@ -42,6 +42,6 @@ export const managementReviewGroups: { group: string; sections: ReviewSection[] 
   { group: "Seguimiento de la revisión", sections: [
     { id: "history", title: "Revisiones anteriores", description: "Actas, informes y aprobaciones por período.", icon: History, module: "management-review", view: "history", availability: "Disponible" },
     { id: "outputs", title: "Salidas de Revisión por la Dirección", description: "Acuerdos y seguimiento de decisiones.", icon: ListChecks, module: "management-review", view: "acuerdos", availability: "Previsto para RE-04" },
-    { id: "attachments", title: "Evidencias y adjuntos", description: "Consulta de actas y archivos históricos.", icon: Paperclip, module: "management-review", view: "attachments", availability: "Consulta disponible" },
+    { id: "attachments", title: "Evidencias y adjuntos", description: "Documentación complementaria del período.", icon: Paperclip, module: "management-review", view: "attachments", availability: "Consulta disponible" },
   ] },
 ];

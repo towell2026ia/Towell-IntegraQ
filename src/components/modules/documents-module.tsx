@@ -25,7 +25,7 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
 import { qualityPolicyDocumentId } from "@/lib/home-institutional-images";
-import { AuthorizedDocumentPreview, DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { AuthorizedDocumentPreview, DocumentHistoryModal, statusLabels, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { clearHomeImages } from "./home-institutional-images";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
@@ -37,6 +37,7 @@ import {
 import {
   getDocumentPermissions,
   getWorkingVersion,
+  getDocumentPreviewVersions,
   isOperationalDocument,
   documentAdvancedActionsEnabled,
   type ControlledDocument,
@@ -57,7 +58,7 @@ import {
 import type { ActiveSession } from "@/lib/session-data";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { documentVersionLabel } from "@/lib/document-replacement";
-import { currentReviewManualId, loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
+import { reviewManualId, loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -154,25 +155,33 @@ function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
   const [cache] = useState<CachedRows<ControlledDocument>>(() => new Map());
   const [attempt, setAttempt] = useState(0);
   const [viewerOpen, setViewerOpen] = useState(true);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const load = useCallback(async () => {
     if (!props.reviewDocument) return loadStoredControlledDocument(props.focusId);
-    const id = props.reviewDocument === "policy" ? qualityPolicyDocumentId : await currentReviewManualId();
-    if (!id) throw new Error("No hay una revisión vigente vinculada.");
-    return loadStoredControlledDocument(id, true);
+    return props.reviewDocument === "policy" ? loadStoredControlledDocument(qualityPolicyDocumentId, true) : loadStoredControlledDocument(reviewManualId);
   }, [props.focusId, props.reviewDocument]);
   const result = useCatalogRead(cache, props.focusId + ":" + attempt, load);
-  if (result?.error) return <p role="alert">{props.reviewDocument ? "El documento vigente no está disponible en tu alcance." : result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
+  if (result?.error) return <p role="alert">{props.reviewDocument ? "El documento no está disponible en tu alcance." : result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
   if (!result?.value) return <p role="status">Consultando expediente…</p>;
   if (props.reviewDocument) {
     const doc = result.value;
-    const versions = doc.versions.filter(version => version.status === "current");
-    if (!canReadControlledCatalog(props.session) || !getDocumentPermissions(props.session, doc.processId).view
-      || doc.lifecycle?.isDeleted || doc.lifecycle?.status !== "active" || versions.length !== 1 || !versions[0].fileObjectId) {
-      return <p role="status">El documento vigente no está disponible en tu alcance.</p>;
+    const permissions = getDocumentPermissions(props.session, doc.processId);
+    const manual = props.reviewDocument === "manual";
+    if (!permissions.view || doc.lifecycle?.isDeleted || doc.lifecycle?.status !== "active" ||
+      (manual && (doc.code !== "M-SGC-01" || doc.documentTypeId !== "manuals" || doc.processId !== "P-35"))) {
+      return <p role="status">El expediente no está disponible para esta sesión.</p>;
     }
-    return <section className="work-panel"><h2>{doc.name}</h2><p>{doc.code} · Revisión {versions[0].revision} · Vigente</p>
-      <button className="button button-secondary" type="button" onClick={() => setViewerOpen(true)}>Ver documento vigente</button>
-      {viewerOpen && <AuthorizedDocumentPreview document={{ ...doc, versions }} session={props.session} activeOnly onClose={() => setViewerOpen(false)} />}
+    const allowed = getDocumentPreviewVersions(doc, props.session);
+    const current = allowed.filter(v => v.status === "current");
+    const selected = current.length === 1 ? current[0] : manual && !current.length
+      ? allowed.filter(v => v.status === "pending").sort((a,b) => b.revision - a.revision)[0] : undefined;
+    const history = doc.versions.filter(v => allowed.some(a => a.id === v.id) || v.status === "obsolete");
+    return <section className="work-panel"><h2>{doc.name}</h2><p>{doc.code} · {selected ? documentVersionLabel(selected) + " · " + statusLabels[selected.status] : manual && doc.versions.some(v => v.status === "pending") && !current.length ? "En validación · Sin revisión vigente" : "Sin revisión vigente disponible"}</p>
+      {selected?.status === "current" && <p>Vigente en la fecha de consulta.</p>}
+      {selected?.fileObjectId && <button className="button button-secondary" type="button" onClick={() => setViewerOpen(true)}>Ver documento</button>}
+      {manual && permissions.history && <button className="button button-secondary" type="button" onClick={() => setHistoryOpen(true)}>Historial</button>}
+      {selected?.fileObjectId && viewerOpen && <AuthorizedDocumentPreview document={{ ...doc, versions: [selected] }} session={props.session} activeOnly onClose={() => setViewerOpen(false)} />}
+      {historyOpen && manual && permissions.history && <DocumentHistoryModal document={{ ...doc, versions: history }} canDownload={permissions.download} canRestore={false} onClose={() => setHistoryOpen(false)} onRestore={async () => {}} />}
     </section>;
   }
   return <DocumentCatalog {...props} controlledDocuments={[result.value]} />;

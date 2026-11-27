@@ -24,6 +24,22 @@ button.card:hover, button.card:focus-visible, .year select:focus-visible { borde
 .copy span, .footer span { color: var(--muted); font-size: .8rem; }
 .copy small { color: #4b655d; font-size: .72rem; margin-top: 4px; }
 .footer { padding: 12px 16px; flex-wrap: wrap; }
+.records, .record, .sheet { display: grid; gap: 12px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface, white); padding: clamp(12px, 2vw, 20px); }
+.records h3, .record p { margin: 0; }
+.record { grid-template-columns: minmax(0, 1fr) auto; overflow-wrap: anywhere; }
+.record p, .followup { color: var(--muted); font-size: .88rem; }
+.recordTools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.recordTools h3 { margin-inline-end: auto; }
+.recordTools select, .fields :is(input, select, textarea) { border: 1px solid var(--line); border-radius: 6px; padding: 7px; font: inherit; max-width: 100%; min-width: 0; }
+.record details summary { cursor: pointer; }
+.record details > div { margin-block-start: 8px; }
+.backdrop { position: fixed; inset: 0; display: grid; place-items: center; z-index: 1000; background: rgb(14 27 23 / 65%); padding: 12px; }
+.sheet { width: min(620px, 100%); overflow-y: auto; max-height: 90dvh; }
+.fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; border: 0; margin: 0; padding: 0; }
+.fields label { display: grid; gap: 5px; }
+.fields > div, .fields > p { grid-column: 1/-1; }
+.followup { padding-block-start: 10px; border-top: 1px solid var(--line); }
+@media (max-width: 650px) { .record, .fields { grid-template-columns: minmax(0,1fr); } }
 .progress { width: 6rem; height: 4px; }
 @media (max-width: 1120px) {
   .groups { grid-template-columns: 1fr; }

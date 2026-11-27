@@ -28,7 +28,7 @@ import { documentVersionLabel, type DocumentReplacementKind } from "@/lib/docume
 import styles from "./document-replacement.module.css";
 import type { ActiveSession } from "@/lib/session-data";
 
-const statusLabels: Record<ControlledDocumentStatus, string> = {
+export const statusLabels: Record<ControlledDocumentStatus, string> = {
   draft: "Borrador", pending: "En validación", current: "Vigente",
   rejected: "Rechazado", obsolete: "Obsoleto",
 };
@@ -305,7 +305,7 @@ function DocumentDetail({ document, onClose, children }: {
   </ModalShell>;
 }
 
-type HistoryProps = { document: ControlledDocument; canRestore: boolean; onClose: () => void; onRestore: () => Promise<void> };
+type HistoryProps = { canDownload?: boolean; document: ControlledDocument; canRestore: boolean; onClose: () => void; onRestore: () => Promise<void> };
 
 export function DocumentHistoryModal(props: HistoryProps) {
   return <DocumentDetail key={props.document.id} document={props.document} onClose={props.onClose}>
@@ -313,10 +313,10 @@ export function DocumentHistoryModal(props: HistoryProps) {
   </DocumentDetail>;
 }
 
-function DocumentHistoryContent({ document, canRestore, onClose, onRestore }: HistoryProps) {
+function DocumentHistoryContent({ document, canDownload = true, canRestore, onClose, onRestore }: HistoryProps) {
   const [restoring, setRestoring] = useState(false); const [error, setError] = useState(""); const [historicalId, setHistoricalId] = useState<string | null>(null);
   const historical = document.versions.find(version => version.id === historicalId);
-  if (historical) return <DocumentPreviewModal document={{ ...document, versions: [historical] }} canDownload onClose={() => setHistoricalId(null)} />;
+  if (historical) return <DocumentPreviewModal document={{ ...document, versions: [historical] }} canDownload={canDownload} onClose={() => setHistoricalId(null)} />;
   return <ModalShell title="Historial" eyebrow={document.code} onClose={onClose} className="document-history-modal"><div className="document-history-sections"><section><h4>Versiones</h4><div className="document-history-list">{[...document.versions].sort((a, b) => b.revision - a.revision).map((version) => <article key={version.id}><span className="document-history-revision">{documentVersionLabel(version)}</span><div><strong>{version.fileName}</strong><small>{version.changeReason}</small>{version.changeSummary ? <small>{version.changeSummary}</small> : null}<small>{version.uploadedBy} · {formatDate(version.modifiedAt)}</small></div><span className={`document-status document-status-${version.status}`}>{statusLabels[version.status]}</span><button type="button" className="document-icon-action" aria-label={"Consultar archivo histórico " + version.fileName} title="Consultar archivo histórico" onClick={() => setHistoricalId(version.id)}><Eye size={15} /></button></article>)}</div></section><section><h4>Actividad</h4><div className="document-activity-list">{(document.activity ?? []).map((event) => <article key={event.id}><span>{formatDate(event.performedAt)}</span><strong>{event.performedBy}</strong><span>{eventLabels[event.eventType]}</span>{event.reason ? <small>{event.reason}</small> : null}</article>)}{!document.activity?.length ? <p>La actividad ampliada aparecerá al sincronizar la migración.</p> : null}</div></section>{document.lifecycle?.isDeleted ? <section className="document-restore-panel"><div><strong>Documento eliminado</strong><span>Motivo: {document.lifecycle.deleteReason}</span><span>Usuario: {document.lifecycle.deletedBy}</span><span>Fecha: {document.lifecycle.deletedAt ? formatDate(document.lifecycle.deletedAt) : "—"}</span></div>{canRestore ? <button className="button button-secondary" type="button" disabled={restoring} onClick={() => { setRestoring(true); setError(""); void onRestore().catch((caught) => { setError(caught instanceof Error ? caught.message : "No fue posible restaurar."); setRestoring(false); }); }}><RotateCcw size={16} /> {restoring ? "Enviando…" : "Solicitar recuperación"}</button> : null}</section> : null}{error ? <p className="document-upload-error" role="alert">{error}</p> : null}</div></ModalShell>;
 }
 

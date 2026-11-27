@@ -191,7 +191,7 @@ export async function getAttachmentSignedUrl(
   return data.signedUrl;
 }
 
-function mapAttachment(row: Record<string, unknown>): AttachmentRecord {
+export function mapAttachment(row: Record<string, unknown>): AttachmentRecord {
   return {
     id: String(row.id),
     bucketId: String(row.bucket_id),
@@ -221,12 +221,12 @@ function mapAttachment(row: Record<string, unknown>): AttachmentRecord {
   };
 }
 
-function safeName(value: string) {
+export function safeName(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-").slice(-140);
 }
 
-async function fileSha256(file: File) {
+export async function fileSha256(file: File) {
   const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
   return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
 }

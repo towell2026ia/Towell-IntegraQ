@@ -22,6 +22,7 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
   const [view, setView] = useState<"chart" | "list">("chart");
   const [editorMode, setEditorMode] = useState<EditorMode>(null);
   const [loading, setLoading] = useState(true);
+  const [updated, setUpdated] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [processSourceCount, setProcessSourceCount] = useState(0);
@@ -35,11 +36,13 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
         loadOrganizationPositions(),
         supabase.from("file_objects").select("process_id").eq("resource_type", "process_organization_chart"),
       ]);
+      setUpdated(loaded.length > 0 && !sourceResult.error);
       if (loaded.length) setPositions(computeHierarchyLevels(loaded));
       if (!sourceResult.error) setProcessSourceCount(new Set((sourceResult.data ?? []).map((item) => item.process_id).filter(Boolean)).size);
     } catch {
       setPositions(fallbackPositions);
-      setFeedback("Vista local activa; no fue posible sincronizar con Supabase.");
+      setUpdated(false);
+      setFeedback("No se pudo actualizar el organigrama. Se muestra la información disponible.");
     } finally { setLoading(false); }
   }, []);
 
@@ -105,7 +108,7 @@ export function OrganizationModule({ session }: { session: ActiveSession }) {
   return <>
     <section className="module-heading"><div><p className="module-kicker">Estructura organizacional</p><h2>Organización y puestos</h2><p>Organigrama vivo conectado con puestos, procesos y permisos, con puestos operativos desde el nivel 5.</p></div>{canManage ? <button className="button button-primary" type="button" onClick={() => setEditorMode("create")}><Plus size={16} /> Agregar puesto</button> : <span className="module-state module-state-vigente">Fuente vigente</span>}</section>
     <section className="metric-grid" aria-label="Resumen del organigrama"><OrganizationMetric icon={<Users size={18} />} label="Puestos" value={positions.length} tone="neutral" /><OrganizationMetric icon={<Network size={18} />} label="Niveles" value={levels} tone="success" /><OrganizationMetric icon={<ShieldCheck size={18} />} label="Procesos con responsable" value={ownerProcessIds.size} tone="warning" /><OrganizationMetric icon={<Building2 size={18} />} label="Puestos sin proceso" value={positionsWithoutProcess} tone="danger" /></section>
-    <section className="organization-source" aria-label="Fuente del organigrama"><span><FileCheck2 size={19} /></span><div><small>Fuentes documentales</small><strong>{source.name} · Versión {source.version}</strong><p>Revisión {source.revisedAt} · {processSourceCount} organigramas de proceso · {positions.length} puestos integrados</p></div><span className={`organization-sync ${loading ? "organization-sync-loading" : ""}`}><RefreshCw size={13} />{loading ? "Sincronizando" : "Supabase"}</span></section>
+    <section className="organization-source" aria-label="Fuente del organigrama"><span><FileCheck2 size={19} /></span><div><small>Fuentes documentales</small><strong>{source.name} · Versión {source.version}</strong><p>Revisión {source.revisedAt} · {processSourceCount} organigramas de proceso · {positions.length} puestos integrados</p></div><span className={`organization-sync ${loading ? "organization-sync-loading" : ""}`}>{loading ? <RefreshCw className="spin" size={13} aria-label="Actualizando organigrama" /> : updated ? "Información actualizada" : "Actualización pendiente"}</span></section>
     {feedback ? <div className="organization-feedback" role="status">{feedback}</div> : null}
     <section className="organization-workspace">
       <div className="organization-view-toolbar"><div className="organization-view-switch" aria-label="Cambiar vista"><button className={view === "chart" ? "active" : ""} onClick={() => setView("chart")} type="button"><Network size={14} /> Organigrama</button><button className={view === "list" ? "active" : ""} onClick={() => setView("list")} type="button"><Users size={14} /> Lista</button></div><label className="panel-search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar puesto" /></label><select aria-label="Filtrar por nivel jerárquico" value={level} onChange={(event) => setLevel(event.target.value)}><option value="all">Todos los niveles</option>{availableLevels.map((item) => <option key={item} value={item}>Nivel {item}</option>)}</select></div>
