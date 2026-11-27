@@ -6,7 +6,7 @@ import { getAttachmentSignedUrl } from "@/lib/attachment-storage";
 import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { managementReviewGroups } from "@/lib/management-review-sections";
 import { downloadReviewFile, listReviewFiles, reviewCategories, reviewDocuments, reviewMinutes, saveReviewFile,
-  type ReviewFile, type ReviewKind, type ReviewMetadata } from "@/lib/review-document-storage";
+  pendingReviewTransfers, resumeReviewTransfer, type ReviewTransfer, type ReviewFile, type ReviewKind, type ReviewMetadata } from "@/lib/review-document-storage";
 import { isAdministrator, type ActiveSession } from "@/lib/session-data";
 import { markDirty } from "@/lib/workspace-continuity";
 import type { useReviewMinutes } from "./management-review-minutes";
@@ -25,7 +25,8 @@ export function ReviewDocuments({session,period,kind=reviewDocuments,catalog,onY
   const [history,setHistory]=useState(false);
   const [category,setCategory]=useState("");
   const [attempt,setAttempt]=useState(0);
-  const key=[kind,period,history,attempt].join("/");
+  const identity=[session.authUserId ?? session.userId, session.organizationId, session.userType].join("/");
+  const key=[identity,kind,period,history,attempt].join("/");
   const [result,setResult]=useState<{key:string;files:ReviewFile[];error?:boolean}>();
   const [preview,setPreview]=useState<ReviewFile>();
   const [editor,setEditor]=useState<Editor>();
@@ -63,6 +64,7 @@ export function ReviewDocuments({session,period,kind=reviewDocuments,catalog,onY
     <header className={styles.recordTools}><h3>{heading}</h3>
       {admin && catalog.installed && <button type="button" className="button button-secondary" onClick={()=>setEditor({action:"add"})}><Paperclip size={15}/> {minutes?"Adjuntar acta":"Adjuntar documento"}</button>}
     </header>
+    {admin && catalog.installed && !editor && <PendingTransfers key={[identity,kind,attempt].join("/")} kind={kind} onSaved={refresh}/>}
     <div className={styles.recordTools}>
       {!minutes && <label>Categoría <select value={category} onChange={e=>setCategory(e.target.value)}><option value="">Todas</option>{categories.map(([id,name])=><option value={id} key={id}>{name}</option>)}</select></label>}
       <label><input type="checkbox" checked={history} onChange={e=>setHistory(e.target.checked)}/> {admin?"Incluir versiones anteriores y retirados":"Incluir versiones anteriores"}</label>
@@ -93,6 +95,47 @@ export function ReviewDocuments({session,period,kind=reviewDocuments,catalog,onY
     {preview && <ReviewPreview file={preview} onClose={()=>setPreview(undefined)} onDownload={()=>void download(preview)}/>}
   </section>;
 }
+function PendingTransfers({ kind, onSaved }: { kind: ReviewKind; onSaved: () => void }) {
+  const [items, setItems] = useState<ReviewTransfer[]>([]);
+  const [revision, setRevision] = useState(0);
+  const [message, setMessage] = useState("");
+  const [files, setFiles] = useState<Record<string, File | undefined>>({});
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void pendingReviewTransfers(kind).then(rows => {
+      if (active) setItems(rows);
+    }).catch(() => { if (active) setMessage("No se pudieron consultar las cargas pendientes."); });
+    return () => { active = false; };
+  }, [kind, revision]);
+
+  async function resume(item: ReviewTransfer) {
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      await resumeReviewTransfer(item, files[item.id]);
+      onSaved();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : "No se confirmó el registro.");
+      setRevision(value => value + 1);
+    } finally { setBusy(false); }
+  }
+  if (!items.length && !message) return null;
+  return <section aria-label="Cargas pendientes"><h4>Cargas pendientes</h4>
+    {items.map(item => <div className={styles.record} key={item.id}>
+      <strong>{item.payload.title} · {item.resource_key.slice(0, 4)}</strong>
+      <span>{item.payload.name} · {item.payload.size.toLocaleString("es-MX")} bytes</span>
+      {item.uploaded ? <span>Archivo recibido. Pendiente de registro.</span> :
+        <label>Seleccionar el archivo original <input type="file" disabled={busy}
+          onChange={e => { const file = e.target.files?.[0]; setFiles(current => ({ ...current, [item.id]: file })); }}/></label>}
+      <button type="button" className="button button-secondary" disabled={busy || (!item.uploaded && !files[item.id])}
+        onClick={() => void resume(item)}>Completar registro</button>
+    </div>)}
+    {message && <p role="alert">{message} <button type="button" onClick={() => { setMessage(""); setRevision(n => n + 1); }}>Actualizar</button></p>}
+  </section>;
+}
+
 function metadataOf(file:ReviewFile|undefined,minutes:boolean):ReviewMetadata{
   return {title:file?.displayName ?? "",responsible:file?.responsible ?? "",date:file?.validFrom ?? "",notes:file?.description ?? (minutes?"En revisión":""),
     category:file?.category ?? "support",section:file?.section ?? ""};

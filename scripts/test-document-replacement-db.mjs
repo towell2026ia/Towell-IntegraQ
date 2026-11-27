@@ -76,3 +76,40 @@ assert.equal(sql("-Atc", `select count(*) from public.controlled_document_versio
 assert.equal(sql("-Atc", `select count(*) from public.document_workflow_events where document_id='${documentIds[0]}'`), "2");
 assert.equal(sql("-Atc", `select count(*) from public.document_audit_log where document_id='${documentIds[0]}'`), "1");
 console.log("PASS: concurrent final retries return one receipt without duplicate document, version or audit events.");
+
+// The existing PostgreSQL job supplies independent backends for RE-03 receipt retries.
+sql("-c", `create role service_role;
+create function public.is_internal_user() returns boolean language sql stable as $$
+  select exists(select 1 from public.profiles where id=auth.uid() and status='active' and user_type in ('administrator','internal'))
+$$;
+create table public.audit_log(actor_id uuid, organization_id uuid, module text, action text, resource_type text,
+  resource_id text, metadata jsonb, reason text);
+alter table public.file_objects add column version integer, add column is_current boolean, add column replaces_file_id uuid,
+  add column preview_status text, add column display_name text, add column valid_from date, add column description text,
+  add column observations text, add column deleted_by uuid, add column deletion_reason text,
+  add column updated_at timestamptz default clock_timestamp();`);
+sql("-f", "docs/database/proposals/IQ-RE-03-DOCUMENTACION.sql");
+const reviewAdmin = "10000000-0000-4000-8000-000000000001";
+const reviewId = "81000000-0000-4000-8000-000000000001";
+const reviewType = "management_review_document";
+const reviewKey = "2025:81000000-0000-4000-8000-000000000002";
+const reviewAuth = `set local role authenticated;set local request.jwt.claim.sub='${reviewAdmin}';`;
+const reviewPayload = JSON.stringify({sha:"b".repeat(64), size:12, name:"Revision.pdf", mime:"application/pdf",
+  title:"Revisión", responsible:"SGC", date:"2025-11-01", category:"support", section:"", notes:""});
+sql("-c", `begin;${reviewAuth}
+  select public.iq_review_reserve('${reviewId}','${reviewType}','${reviewKey}',null,null,'${reviewPayload}');
+  insert into storage.objects(bucket_id,name,owner_id,metadata)
+    select 'integraq-private',object_path,auth.uid()::text,'{"size":12,"mimetype":"application/pdf"}'
+    from public.iq_review_uploads where id='${reviewId}';
+  set local role service_role;
+  select public.iq_review_attest('${reviewId}','${reviewAdmin}',repeat('b',64),12);commit;`);
+const finalizeReview = `begin;${reviewAuth}
+  select public.iq_review_write('add',resource_type,resource_key,previous_id,expected_at,payload)
+    from public.iq_review_uploads where id='${reviewId}';
+  select pg_sleep(0.4);commit;`;
+const reviewReceipts = await Promise.all([concurrent(finalizeReview), concurrent(finalizeReview)]);
+assert.ok(reviewReceipts.every(r => r.status === 0 && r.out.trim() === reviewId), JSON.stringify(reviewReceipts));
+assert.equal(sql("-Atc", `select count(*) from public.file_objects where resource_type='${reviewType}' and resource_key='${reviewKey}'`), "1");
+assert.equal(sql("-Atc", `select count(*) from public.audit_log where resource_id='${reviewId}' and action='REVIEW_ADD'`), "1");
+assert.equal(sql("-Atc", `select result_id from public.iq_review_uploads where id='${reviewId}'`), reviewId);
+console.log("PASS: independent RE-03 retries return the same confirmed version and audit entry.");

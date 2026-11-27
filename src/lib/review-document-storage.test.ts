@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listReviewFiles, readReviewPeriods, reviewDocuments, saveReviewFile } from "./review-document-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listReviewFiles, readReviewPeriods, reviewDocuments, saveReviewFile, resumeReviewTransfer } from "./review-document-storage";
 
 const mocks = vi.hoisted(() => ({
-  rpc: vi.fn(), from: vi.fn(), upload: vi.fn(), user: vi.fn(),
+  rpc: vi.fn(), from: vi.fn(), upload: vi.fn(), confirm: vi.fn(),
 }));
 vi.mock("./supabase/client", () => ({
-  createClient: () => ({ rpc: mocks.rpc, from: mocks.from, auth: { getUser: mocks.user },
+  createClient: () => ({ rpc: mocks.rpc, from: mocks.from,
     storage: { from: () => ({upload: mocks.upload}) } }),
 }));
 
@@ -17,10 +17,19 @@ const base: Parameters<typeof saveReviewFile>[0] = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.user.mockResolvedValue({data:{user:{id:"actor"}}});
   mocks.upload.mockResolvedValue({error:null});
-  mocks.rpc.mockResolvedValue({data:"revision-id",error:null});
+  mocks.confirm.mockResolvedValue(Response.json({id:base.uploadId}));
+  vi.stubGlobal("fetch",mocks.confirm);
+  mocks.rpc.mockImplementation((name, args) => {
+    if (name === "iq_review_reserve") {
+      const transfer = {id:args.p_id, uploaded:false, result_id:null, object_path:"reserved/path",payload:args.p_data};
+      mocks.rpc.mockImplementation(() => ({eq:() => ({single:async () => ({data:transfer})})}));
+      return Promise.resolve({data:transfer.id});
+    }
+    throw new Error("Unexpected RPC");
+  });
 });
+afterEach(() => vi.unstubAllGlobals());
 
 function duplicates(rows: {id:string}[]) {
   const chain = { select:vi.fn().mockReturnThis(), eq:vi.fn().mockReturnThis(), neq:vi.fn().mockReturnThis(),
@@ -33,10 +42,25 @@ describe("Expediente documental de Dirección", () => {
   it("solicita el registro después de cargar el objeto privado sin sobrescribirlo",async () => {
     duplicates([]);
     expect(await saveReviewFile(base)).toBe(base.uploadId);
-    expect(mocks.upload).toHaveBeenCalledWith("actor/attachments/management-review/management_review_document/2025-document-id/revision-id/Documento.pdf",base.file,{contentType:"application/pdf",upsert:false});
-    expect(mocks.rpc).toHaveBeenCalledWith("iq_review_write",expect.objectContaining({
+    expect(mocks.upload).toHaveBeenCalledWith("reserved/path",base.file,{contentType:"application/pdf",upsert:false});
+    expect(mocks.rpc).toHaveBeenCalledWith("iq_review_reserve",expect.objectContaining({
       p_type:reviewDocuments,p_key:"2025:document-id",p_previous:null,p_data:expect.objectContaining({section:"risks",size:4,sha:expect.stringMatching(/^[a-f0-9]{64}$/)}),
     }));
+    expect(mocks.rpc.mock.invocationCallOrder[0]).toBeLessThan(mocks.upload.mock.invocationCallOrder[0]);
+  });
+  it("recupera la reserva desde una pantalla recién abierta y utiliza el objeto existente",async () => {
+    const uploaded={id:base.uploadId,uploaded:true,result_id:null,object_path:"private",resource_key:"2025:key",payload:{...base.metadata,name:"Documento.pdf",size:4,mime:"application/pdf",sha:"fixture"}};
+    mocks.rpc.mockImplementation(()=>({eq:()=>({is:()=>({order:()=>({range:async()=>({data:[uploaded]})})})})}));
+    vi.resetModules();
+    const reopened=await import("./review-document-storage");
+    const [restored]=await reopened.pendingReviewTransfers(reviewDocuments);
+    expect(await reopened.resumeReviewTransfer(restored)).toBe(base.uploadId);
+    expect(mocks.upload).not.toHaveBeenCalled();
+    await expect(resumeReviewTransfer({...restored,uploaded:false},new File(["xxxx"],"Documento.pdf"))).rejects.toThrow("archivo original");
+    expect(mocks.upload).not.toHaveBeenCalled();
+    mocks.confirm.mockClear();
+    expect(await resumeReviewTransfer({...restored,result_id:base.uploadId})).toBe(base.uploadId);
+    expect(mocks.confirm).not.toHaveBeenCalled();
   });
   it("conserva el original registrado y no vuelve a cargar sus bytes",async () => {
     duplicates([{id:"original"}]);
@@ -45,8 +69,8 @@ describe("Expediente documental de Dirección", () => {
   });
   it("distingue un archivo cargado de un registro confirmado",async () => {
     duplicates([]);
-    mocks.rpc.mockResolvedValue({data:null,error:{message:"REVIEW_CHANGED"}});
-    await expect(saveReviewFile(base)).rejects.toThrow("El expediente cambió");
+    mocks.confirm.mockResolvedValue(new Response(null,{status:409}));
+    await expect(saveReviewFile(base)).rejects.toThrow("No se confirmó el registro");
   });
   it("una consulta denegada no habilita el registro ni presenta años vacíos",async () => {
     mocks.rpc.mockResolvedValue({data:null,error:{code:"42501"}});

@@ -15,7 +15,7 @@ const periods = () => query("select * from public.iq_review_periods()");
 const readProposal = () => readFileSync(new URL("../docs/database/proposals/IQ-RE-03-DOCUMENTACION.sql",import.meta.url),"utf8");
 try {
   await db.exec(`
-    create role authenticated; create role anon;
+    create role authenticated; create role anon; create role service_role;
     create schema auth; create schema storage;
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('fixture.actor',true),'')::uuid$$;
     create table profiles(id uuid primary key, organization_id uuid not null, status text, role text);
@@ -44,31 +44,70 @@ try {
   }
   const historic = randomUUID();
   await query("insert into file_objects(id,module_id,resource_type,resource_key,category,uploaded_by,is_current,version) values($1,'management-review',$2,'2025','original',$3,true,1)",[historic,minutes,admin]);
+  const interrupted = randomUUID(), compensation = randomUUID();
+  for (const [id,year] of [[interrupted,"2022"],[compensation,"2021"]]) {
+    await query("insert into file_objects(id,module_id,resource_type,resource_key,category,uploaded_by,is_current,version) values($1,'management-review',$2,$3,'original',$4,true,1)",[id,minutes,year,admin]);
+  }
+  await db.exec("set role authenticated");
+  await setActor(admin);
+  await query("update file_objects set is_current=false where id in ($1,$2)",[interrupted,compensation]);
+  await db.exec(`prepare legacy_put(uuid,text,text,uuid,int,text) as
+    insert into public.file_objects(id,bucket_id,object_path,original_name,mime_type,size_bytes,sha256,module_id,uploaded_by,audience,
+      resource_type,resource_key,category,version,is_current,replaces_file_id,display_name,valid_from,description)
+    values($1,'integraq-private',$2,'acta.pdf','application/pdf',12,$3,'management-review',auth.uid(),'internal',
+      'management_review_minutes',$6,'evidence:fixture',$5,true,$4,'SGC',($6||'-01-01')::date,'Finalizada') returning id`);
+  await db.exec("reset role");
   await db.exec(readProposal());
   await db.exec("set role authenticated");
   await setActor(admin);
   const family = () => "2025:"+randomUUID();
   const first = family(), second = family(), other = "2024:"+randomUUID();
-  async function stage(key, type=kind) {
-    const id = randomUUID(), path = [admin,"attachments","management-review",type,key.replace(":","-"),id,"a.pdf"].join("/");
+  const stamp=id=>value("select updated_at::text from file_objects where id=$1",[id]);
+  const reserve=(id,type,key,previous,expected,payload)=>value("select iq_review_reserve($1,$2,$3,$4,$5,$6)",[id,type,key,previous,expected,JSON.stringify(payload)]);
+  const lookup=id=>query("select * from iq_review_transfers() where id=$1",[id]).then(x=>x.rows[0]);
+  async function stage(key, type=kind, previous=null) {
+    const id = randomUUID(), path = [admin,"attachments","management-review",type,"r1-"+key.replace(":","-"),id,"original"].join("/");
+    const payload = {sha:createHash("sha256").update(id).digest("hex"),size:12,mime:"application/pdf",name:"a.pdf",title:"Acta",responsible:"SGC",category:"support",section:"policy",date:key.slice(0,4)+"-01-21",notes:type===minutes?"En revisión":"Notas"};
+    const expected=previous ? await stamp(previous) : null;
+    assert.equal(await reserve(id,type,key,previous,expected,payload),id);
+    assert.equal(await reserve(randomUUID(),type,key,previous,expected,payload),id);
+    assert.equal((await lookup(id)).uploaded,false);
+    await setActor("");
+    assert.equal(await lookup(id),undefined);
+    await setActor(foreign);
+    assert.equal(await lookup(id),undefined);
+    await setActor(admin);
+    assert.equal((await lookup(id)).object_path,path);
     await query("insert into storage.objects values($1,$2,$3,$4)",[bucket,path,admin,JSON.stringify({size:12,mimetype:"application/pdf"})]);
-    return {id,path,sha:createHash("sha256").update(id).digest("hex"),size:12,mime:"application/pdf",name:"a.pdf",title:"Acta",responsible:"SGC",category:"support",section:"policy",date:key.slice(0,4)+"-01-21",notes:type===minutes?"En revisión":"Notas"};
+    assert.equal((await lookup(id)).uploaded,true);
+    const command="select public.iq_review_attest($1,$2,$3,$4)";
+    await assert.rejects(query(command,[id,admin,payload.sha,12]),/permission denied/);
+    await db.exec("set role service_role");
+    await query(command,[id,admin,payload.sha,12]);
+    await db.exec("set role authenticated");
+    return (await lookup(id)).payload;
   }
   const write=(action,key,payload,previous=null,expected=null,type=kind)=>value(
     "select public.iq_review_write($1,$2,$3,$4,$5,$6)",[action,type,key,previous,expected,JSON.stringify(payload)]);
-  const stamp=id=>value("select updated_at::text from file_objects where id=$1",[id]);
   const a=await stage(first), b=await stage(second), c=await stage(other);
   for(const [key,item] of [[first,a],[second,b],[other,c]]) assert.equal(await write("add",key,item),item.id);
   assert.equal(await write("add",first,a),a.id);
-  assert.deepEqual((await periods()).rows.map(Object.values).flat().sort(),[2024,2025]);
+  assert.deepEqual((await periods()).rows.map(Object.values).flat().sort(),[2021,2022,2024,2025]);
   assert.equal(await value("select count(*)::int from file_objects where resource_type=$1 and resource_key like '2025:%'",[kind]),2);
-  const version=await stage(first);
+  const version=await stage(first,kind,a.id);
   const oldStamp=await stamp(a.id);
-  await assert.rejects(write("replace",first,{...version,sha:a.sha},a.id,oldStamp),/REVIEW_DUPLICATE/);
-  await assert.rejects(write("replace",first,{...version,size:13},a.id,oldStamp),/REVIEW_OBJECT/);
+  await assert.rejects(write("replace",first,{...version,sha:a.sha},a.id,oldStamp),/REVIEW_RESERVATION/);
+  await assert.rejects(write("replace",first,{...version,size:13},a.id,oldStamp),/REVIEW_RESERVATION/);
   assert.equal(await value("select is_current from file_objects where id=$1",[a.id]),true);
-  assert.equal(await write("replace",first,version,a.id,oldStamp),version.id);
-  assert.equal(await write("replace",first,version,a.id,oldStamp),version.id);
+  await db.exec("reset role");
+  await db.exec("create function fixture_reject() returns trigger language plpgsql as $$begin raise exception 'TEST_REGISTRATION_FAILURE'; end$$; create trigger fail_audit before insert on audit_log for each row execute function fixture_reject()");
+  await db.exec("set role authenticated");
+  await assert.rejects(write("replace",first,version,a.id,oldStamp),/TEST_REGISTRATION_FAILURE/);
+  assert.equal(await value("select is_current from file_objects where id=$1",[a.id]),true);
+  assert.equal((await lookup(version.id)).result_id,null);
+  await db.exec("reset role; drop trigger fail_audit on audit_log; set role authenticated");
+  assert.deepEqual(await Promise.all([1,2,3].map(()=>write("replace",first,version,a.id,oldStamp))),Array(3).fill(version.id));
+  assert.equal((await lookup(version.id)).result_id,version.id);
   assert.equal(await value("select version from file_objects where id=$1",[version.id]),2);
   assert.equal(await value("select is_current from file_objects where id=$1",[a.id]),false);
   const before=await stamp(version.id);
@@ -93,13 +132,50 @@ try {
   assert.equal(await value("select count(*)::int from file_objects where resource_key=$1 and deleted_at is not null",[first]),2);
   assert.equal(await value("select count(*)::int from storage.objects"),4);
   assert.equal(await value("select is_current from file_objects where id=$1",[historic]),true);
-  const acta = await stage("2025",minutes);
+  const acta = await stage("2025",minutes,historic);
   await write("replace","2025",acta,historic,await stamp(historic),minutes);
   assert.equal(await value("select version from file_objects where id=$1",[acta.id]),2);
   await setActor(reader);
   assert.equal(await value("select count(*)::int from file_objects where resource_key=$1",[first]),0);
   assert.equal(await value("select count(*)::int from storage.objects where name=$1",[version.path]),0);
   assert.equal(await value("select count(*)::int from file_objects where id=$1",[b.id]),1);
+  await setActor(admin);
+  async function legacyPut(year,previous,version,alreadyDeactivated=false) {
+    const id=randomUUID(), path=[admin,"attachments","management-review",minutes,year,id,"acta.pdf"].join("/");
+    const sha=createHash("sha256").update(id).digest("hex");
+    await query("insert into storage.objects values($1,$2,$3,$4)",[bucket,path,admin,JSON.stringify({size:12,mimetype:"application/pdf"})]);
+    assert.equal(await value("select count(*)::int from storage.objects where name=$1",[path]),1);
+    await setActor(foreign);
+    assert.equal(await value("select count(*)::int from storage.objects where name=$1",[path]),0);
+    await setActor(admin);
+    if(previous && !alreadyDeactivated) {
+      await query("update file_objects set is_current=false where id=$1 and is_current",[previous]);
+      assert.equal(await value("select is_current from file_objects where id=$1",[previous]),true);
+    }
+    const previousSql=previous ? "'"+previous+"'::uuid" : "null::uuid";
+    const put="execute legacy_put('"+id+"','"+path+"','"+sha+"',"+previousSql+","+version+",'"+year+"')";
+    assert.equal(await value(put),id);
+    assert.equal((await query("delete from storage.objects where name=$1 returning name",[path])).rows.length,0);
+    return id;
+  }
+  const bridged=await legacyPut("2022",interrupted,2,true);
+  assert.equal(await value("select replaces_file_id from file_objects where id=$1",[bridged]),interrupted);
+  await query("update file_objects set is_current=true where id=$1",[interrupted]);
+  assert.equal(await value("select is_current from file_objects where id=$1",[interrupted]),false);
+  assert.equal(await value("update file_objects set is_current=true where id=$1 returning is_current",[compensation]),true);
+  const legacy=await legacyPut("2023",null,1);
+  const nextLegacy=await legacyPut("2023",legacy,2);
+  assert.equal(await value("select is_current from file_objects where id=$1",[legacy]),false);
+  const mixed=await legacyPut("2025",acta.id,3);
+  assert.equal(await value("select replaces_file_id from file_objects where id=$1",[mixed]),acta.id);
+  await assert.rejects(query("update file_objects set original_name='changed.pdf' where id=$1",[mixed]),/REVIEW_DENIED/);
+  await assert.rejects(query("update file_objects set deleted_at=now(),deleted_by=auth.uid(),is_current=false where id=$1",[mixed]),/REVIEW_REASON/);
+  assert.equal(await value("update file_objects set deleted_at=now(),deleted_by=auth.uid(),deletion_reason='Retiro autorizado',is_current=false where id=$1 returning id",[nextLegacy]),nextLegacy);
+  assert.equal(await value("select count(*)::int from storage.objects where name like '%/2023/%'"),2);
+  assert.equal(await write("replace","2025",acta,historic,await value("select expected_at::text from iq_review_uploads where id=$1",[acta.id]),minutes),acta.id);
+  await setActor(reader);
+  await assert.rejects(reserve(randomUUID(),kind,first,null,null,version),/REVIEW_DENIED/);
+  console.log("RE-03-R1 · RE-02 preparado antes de instalar, alta, reemplazo, retiro, coexistencia y recuperación comprobados.");
   console.log("RE-03 · COMMIT íntegro, períodos, versiones y reintentos, metadatos, retiro lógico, bitácora, históricos y aislamiento comprobados.");
 } finally {
   await db.close();

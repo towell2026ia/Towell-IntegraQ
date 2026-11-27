@@ -1,6 +1,6 @@
 "use client";
 import { createClient } from "./supabase/client";
-import { fileSha256, mapAttachment, safeName } from "./attachment-storage";
+import { fileSha256, mapAttachment } from "./attachment-storage";
 import { validateHistoricalMinutes } from "./historical-minutes";
 
 export const reviewMinutes = "management_review_minutes";
@@ -53,9 +53,6 @@ export async function saveReviewFile(input: WriteInput) {
       const error = validateHistoricalMinutes({ year: String(year), date: metadata.date, responsible: metadata.responsible, fileName: file.name, mimeType: file.type },new Date().getFullYear());
       if (error) throw new Error(error);
     }
-    const { data: auth } = await client.auth.getUser();
-    if (!auth.user) throw new Error("Inicia sesión nuevamente.");
-    const path = [auth.user.id,"attachments","management-review",kind,safeName(key),input.uploadId,safeName(file.name)].join("/");
     const mime = file.type || (kind === reviewMinutes
       ? (/\.pdf$/i.test(file.name) ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
       : "application/octet-stream");
@@ -64,14 +61,70 @@ export async function saveReviewFile(input: WriteInput) {
       .eq("sha256",sha).neq("id",input.uploadId).limit(1);
     if (existing.error) throw new Error("No se pudo comprobar si el archivo ya está registrado.");
     if (existing.data.length) throw new Error("El archivo ya está registrado. Consulta el original en su expediente.");
-    const uploaded = await client.storage.from("integraq-private").upload(path,file,{ contentType:mime, upsert:false });
-    if (uploaded.error && String(uploaded.error.statusCode) !== "409" && uploaded.error.message !== "The resource already exists") throw new Error("No se pudo cargar el archivo. Puedes reintentar.");
-    Object.assign(payload,{ id:input.uploadId,path,name:file.name,size:file.size,mime,sha });
+    Object.assign(payload, { name: file.name, size: file.size, mime, sha });
+    const reserved = await client.rpc("iq_review_reserve", {
+      p_id: input.uploadId, p_type: kind, p_key: key, p_previous: previous?.id ?? null,
+      p_expected: previous?.updatedAt ?? null, p_data: payload,
+    });
+    if (reserved.error || !reserved.data) throw new Error("No se confirmó la reserva. Consulta las cargas pendientes antes de reintentar.");
+    const transfer = await getReviewTransfer(String(reserved.data));
+    return resumeReviewTransfer(transfer, file);
   }
   const { data,error } = await client.rpc("iq_review_write",{ p_action: action,p_type:kind,p_key:key,p_previous:previous?.id ?? null,
     p_expected:previous?.updatedAt ?? null,p_data:payload });
   if (error || !data) throw new Error(error?.message.includes("REVIEW_CHANGED") ? "El expediente cambió. Actualiza la lista antes de continuar." : "El registro no se confirmó. Conserva tu selección y vuelve a intentar.");
   return String(data);
+}
+
+export interface ReviewTransfer {
+  id: string;
+  object_path: string;
+  resource_key: string;
+  uploaded: boolean;
+  result_id: string | null;
+  payload: ReviewMetadata & { name: string; size: number; mime: string; sha: string };
+}
+
+async function getReviewTransfer(id: string): Promise<ReviewTransfer> {
+  const { data, error } = await createClient().rpc("iq_review_transfers").eq("id", id).single();
+  if (error || !data) throw new Error("No se pudo consultar la reserva. Vuelve a abrir las cargas pendientes.");
+  return data as ReviewTransfer;
+}
+
+export async function pendingReviewTransfers(kind: ReviewKind): Promise<ReviewTransfer[]> {
+  const rows: ReviewTransfer[] = [];
+  for (let offset = 0; ; offset += 100) {
+    const { data, error } = await createClient().rpc("iq_review_transfers").eq("resource_type", kind)
+      .is("result_id", null).order("id").range(offset, offset + 99);
+    if (error) throw new Error("No se pudieron consultar las cargas pendientes.");
+    rows.push(...data as ReviewTransfer[]);
+    if (data.length < 100) return rows;
+  }
+}
+
+export async function resumeReviewTransfer(transfer: ReviewTransfer, file?: File): Promise<string> {
+  if (transfer.result_id) return transfer.result_id;
+  if (!transfer.uploaded) {
+    if (!file || file.name !== transfer.payload.name || file.size !== transfer.payload.size ||
+        await fileSha256(file) !== transfer.payload.sha) {
+      throw new Error("Selecciona el archivo original correspondiente a esta reserva.");
+    }
+    const { error } = await createClient().storage.from("integraq-private").upload(transfer.object_path, file,
+      { contentType: transfer.payload.mime, upsert: false });
+    if (error && String(error.statusCode) !== "409" && error.message !== "The resource already exists") {
+      throw new Error("La reserva se conserva. Actualiza las cargas pendientes para comprobar la transferencia.");
+    }
+  }
+  const response = await fetch("/api/management-review/transfers", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: transfer.id }),
+  }).catch(() => null);
+  if (!response) throw new Error("La conexión se interrumpió. Puedes recuperar la carga pendiente.");
+  if (!response.ok) throw new Error(response.status === 409
+    ? "No se confirmó el registro. Comprueba el archivo y la versión actual del expediente. La reserva se conserva."
+    : "No se confirmó el registro. Puedes recuperarlo desde las cargas pendientes.");
+  const id = (await response.json().catch(() => null))?.id;
+  if (id !== transfer.id) throw new Error("No se confirmó la versión documental.");
+  return id;
 }
 
 export async function downloadReviewFile(file: ReviewFile) {
