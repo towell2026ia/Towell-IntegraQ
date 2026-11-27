@@ -46,7 +46,7 @@ describe("retorno a Revisión por la Dirección", () => {
     expect(sections).toHaveLength(15);
     expect(Object.fromEntries(sections.filter(section => section.availability === "Disponible").map(s => [s.id, s.view]))).toEqual({
       manual: "current-manual", policy: "current-policy", risks: "swot", objectives: "dashboard", organization: "chart", processes: "map",
-      customers: "cases", suppliers: "directory", audits: "calendar", actions: "lists", improvement: "portfolio", history: "history",
+      customers: "cases", suppliers: "directory", audits: "calendar", actions: "lists", improvement: "portfolio", history: "history", outputs: "acuerdos",
     });
   });
 });

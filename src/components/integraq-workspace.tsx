@@ -94,6 +94,7 @@ import {
   buildManagementReviewContext,
   hasSourceChanges,
   readLocalManagementReviews,
+  scopedReviewStorage,
   saveLocalManagementReview,
   type ManagementReviewRecord,
 } from "@/lib/management-review-data";
@@ -492,6 +493,8 @@ export function IntegraQWorkspace({
     return () => { active = false; window.clearTimeout(timer); };
   }, [riskServerReady, riskWorkspace, externalScope]);
 
+  const [reviewsIdentity,setReviewsIdentity]=useState("");
+  const [legacyPending,setLegacyPending]=useState(false);
   const [reviewsReady, setReviewsReady] = useState(false);
   const [reviewsError, setReviewsError] = useState(false);
   const [reviewRetry, setReviewRetry] = useState(0);
@@ -499,9 +502,21 @@ export function IntegraQWorkspace({
     if (externalScope || !canAccessModule(session, "management-review")) return;
     const readLocalReviews = () => {
       try {
-        const stored = readLocalManagementReviews(window.localStorage);
+        const storage=demoMode?window.localStorage:scopedReviewStorage(window.localStorage,session);
+        const stored = readLocalManagementReviews(storage);
+        if (!demoMode && session.userType === "Administrador") {
+          try {
+            const unscoped = readLocalManagementReviews(window.localStorage);
+            setLegacyPending(withoutKnownDemoManagementReviews(unscoped).some(report => report.draft?.mode !== "demo"));
+          } catch {
+            setLegacyPending(true);
+          }
+        } else {
+          setLegacyPending(false);
+        }
+        setReviewsIdentity(sessionKey);
         const saved = withoutUnchangedSamples(stored, buildDemoManagementReviewHistory());
-        setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved));
+        setManagementReviews(demoMode ? saved : withoutKnownDemoManagementReviews(saved).filter(report => report.draft?.mode !== "demo"));
         setReviewsError(false);
       } catch {
         setReviewsError(true);
@@ -511,10 +526,10 @@ export function IntegraQWorkspace({
     };
     const timer = window.setTimeout(readLocalReviews, 0);
     return () => window.clearTimeout(timer);
-  }, [session, externalScope, demoMode, reviewRetry]);
+  }, [session, sessionKey, externalScope, demoMode, reviewRetry]);
 
   function saveManagementReview(previous: ManagementReviewRecord, next: ManagementReviewRecord) {
-    saveLocalManagementReview(window.localStorage, previous, next);
+    saveLocalManagementReview(demoMode?window.localStorage:scopedReviewStorage(window.localStorage,session), previous, next);
     setManagementReviews(records => records.map(record => record.id === previous.id ? next : record));
   }
 
@@ -530,10 +545,10 @@ export function IntegraQWorkspace({
 
   const currentManagementReview = useMemo(
     () =>
-      managementReviews.find((record) => record.period.year === new Date().getFullYear()) ??
+      reviewsIdentity!==sessionKey ? null : managementReviews.find((record) => record.period.year === new Date().getFullYear()) ??
       managementReviews[0] ??
       null,
-    [managementReviews],
+    [managementReviews,reviewsIdentity,sessionKey],
   );
 
   function reviewSourcesChanged(record: ManagementReviewRecord) {
@@ -763,7 +778,7 @@ export function IntegraQWorkspace({
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
           {activeModule === "customers" ? <CustomersModule fromReview={!!visit} onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>void changeModule("corrective-actions", undefined, undefined, undefined, () => {writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimDraftId(claim.selectedDraftId ?? "");setClaimSeedId(claim.id);setClaimSeed(claim);})} onOpenA3={id=>void changeModule("corrective-actions", id, undefined, undefined, () => {for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);})} /> : null}
           {activeModule === "suppliers" ? <SuppliersModule initialYear={visit?.year} session={session} /> : null}
-          {activeModule === "management-review" ? <ManagementReviewModule onOpenSection={(section, year) => changeModule(section.module, undefined, section, year)} key={sessionKey} sourcesChanged={reviewSourcesChanged} onRecordChange={saveManagementReview} records={managementReviews} session={session} recordsReady={reviewsReady} recordsError={reviewsError} onRetryRecords={() => setReviewRetry(value => value + 1)} /> : null}
+          {activeModule === "management-review" ? <ManagementReviewModule onOpenSection={(section, year) => changeModule(section.module, undefined, section, year)} key={sessionKey} sourcesChanged={reviewSourcesChanged} onRecordChange={saveManagementReview} records={reviewsIdentity===sessionKey?managementReviews:[]} session={session} legacyPending={legacyPending && reviewsIdentity===sessionKey} recordsReady={reviewsReady && reviewsIdentity===sessionKey} recordsError={reviewsError} onRetryRecords={() => setReviewRetry(value => value + 1)} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule initialCustomerId={navigationTarget?.module === "customer-portal" ? navigationTarget.id : undefined} kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}

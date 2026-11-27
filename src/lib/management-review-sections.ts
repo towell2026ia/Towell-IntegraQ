@@ -41,7 +41,7 @@ export const managementReviewGroups: { group: string; sections: ReviewSection[] 
   ] },
   { group: "Seguimiento de la revisión", sections: [
     { id: "history", title: "Revisiones anteriores", description: "Actas, informes y aprobaciones por período.", icon: History, module: "management-review", view: "history", availability: "Disponible" },
-    { id: "outputs", title: "Salidas de Revisión por la Dirección", description: "Acuerdos y seguimiento de decisiones.", icon: ListChecks, module: "management-review", view: "acuerdos", availability: "Previsto para RE-04" },
+    { id: "outputs", title: "Salidas de Revisión por la Dirección", description: "Acuerdos y seguimiento de decisiones.", icon: ListChecks, module: "management-review", view: "acuerdos", availability: "Disponible" },
     { id: "attachments", title: "Evidencias y adjuntos", description: "Documentación complementaria del período.", icon: Paperclip, module: "management-review", view: "attachments", availability: "Consulta disponible" },
   ] },
 ];

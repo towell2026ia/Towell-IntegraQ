@@ -78,16 +78,7 @@ assert.equal(sql("-Atc", `select count(*) from public.document_audit_log where d
 console.log("PASS: concurrent final retries return one receipt without duplicate document, version or audit events.");
 
 // The existing PostgreSQL job supplies independent backends for RE-03 receipt retries.
-sql("-c", `create role service_role;
-create function public.is_internal_user() returns boolean language sql stable as $$
-  select exists(select 1 from public.profiles where id=auth.uid() and status='active' and user_type in ('administrator','internal'))
-$$;
-create table public.audit_log(actor_id uuid, organization_id uuid, module text, action text, resource_type text,
-  resource_id text, metadata jsonb, reason text);
-alter table public.file_objects add column version integer, add column is_current boolean, add column replaces_file_id uuid,
-  add column preview_status text, add column display_name text, add column valid_from date, add column description text,
-  add column observations text, add column deleted_by uuid, add column deletion_reason text,
-  add column updated_at timestamptz default clock_timestamp();`);
+sql("-f", "supabase/tests/re03-document-fixture-extension.sql");
 sql("-f", "docs/database/proposals/IQ-RE-03-DOCUMENTACION.sql");
 const reviewAdmin = "10000000-0000-4000-8000-000000000001";
 const reviewId = "81000000-0000-4000-8000-000000000001";

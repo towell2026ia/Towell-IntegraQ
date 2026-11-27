@@ -51,3 +51,13 @@ button.card:hover, button.card:focus-visible, .year select:focus-visible { borde
   .group { padding: 12px; }
   .portal { gap: 12px; }
 }
+
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,135px),1fr)); gap:10px; }
+.metrics button { display:grid; align-content:space-between; gap:8px; text-align:start; background:var(--surface,#fff); color:inherit; border:1px solid var(--line); border-radius:8px; padding:12px; cursor:pointer; font:inherit; }
+.metrics button span { font-size:.84rem; }
+.metrics button strong { font-size:1.4rem; }
+.metrics button[aria-pressed=true],.metrics button:focus-visible { outline:2px solid var(--accent,#286d61); outline-offset:1px; }
+
+.outputDialog:not([open]) { display: none; }
+.outputDialog { color: var(--ink); max-width: calc(100vw - 24px); }
+.outputDialog::backdrop { background: rgb(14 27 23 / 65%); }

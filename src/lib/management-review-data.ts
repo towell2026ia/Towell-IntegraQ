@@ -68,6 +68,8 @@ export interface ManagementReviewSection {
 }
 
 export interface ManagementReviewDecision {
+  /** Optional reference for a report reconciled with an official central decision. */
+  officialDecisionId?: string;
   id: string;
   description: string;
   owner: string;
@@ -343,6 +345,12 @@ export function createManagementReviewRecord(
     ],
     modifiedAt: context.capturedAt,
   };
+}
+
+export function scopedReviewStorage(storage: Pick<Storage, "getItem" | "setItem">, session: ActiveSession) {
+  if(!session.authUserId || !session.organizationId)throw Error("Identidad no disponible.");
+  const prefix="integraq.review."+session.organizationId+"."+session.authUserId+".";
+  return {getItem:(key:string)=>storage.getItem(prefix+key),setItem:(key:string,value:string)=>storage.setItem(prefix+key,value)};
 }
 
 /** The v1 key held a single report. Reading it never migrates or clears the original. */

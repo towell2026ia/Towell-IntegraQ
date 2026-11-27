@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   approveManagementReviewAsOperations,
@@ -32,6 +32,8 @@ import {
 import { ManagementReviewMinutes, useReviewMinutes } from "./management-review-minutes";
 import { hasUnsavedChanges } from "@/lib/workspace-continuity";
 import { getDocumentPermissions } from "@/lib/document-control-data";
+import { ReviewOutputs } from "./review-outputs";
+import { outputYears } from "@/lib/review-output-storage";
 import { ReviewDocuments } from "./review-documents";
 import { canAccessModule } from "@/lib/access-policy";
 import { useContinuityState } from "@/components/workspace-continuity";
@@ -43,6 +45,7 @@ import { isExternalUser, type ActiveSession } from "@/lib/session-data";
 interface ManagementReviewModuleProps {
   session: ActiveSession;
   onOpenSection?: (section: ReviewSection, year: number) => void;
+  legacyPending?: boolean;
   recordsReady: boolean;
   sourcesChanged?: (record: ManagementReviewRecord) => boolean;
   recordsError?: boolean;
@@ -62,11 +65,16 @@ export function ManagementReviewModule(props: ManagementReviewModuleProps) {
   return <ManagementReviewWorkspace {...props} />;
 }
 
-function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords, onOpenSection }: ManagementReviewModuleProps) {
+function ManagementReviewWorkspace({ session, records, legacyPending, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords, onOpenSection }: ManagementReviewModuleProps) {
   const [period, setPeriod] = useContinuityState("review:period", () => new Date().getFullYear());
-  const [view, setView] = useState<"portal" | "history" | "attachments">("portal");
+  const [view, setView] = useState<"portal" | "history" | "attachments" | "acuerdos">("portal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const catalog = useReviewMinutes(session);
+  const [agreementYears,setAgreementYears]=useState<number[]>();
+  const [outputsFailed,setOutputsFailed]=useState(false);
+  const [retryOutputs,setRetryOutputs]=useState(0);
+  useEffect(()=>{let active=true;outputYears().then(years=>{if(active){setAgreementYears(years);setOutputsFailed(false);}})
+    .catch(()=>{if(active)setOutputsFailed(true);});return()=>{active=false;};},[retryOutputs]);
   const manualAllowed = getDocumentPermissions(session, "P-35").view;
   const [editing, setEditing] = useState(false);
   const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(null);
@@ -152,7 +160,7 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
     setWorkingDraft({
       ...workingDraft,
       decisions: workingDraft.decisions.map((decision) =>
-        decision.id === decisionId ? { ...decision, [field]: value } : decision,
+        decision.id === decisionId && !decision.officialDecisionId ? { ...decision, [field]: value } : decision,
       ),
     });
   };
@@ -161,14 +169,14 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
   if (!record) {
     const currentYear = new Date().getFullYear();
     const years = [...new Set([currentYear, period, ...records.map(item => item.period.year),
-      ...catalog.years])]
+      ...catalog.years,...(agreementYears??[])])]
       .filter(year => Number.isInteger(year) && year >= 1900 && year <= currentYear)
       .sort((left, right) => right - left);
     return <div className={styles.portal}>
       <header className={styles.header}>
-        <div><h2>{view === "portal" ? "Alcance de Dirección" : view === "history" ? "Revisiones anteriores" : "Evidencias y adjuntos"}</h2>
+        <div><h2>{view === "portal" ? "Alcance de Dirección" : view === "history" ? "Revisiones anteriores" : view === "acuerdos" ? "Salidas de Revisión por la Dirección" : "Evidencias y adjuntos"}</h2>
           <p>{view === "portal" ? "Consulta los apartados del sistema de gestión para la revisión anual." :
-            view === "history" ? "Informes de este navegador y actas históricas del período." : "Documentación complementaria del período seleccionado."}</p></div>
+            view === "history" ? "Informes de este navegador y actas históricas del período." : view === "acuerdos" ? "Decisiones, compromisos y seguimiento del período." : "Documentación complementaria del período seleccionado."}</p></div>
         <label className={styles.year}><CalendarDays size={16} />Período
           <select value={period} onChange={event => { if (allowExit()) setPeriod(Number(event.target.value)); }}>{years.map(year => <option key={year}>{year}</option>)}</select>
         </label>
@@ -180,10 +188,11 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
         <div className={styles.groups}>{managementReviewGroups.map(group => <section key={group.group} className={styles.group}>
           <h3>{group.group}</h3><div className={styles.cards}>{group.sections.map(section => {
             const allowed = canAccessModule(session, section.module) && (section.id !== "manual" || manualAllowed);
-            const status = section.availability;
+            const outputs = section.id === "outputs";
+            const status = outputs && !agreementYears ? (outputsFailed ? "Información no disponible" : "Comprobando disponibilidad") : section.availability;
             const target = section.view;
-            const local = target === "history" || target === "attachments";
-            const available = allowed && (local || (status === "Disponible" && !!onOpenSection));
+            const local = target === "history" || target === "attachments" || target === "acuerdos";
+            const available = allowed && (!outputs || !!agreementYears) && (local || (status === "Disponible" && !!onOpenSection));
             const body = <><span className={styles.icon}><section.icon size={19} /></span><span className={styles.copy}>
               <strong>{section.title}</strong><span>{section.description}</span><small>{allowed ? status : "Sin acceso"}</small>
             </span>{available && <ChevronRight size={16} />}</>;
@@ -191,11 +200,13 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
               <div key={section.id} className={styles.card}>{body}</div>;
           })}</div>
         </section>)}</div>
+        {outputsFailed && <button className="button button-secondary" onClick={()=>setRetryOutputs(n=>n+1)}>Reintentar consulta de salidas</button>}
         <footer className={styles.footer}><button type="button" disabled className="button button-secondary"><Sparkles size={16} />Generar Revisión por la Dirección</button><span>Previsto para RE-05</span></footer>
       </> : <>
-        {canReturnFromReview(session, true, "management-review") ? <ReviewReturnButton onReturn={() => { if (allowExit()) setView("portal"); }} /> : <button className="button button-secondary" type="button" onClick={() => setView("portal")}><ArrowLeft size={16} />Alcance de Dirección</button>}
+        {canReturnFromReview(session, true, "management-review") ? <ReviewReturnButton onReturn={() => { if (allowExit()) setView("portal"); }} /> : <button className="button button-secondary" type="button" onClick={() => {if(allowExit())setView("portal");}}><ArrowLeft size={16} />Alcance de Dirección</button>}
+        {view === "history" && legacyPending && isAdministrator && <p>Hay informes locales sin identidad comprobada pendientes de conciliación.</p>}
         {view === "history" && !recordsError && (recordsReady ? <ManagementReviewIndex records={records.filter(item => item.period.year === period)} onOpen={setSelectedId} /> : <progress aria-label="Cargando informes" />)}
-        {view === "history" ? <ManagementReviewMinutes key={period} session={session} period={period} onYear={setPeriod} catalog={catalog} /> : <ReviewDocuments key={period} session={session} period={period} onYear={setPeriod} catalog={catalog} references={onOpenSection && canAccessModule(session, "documents") ? managementReviewGroups[0].sections.filter(s => s.id === "policy" || (s.id === "manual" && manualAllowed)).map(s => ({name:s.title, open:()=>onOpenSection(s,period)})) : []} />}
+        {view === "acuerdos" ? <ReviewOutputs key={period} year={period} onYearsChanged={year=>{setAgreementYears(old=>[...new Set([...(old??[]),year])]);setPeriod(year);}}/> : view === "history" ? <ManagementReviewMinutes key={period} session={session} period={period} onYear={setPeriod} catalog={catalog} /> : <ReviewDocuments key={period} session={session} period={period} onYear={setPeriod} catalog={catalog} references={onOpenSection && canAccessModule(session, "documents") ? managementReviewGroups[0].sections.filter(s => s.id === "policy" || (s.id === "manual" && manualAllowed)).map(s => ({name:s.title, open:()=>onOpenSection(s,period)})) : []} />}
       </>}
     </div>;
   }
@@ -346,7 +357,7 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
                 <table>
                   <thead><tr><th>Decisión</th><th>Responsable</th><th>Fecha compromiso</th><th>Prioridad</th></tr></thead>
                   <tbody>
-                    {draft?.decisions.map((decision) => (
+                    {draft?.decisions.map((decision) => decision.officialDecisionId ? <tr key={decision.id}><td colSpan={4}>Acuerdo oficial · {decision.officialDecisionId}</td></tr> : (
                       <tr key={decision.id}>
                         <td><code>{decision.id}</code>{editing ? <textarea value={decision.description} onChange={(event) => updateDecision(decision.id, "description", event.target.value)} rows={3} /> : <strong>{decision.description}</strong>}</td>
                         <td>{editing ? <input value={decision.owner} onChange={(event) => updateDecision(decision.id, "owner", event.target.value)} /> : decision.owner}</td>
