@@ -1,6 +1,8 @@
 import { getDocumentPermissions, type ControlledDocument } from "./document-control-data";
 import { isAdministrator, type ActiveSession } from "./session-data";
 
+// Controlled document assigned to the quality policy image on the institutional dashboard.
+export const qualityPolicyDocumentId = "217affe6-5187-4d98-a588-d1e17d2347a8";
 export const institutionalImageTitles = ["Política de Calidad", "Política Ambiental", "Política de Seguridad e Higiene", "Objetivos de Calidad"] as const;
 const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\.[^.]+$/, "").trim().toLocaleLowerCase("es");
 export function findInstitutionalImages(documents: ControlledDocument[], session: ActiveSession, institutionalRead = false) {

@@ -1,6 +1,6 @@
 "use client";
 import { useContinuityState, useNavigationScroll } from "@/components/workspace-continuity";
-import { continuityIdentity, sessionAccessKey, readContinuity, writeContinuity, confirmLeaving, traceContinuity } from "@/lib/workspace-continuity";
+import { continuityIdentity, sessionAccessKey, readContinuity, writeContinuity, confirmLeaving, hasUnsavedChanges, listenForBackgroundRefresh, traceContinuity } from "@/lib/workspace-continuity";
 
 import {
   LoaderCircle,
@@ -31,8 +31,12 @@ import {
 } from "lucide-react";
 import Image from "next/image";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import { verifyReviewNavigation } from "@/lib/verify-review-navigation";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
+import { canReturnFromReview, ReviewReturnButton } from "./modules/review-return-button";
+import { managementReviewGroups, type ReviewSection, type ReviewVisit } from "@/lib/management-review-sections";
 import { claimsRequest, type ClaimsCatalog, type CustomerClaim } from "@/lib/customer-claims";
 import { clearHomeImages } from "@/components/modules/home-institutional-images";
 import { createDocumentCatalogCache, DocumentsModule } from "@/components/modules/documents-module";
@@ -193,6 +197,12 @@ export function IntegraQWorkspace({
   onSignOut: () => void;
   session: ActiveSession;
 }) {
+  const router = useRouter();
+  const navigationSequence = useRef(0);
+  useEffect(() => () => { navigationSequence.current++; }, []);
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewNotice, setReviewNotice] = useState("");
+  const editedForm = useRef<Element | null>(null);
   const serializedSession = JSON.stringify(incomingSession);
   const session = useMemo(() => JSON.parse(serializedSession) as ActiveSession, [serializedSession]);
   useEffect(() => () => clearHomeImages(session), [session]);
@@ -220,6 +230,26 @@ export function IntegraQWorkspace({
   );
   const activeModule=resolveAuthorizedModule(session,isWorkspaceModuleId(storedActiveModule)?storedActiveModule:null);
   const [navigationTarget, setNavigationTarget] = useContinuityState<{ module: WorkspaceModuleId; id: string } | null>("navigation:target", null);
+  const [reviewVisit, setReviewVisit] = useContinuityState<ReviewVisit | null>("navigation:review", null);
+  const originSection = managementReviewGroups.flatMap(group => group.sections).find(section => section.id === reviewVisit?.sectionId);
+  const visit = reviewVisit && originSection?.availability === "Disponible" && originSection.module !== "management-review"
+    && reviewVisit.destination === activeModule && Number.isInteger(reviewVisit.year)
+    && !externalScope && canAccessModule(session, "management-review") && canAccessModule(session, originSection.module)
+    ? reviewVisit : null;
+  useEffect(() => {
+    if (!visit && activeModule !== "management-review") return;
+    let active = true;
+    const stop = listenForBackgroundRefresh("management-review", async () => {
+      const allowed = await verifyReviewNavigation(activeModule, sessionKey);
+      if (active && !allowed) {
+        navigationSequence.current++;
+        setReviewVisit(null);
+        setReviewBusy(false);
+        router.refresh();
+      }
+    }, 0);
+    return () => { active = false; stop(); };
+  }, [activeModule, visit, sessionKey, setReviewVisit, router]);
   useNavigationScroll(activeModule);
   useEffect(()=>{
     if(!claimSeedId||activeModule!=="corrective-actions"||claimSeed?.id===claimSeedId)return;
@@ -302,6 +332,8 @@ export function IntegraQWorkspace({
         session,
         requestedModule,
       );
+      const savedVisit = readContinuity<ReviewVisit>(continuityIdentity(session),sessionAccessKey(session),"navigation:review");
+      if (savedVisit && savedVisit.destination !== authorizedModule) setReviewVisit(null);
       setActiveModule(authorizedModule);
       if (hash !== authorizedModule) {
         window.history.replaceState(null, "", `#${authorizedModule}`);
@@ -312,7 +344,7 @@ export function IntegraQWorkspace({
     const onHashChange=()=>{if(!confirmLeaving()){const saved=readContinuity<string>(continuityIdentity(session),sessionAccessKey(session),"navigation:module");window.history.replaceState(null,"",`#${saved??getDefaultModuleForSession(session)}`);return;}syncModuleFromHash();};
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
-  }, [session,setActiveModule]);
+  }, [session,setActiveModule,setReviewVisit]);
 
   useEffect(() => {
     const hydrationTask = window.setTimeout(() => {
@@ -544,11 +576,46 @@ export function IntegraQWorkspace({
   const productionHome = useHomeProcessData(session, undefined, activeModule === "home" || notificationsOpen);
   const homeDashboard = localHomeDashboard ?? productionHome.dashboard;
 
-  const changeModule = (module: WorkspaceModuleId, targetId?: string) => {
-    if(!confirmLeaving())return;
+  const changeModule = async (module: WorkspaceModuleId, targetId?: string, origin?: ReviewSection | "menu", year?: number, beforeOpen?: () => void) => {
+    if (visit && !hasUnsavedChanges() && editedForm.current?.isConnected
+      && !window.confirm("Hay cambios sin guardar. ¿Deseas salir de esta vista?")) return;
+    if (!confirmLeaving()) return;
+    const sequence = ++navigationSequence.current;
+    const hash = window.location.hash;
+    setReviewNotice("");
+    if (origin !== "menu" && (visit || origin)) {
+      setReviewBusy(true);
+      try {
+        const allowed = await verifyReviewNavigation(module, sessionKey);
+        if (sequence !== navigationSequence.current || window.location.hash !== hash) return;
+        if (!allowed) {
+          setReviewVisit(null);
+          setReviewNotice("El acceso cambió. Actualiza la sesión para continuar.");
+          router.refresh();
+          return;
+        }
+      } catch {
+        if (sequence === navigationSequence.current) setReviewNotice("No se pudo verificar el acceso. Vuelve a intentar.");
+        return;
+      } finally {
+        if (sequence === navigationSequence.current) setReviewBusy(false);
+      }
+    } else setReviewBusy(false);
+    editedForm.current = null;
+    beforeOpen?.();
     writeContinuity(continuityIdentity(session),sessionKey,`scroll:${activeModule}`,Math.max(0,window.scrollY));
     traceContinuity("module-navigation",module);
     const authorizedModule = resolveAuthorizedModule(session, module);
+    if (origin && origin !== "menu") {
+      if (activeModule !== "management-review" || externalScope || !canAccessModule(session, "management-review")
+        || authorizedModule !== origin.module || module !== origin.module || origin.availability !== "Disponible" || !year) return;
+      setReviewVisit({ sectionId: origin.id, destination: module, year });
+      if (origin.id === "customers") writeContinuity(continuityIdentity(session), sessionKey, "review:customers-tab", "cases");
+    } else if (origin === "menu" || module === "management-review" || authorizedModule !== module || !visit) {
+      setReviewVisit(null);
+    } else {
+      setReviewVisit({ ...visit, destination: module });
+    }
     if (authorizedModule !== "corrective-actions") {setClaimSeed(null);setClaimSeedId("");}
     setActiveModule(authorizedModule);
     setNavigationTarget(
@@ -614,7 +681,7 @@ export function IntegraQWorkspace({
                   const meta = workspaceModuleMeta[item.id];
                   const isActive = item.id === activeModule;
                   return (
-                    <button key={item.id} type="button" className={`nav-item ${isActive ? "nav-item-active" : ""}`} onClick={() => changeModule(item.id)}>
+                    <button key={item.id} type="button" className={`nav-item ${isActive ? "nav-item-active" : ""}`} onClick={() => changeModule(item.id, undefined, "menu")}>
                       <Icon size={17} strokeWidth={1.8} />
                       <span>{meta.label}</span>
                       {meta.status !== "Disponible" ? <span className={`nav-status nav-status-${meta.status.toLocaleLowerCase("es")}`} title={meta.status} /> : null}
@@ -645,7 +712,7 @@ export function IntegraQWorkspace({
           </div>
           <h1 className="topbar-page-title">{activeMeta.label}</h1>
           <div className="topbar-actions">
-            {!externalSession ? <button className="icon-button" type="button" title="Actividad" onClick={() => changeModule("home")}><Activity size={19} /></button> : null}
+            {!externalSession ? <button className="icon-button" type="button" title="Actividad" onClick={() => changeModule("home", undefined, "menu")}><Activity size={19} /></button> : null}
             {!externalSession ? <div className="notification-wrap">
               <button className="icon-button notification-button" type="button" title="Notificaciones" aria-expanded={notificationsOpen} onClick={() => setNotificationsOpen((open) => !open)}>
                 <Bell size={19} />{homeDashboard.alerts.length ? <span aria-label={`${homeDashboard.alerts.length} notificaciones`}>{homeDashboard.alerts.length}</span> : null}
@@ -654,7 +721,7 @@ export function IntegraQWorkspace({
                 <div className="notification-popover">
                   <div className="popover-heading"><strong>Notificaciones</strong><small>{homeDashboard.alerts.length} pendientes</small></div>
                   {homeDashboard.alerts.slice(0, 5).map((alert) => (
-                    <button key={alert.id} type="button" onClick={() => changeModule(alert.module, alert.targetId)}><AlertTriangle size={16} /><span><strong>{alert.title}</strong><small>{alert.alertType} · {alert.moduleLabel}</small></span></button>
+                    <button key={alert.id} type="button" onClick={() => changeModule(alert.module, alert.targetId, "menu")}><AlertTriangle size={16} /><span><strong>{alert.title}</strong><small>{alert.alertType} · {alert.moduleLabel}</small></span></button>
                   ))}
                   {homeDashboard.alerts.length === 0 ? <div className="notification-empty">Sin alertas pendientes</div> : null}
                 </div>
@@ -663,7 +730,15 @@ export function IntegraQWorkspace({
           </div>
         </header>
 
-        <main className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
+        <main key={visit?.sectionId ?? "workspace"} onChangeCapture={event => {
+          if (visit && event.target instanceof HTMLElement) {
+            const form = event.target.closest("form, [role='dialog']");
+            if (form) editedForm.current = form;
+          }
+        }} className={`workspace ${activeModule === "home" ? "workspace-home" : ""}`}>
+          {reviewBusy && <progress aria-label="Abriendo apartado" />}
+          {reviewNotice && <p role="alert">{reviewNotice}</p>}
+          {canReturnFromReview(session, Boolean(visit), activeModule) && <ReviewReturnButton onReturn={() => changeModule("management-review")} />}
           {activeModule === "home" ? <HomeModule baseRetry={productionHome.retry} baseFailed={productionHome.failed} baseDashboard={productionHome.dashboard} loading={demoMode && !storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
@@ -676,19 +751,19 @@ export function IntegraQWorkspace({
             setControlledDocuments(current => current.map(document => document.id === updated.id ? updated : document));
           }} documents={controlledDocuments} session={session} onManageDocument={(id) => changeModule("documents", id)} /> : null}
           {activeModule === "data-traceability" ? <ActivityLogModule /> : null}
-          {activeModule === "documents" ? <DocumentsModule cache={catalogCache} liveCatalog={!demoMode} controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={sessionKey + (navigationTarget?.module === "documents" ? navigationTarget.id : "index")} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
+          {activeModule === "documents" ? <DocumentsModule reviewDocument={visit?.sectionId === "policy" || visit?.sectionId === "manual" ? visit.sectionId : undefined} cache={catalogCache} liveCatalog={!demoMode} controlledDocuments={controlledDocuments} focusId={navigationTarget?.module === "documents" ? navigationTarget.id : undefined} forms={forms} key={sessionKey + (navigationTarget?.module === "documents" ? navigationTarget.id : "index")} onControlledDocumentsChange={setControlledDocuments} session={session} /> : null}
           {activeModule === "forms" ? <FormsModule forms={forms} onFormsChange={changeForms} session={session} /> : null}
-          {activeModule === "indicators" ? <IndicatorsModule captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
-          {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{riskLoadError || <LoaderCircle className="spin" size={16} aria-label="Cargando riesgos" />}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
-          {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onDeleteRisk={async (id, reason, kind) => { const result = await softDeleteStoredRisk(id, reason, kind); const normalized = normalizeRiskWorkspace(result.state); loadedRiskSnapshot.current = JSON.stringify(normalized); setRiskWorkspace(normalized); return result.auditLogged; }} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
-          {activeModule === "audits" ? <AuditsModule occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
+          {activeModule === "indicators" ? <IndicatorsModule initialYear={visit?.year} captureDaysAfterClose={demoMode ? demoIndicatorCaptureDays : indicatorRuntime.settings.captureDaysAfterClose} definitions={indicatorDefinitions} error={demoMode ? "" : indicatorRuntime.error} focusId={navigationTarget?.module === "indicators" ? navigationTarget.id : undefined} key={`indicators-${navigationTarget?.module === "indicators" ? navigationTarget.id : "index"}`} loading={!demoMode && indicatorRuntime.loading} onDefinitionDelete={demoMode ? async (indicatorId) => { setDemoIndicatorDefinitions((definitions) => definitions.filter((indicator) => indicator.id !== indicatorId)); setDemoIndicatorResults((results) => { const next = { ...results }; delete next[indicatorId]; return next; }); } : indicatorRuntime.disableDefinition} onDefinitionSave={demoMode ? async (indicator) => { setDemoIndicatorDefinitions((definitions) => definitions.some((item) => item.id === indicator.id) ? definitions.map((item) => item.id === indicator.id ? indicator : item) : [...definitions, indicator]); } : indicatorRuntime.saveDefinition} onRefresh={demoMode ? async () => undefined : indicatorRuntime.refresh} onResultSave={demoMode ? async (input) => { setDemoIndicatorResults((results) => ({ ...results, [input.indicatorId]: { ...(results[input.indicatorId] ?? {}), [String(input.year)]: { ...(results[input.indicatorId]?.[String(input.year)] ?? {}), [input.quarter]: { value: input.value, comments: input.comments, evidenceFileId: input.evidenceFileId, adminOverrideReason: input.adminOverrideReason, submittedAt: new Date().toISOString(), submittedBy: session.name } } } })); } : indicatorRuntime.saveResult} onSettingsSave={demoMode ? async (days) => setDemoIndicatorCaptureDays(days) : async (days) => indicatorRuntime.saveSettings({ captureDaysAfterClose: days, timezone: "America/Mexico_City" })} results={indicatorResults} saving={!demoMode && indicatorRuntime.saving} session={indicatorSession} /> : null}
+          {activeModule === "risks" && !demoMode && !riskServerReady ? <section role={riskLoadError ? "alert" : "status"}><p>{(visit && riskLoadError ? "No fue posible consultar la matriz de riesgos." : riskLoadError) || <LoaderCircle className="spin" size={16} aria-label="Cargando riesgos" />}</p>{riskLoadError ? <button type="button" onClick={() => { setRiskLoadError(""); setRiskRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
+          {activeModule === "risks" && (demoMode || riskServerReady) ? <RisksOpportunitiesModule initialTab={visit?.sectionId === "risks" ? "swot" : undefined} indicatorResults={indicatorResults} indicators={indicatorDefinitions} onActivate={async () => { const result = await startRiskAnalysis(); setRiskWorkspace(result.state); setRiskServerReady(true); return result; }} onChange={setRiskWorkspace} onDeleteRisk={async (id, reason, kind) => { const result = await softDeleteStoredRisk(id, reason, kind); const normalized = normalizeRiskWorkspace(result.state); loadedRiskSnapshot.current = JSON.stringify(normalized); setRiskWorkspace(normalized); return result.auditLogged; }} onNavigateToIndicators={(indicatorId) => changeModule("indicators", indicatorId)} serverConnected={riskServerReady} session={session} state={riskWorkspace} /> : null}
+          {activeModule === "audits" ? <AuditsModule initialYear={visit?.year} occurrences={auditOccurrences} onOccurrencesChange={setAuditOccurrences} session={session} /> : null}
           {activeModule === "corrective-actions" && claimSeedId && claimSeed?.id!==claimSeedId ? <section role={claimSeedError?"alert":"status"}><p>{claimSeedError||"Verificando el reclamo vinculado al borrador…"}</p>{claimSeedError?<><button type="button" onClick={()=>setClaimSeedRetry(value=>value+1)}>Reintentar</button><button type="button" onClick={()=>changeModule("customers")}>Volver a Clientes</button></>:null}</section>:null}
           {activeModule === "corrective-actions" && !demoMode && actionLoadedSession !== sessionKey ? <section role={actionLoadError ? "alert" : "status"}><p>{actionLoadError || <LoaderCircle className="spin" size={16} aria-label="Cargando acciones correctivas" />}</p>{actionLoadError ? <button type="button" onClick={() => { setActionLoadError(""); setActionRetry(value => value + 1); }}>Reintentar</button> : null}</section> : null}
           {activeModule === "corrective-actions" && (!claimSeedId||claimSeed?.id===claimSeedId) && (demoMode || actionLoadedSession === sessionKey) ? <CorrectiveActionsModule actions={actions} claimSeed={claimSeed??undefined} onClaimSeedClear={()=>{setClaimSeed(null);setClaimSeedId("");}} onNavigateCustomers={()=>changeModule("customers")} focusId={navigationTarget?.module === "corrective-actions" ? navigationTarget.id : undefined} key={`corrective-${claimSeed?.id??(navigationTarget?.module === "corrective-actions" ? navigationTarget.id : "index")}`} onActionsChange={setActions} session={session} /> : null}
           {activeModule === "calibrations" ? <CalibrationsModule assets={assets} focusId={navigationTarget?.module === "calibrations" ? navigationTarget.id : undefined} key={`calibrations-${navigationTarget?.module === "calibrations" ? navigationTarget.id : "index"}`} onAssetsChange={setAssets} session={session} /> : null}
-          {activeModule === "customers" ? <CustomersModule onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>{writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimDraftId(claim.selectedDraftId ?? "");setClaimSeedId(claim.id);setClaimSeed(claim);changeModule("corrective-actions");}} onOpenA3={id=>{for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);changeModule("corrective-actions",id);}} /> : null}
-          {activeModule === "suppliers" ? <SuppliersModule session={session} /> : null}
-          {activeModule === "management-review" ? <ManagementReviewModule key={sessionKey} sourcesChanged={reviewSourcesChanged} onRecordChange={saveManagementReview} records={managementReviews} session={session} recordsReady={reviewsReady} recordsError={reviewsError} onRetryRecords={() => setReviewRetry(value => value + 1)} /> : null}
+          {activeModule === "customers" ? <CustomersModule fromReview={!!visit} onOpenDocuments={id => changeModule("customer-portal",id)} key={`customers-${session.authUserId??session.userId}`} actions={actions} demoMode={demoMode} session={session} onCreateA3={claim=>void changeModule("corrective-actions", undefined, undefined, undefined, () => {writeContinuity(continuityIdentity(session),sessionKey,"root2cause:view","a3");setClaimDraftId(claim.selectedDraftId ?? "");setClaimSeedId(claim.id);setClaimSeed(claim);})} onOpenA3={id=>void changeModule("corrective-actions", id, undefined, undefined, () => {for(const [key,value] of Object.entries({view:"lists",selected:id,scope:"customer",registry:"report",query:"",status:"all"}))writeContinuity(continuityIdentity(session),sessionKey,`root2cause:${key}`,value);setClaimSeedId("");setClaimSeed(null);})} /> : null}
+          {activeModule === "suppliers" ? <SuppliersModule initialYear={visit?.year} session={session} /> : null}
+          {activeModule === "management-review" ? <ManagementReviewModule onOpenSection={(section, year) => changeModule(section.module, undefined, section, year)} key={sessionKey} sourcesChanged={reviewSourcesChanged} onRecordChange={saveManagementReview} records={managementReviews} session={session} recordsReady={reviewsReady} recordsError={reviewsError} onRetryRecords={() => setReviewRetry(value => value + 1)} /> : null}
           {activeModule === "continuous-improvement" ? <ContinuousImprovementModule projects={improvementProjects} onProjectsChange={setImprovementProjects} session={session} /> : null}
           {activeModule === "customer-portal" ? <StakeholderPortalModule initialCustomerId={navigationTarget?.module === "customer-portal" ? navigationTarget.id : undefined} kind="customer" actions={actions} session={session} /> : null}
           {activeModule === "supplier-portal" ? <StakeholderPortalModule kind="supplier" actions={actions} session={session} /> : null}

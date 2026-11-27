@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { canPerformModuleAction } from "@/lib/module-permissions";
 import { aggregateProcessHome, text, type HomeRecords, type HomeRow } from "@/lib/home-process-data";
 import { emptyHomeDashboardFilters } from "@/lib/home-dashboard";
-import { findInstitutionalImages } from "@/lib/home-institutional-images";
+import { qualityPolicyDocumentId, findInstitutionalImages } from "@/lib/home-institutional-images";
 import type { ControlledDocument } from "@/lib/document-control-data";
 
 export async function GET(request: Request) {
@@ -69,7 +69,7 @@ export async function GET(request: Request) {
       const scopedProcesses = institutionalProcesses.map(p => text(p, "id"));
       // Stable document identities. Their current revision, lifecycle and process scope are resolved on every read.
       const documentIds = [
-        "217affe6-5187-4d98-a588-d1e17d2347a8", // Política de Calidad
+        qualityPolicyDocumentId,
         "bb1c31b6-223f-4bcd-b123-050b542c3d86", // Política Ambiental
         "0290f0c0-10b3-49f7-b88a-1e544f654961", // Seguridad e Higiene
         "10146215-c8a7-4680-91d6-a920b0c5ce6f", // Objetivos de Calidad

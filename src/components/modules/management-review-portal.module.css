@@ -1,4 +1,5 @@
 .portal { display: grid; gap: 18px; min-width: 0; color: var(--ink); }
+.returnButton { justify-self: start; max-width: 100%; width: fit-content; white-space: normal; margin-block-end: 8px; }
 .portal > button { justify-self: start; }
 .header, .group, .footer { border: 1px solid var(--line); border-radius: 12px; background: var(--surface, white); }
 .header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 24px; border-inline-start: 4px solid var(--green, #16806d); }

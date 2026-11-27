@@ -29,8 +29,8 @@ import { CustomerCertificationsPanel } from "@/components/modules/customer-certi
 
 type CustomerView = "customers" | "cases" | "certifications";
 
-export function CustomersModule({ demoMode, session, onCreateA3, onOpenA3, onOpenDocuments }: { actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void; onOpenDocuments: (id:string) => void }) {
-  const [view, setView] = useContinuityState<CustomerView>("customers:tab","customers");
+export function CustomersModule({ fromReview = false, demoMode, session, onCreateA3, onOpenA3, onOpenDocuments }: { fromReview?: boolean; actions: CorrectiveAction[]; demoMode: boolean; session: ActiveSession; onCreateA3: (claim: CustomerClaim) => void; onOpenA3: (id: string) => void; onOpenDocuments: (id:string) => void }) {
+  const [view, setView] = useContinuityState<CustomerView>(fromReview ? "review:customers-tab" : "customers:tab", fromReview ? "cases" : "customers");
   const [demoCustomers, setDemoCustomers] = useState(customerQualityCatalog);
   const [query, setQuery] = useContinuityState("customers:query","");
   const [selectedId, setSelectedId] = useContinuityState("customers:selected","");

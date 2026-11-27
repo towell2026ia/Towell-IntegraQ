@@ -55,14 +55,14 @@ import { createSupplierAssessment, getSupplierAssessmentFileUrl, supplierAssessm
 
 type SupplierView = "directory" | "audits" | "dashboard" | "rncp" | "results";
 
-export function SuppliersModule({ session }: { session: ActiveSession }) {
+export function SuppliersModule({ session, initialYear }: { session: ActiveSession; initialYear?: number }) {
   // The module owns its in-memory data for exactly one session and permission scope.
-  return <SupplierWorkspace key={JSON.stringify(session)} session={session} />;
+  return <SupplierWorkspace key={JSON.stringify(session)} session={session} initialYear={initialYear} />;
 }
-function SupplierWorkspace({ session }: { session: ActiveSession }) {
-  const [view, setView] = useState<SupplierView>(() => typeof window !== "undefined" && rncpIdFromSearch(window.location.search) ? "dashboard" : "directory");
+function SupplierWorkspace({ session, initialYear }: { session: ActiveSession; initialYear?: number }) {
+  const [view, setView] = useState<SupplierView>(() => !initialYear && typeof window !== "undefined" && rncpIdFromSearch(window.location.search) ? "dashboard" : "directory");
   const [calendarYear] = useState(() => String(new Date().getFullYear()));
-  const [year, setYear] = useState(calendarYear);
+  const [year, setYear] = useState(initialYear ? String(initialYear) : calendarYear);
   const [query, setQuery] = useState("");
   const [matrixSupplierId, setMatrixSupplierId] = useState("");
   const [selectedId, setSelectedId] = useState("");
@@ -85,7 +85,7 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
   const [matrixCache] = useState(() => new MatrixListCache());
   const matrixEntry = useSyncExternalStore(matrixCache.subscribe, matrixCache.getSnapshot, () => null);
   const annualRncp = useMemo(() => !year ? activeRncp : activeRncp.filter(r => r.reportDate?.slice(0, 4) === year), [activeRncp, year]);
-  const years = useMemo(() => [...new Set([calendarYear, ...activeRncp.flatMap(r => r.reportDate ? [r.reportDate.slice(0, 4)] : []), ...(matrixEntry?.base.options.years ?? [])])].sort().reverse(), [calendarYear, activeRncp, matrixEntry]);
+  const years = useMemo(() => [...new Set([calendarYear, ...(initialYear ? [String(initialYear)] : []), ...activeRncp.flatMap(r => r.reportDate ? [r.reportDate.slice(0, 4)] : []), ...(matrixEntry?.base.options.years ?? [])])].sort().reverse(), [calendarYear, initialYear, activeRncp, matrixEntry]);
   const bySupplier = useMemo(() => {
     const groups = new Map<string, RncpReport[]>();
     for (const report of annualRncp) {
@@ -246,7 +246,7 @@ function SupplierWorkspace({ session }: { session: ActiveSession }) {
 
       {view === "dashboard" ? demo
         ? <RncpDashboard />
-        : <RncpMatrixDashboard year={year} cache={matrixCache} key={JSON.stringify([session.authUserId, session.organizationId, matrixSupplierId])} initialReportId={typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
+        : <RncpMatrixDashboard year={year} cache={matrixCache} key={JSON.stringify([session.authUserId, session.organizationId, matrixSupplierId])} initialReportId={initialYear || typeof window === "undefined" ? "" : rncpIdFromSearch(window.location.search)} initialSupplierId={matrixSupplierId} session={session} onChanged={rncpDirectory.refresh} onEdit={(id) => { setEditingRncpId(id); setView("rncp"); }} /> : null}
       {view === "rncp" && editingRncpId && !editingReport ? <p role="status">El expediente seleccionado aún no está disponible. <button className="button button-secondary" type="button" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></p> : view === "rncp" && (demo || companyDirectory.hasLoaded) ? <RncpForm flowReady={rncpDirectory.flowReady} administrator={isAdministrator(session)} companies={companyDirectory.companies} demo={demo} key={editingRncpId ?? "new"} onSaved={async (submitted) => { matrixCache.clear(); await rncpDirectory.refresh(); if (submitted) setView("dashboard"); }} onReopen={(id)=>setEditingRncpId(id)} report={editingReport} /> : null}
       {view === "results" ? demo
         ? <AuditResults administrator={isAdministrator(session)} checklistName={checklistName} onChecklist={(name) => setChecklistName(name)} />

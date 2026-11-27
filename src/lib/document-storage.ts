@@ -102,9 +102,25 @@ export async function inspectControlledDocumentCode(code: string, processId: str
   return data as DocumentCodeMatch | null;
 }
 
-export async function loadStoredControlledDocument(documentId: string) {
-  const { data, error } = await createClient().from("controlled_documents")
-    .select(detailColumns).eq("id", documentId).maybeSingle();
+// The SGC master identifies its manual by process, controlled code and document type.
+export async function currentReviewManualId(signal?: AbortSignal): Promise<string | null> {
+  let query = createClient().from("controlled_documents").select(
+    "id,lifecycle:document_lifecycle(lifecycle_status,is_deleted),versions:controlled_document_versions(status)",
+  ).eq("process_id", "P-35").eq("code", "M-SGC-01").eq("document_type_id", "manual")
+    .eq("active", true).is("deleted_at", null).eq("versions.status", "current").limit(2);
+  if (signal) query = query.abortSignal(signal);
+  const { data, error } = await query;
+  if (error) throw new Error("No se pudo comprobar la vigencia del manual.");
+  if (data?.length !== 1) return null;
+  const doc = data[0];
+  const lifecycle = firstRelation(doc.lifecycle);
+  return doc.versions.length === 1 && !lifecycle?.is_deleted && (!lifecycle || lifecycle.lifecycle_status === "active") ? doc.id : null;
+}
+
+export async function loadStoredControlledDocument(documentId: string, activeOnly = false) {
+  let query = createClient().from("controlled_documents").select(detailColumns).eq("id", documentId);
+  if (activeOnly) query = query.eq("active", true).is("deleted_at", null).eq("versions.status", "current");
+  const { data, error } = await query.maybeSingle();
   if (error) throw new Error(`No se pudo consultar el expediente (${error.code}): ${errorMessage(error)}`);
   if (!data) throw new Error("El expediente no está disponible para esta sesión.");
   return mapStoredDocument(data as unknown as StoredDocumentRow);

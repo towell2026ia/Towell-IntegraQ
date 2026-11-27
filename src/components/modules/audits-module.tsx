@@ -66,10 +66,12 @@ const auditUsers = [
 ];
 
 export function AuditsModule({
+  initialYear,
   occurrences,
   onOccurrencesChange,
   session,
 }: {
+  initialYear?: number;
   occurrences: AuditOccurrence[];
   onOccurrencesChange: (occurrences: AuditOccurrence[]) => void;
   session: ActiveSession;
@@ -78,7 +80,7 @@ export function AuditsModule({
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<AuditStatus | "all">("all");
   const [created, setCreated] = useState<AuditOccurrence | null>(null);
-  const [calendarMonth, setCalendarMonth] = useState<CalendarMonth>(() => initialAuditMonth(occurrences));
+  const [calendarMonth, setCalendarMonth] = useState<CalendarMonth>(() => initialAuditMonth(occurrences, initialYear));
   const [selectedAudit, setSelectedAudit] = useState<AuditOccurrence | null>(null);
   const companyDirectory = useExternalCompanies();
   const customerOptions = isDemoSession(session)
@@ -317,9 +319,10 @@ function AuditCalendarDetail({ audit, onClose }: { audit: AuditOccurrence; onClo
   );
 }
 
-function initialAuditMonth(audits: AuditOccurrence[]): CalendarMonth {
+function initialAuditMonth(audits: AuditOccurrence[], year?: number): CalendarMonth {
   const today = new Date().toISOString().slice(0, 10);
-  const starts = audits.map((audit) => auditScheduleBounds(audit)[0]).filter(Boolean).sort();
+  const starts = audits.map((audit) => auditScheduleBounds(audit)[0]).filter(date => date && (!year || date.slice(0, 4) === String(year))).sort();
+  if (year && !starts.length) return { year, month: year === new Date().getFullYear() ? new Date().getMonth() : 0 };
   const start = starts.find((date) => date >= today.slice(0, 8) + "01") ?? starts.at(-1);
   return start ? calendarMonthFromIso(start) : todayCalendarMonth();
 }

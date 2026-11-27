@@ -7,23 +7,28 @@ import type { ControlledDocumentVersion } from "@/lib/document-control-data";
 import { validateHistoricalMinutes } from "@/lib/historical-minutes";
 import type { ActiveSession } from "@/lib/session-data";
 
+import { markDirty } from "@/lib/workspace-continuity";
+
 const resourceType = "management_review_minutes";
 
-export function useReviewMinutes() {
+const recentMinutes = new WeakMap<ActiveSession, { at: number; files: AttachmentRecord[] }>();
+export function useReviewMinutes(session: ActiveSession) {
   const [files, setFiles] = useState<AttachmentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let active = true;
-    void listModuleAttachments("management-review", resourceType)
-      .then(result => { if (active) { setFiles(result); setLoadError(""); } })
+    const cached = recentMinutes.get(session);
+    const fresh = cached && Date.now() - cached.at < 30_000;
+    const read = fresh ? Promise.resolve(cached.files) : listModuleAttachments("management-review", resourceType);
+    void read.then(result => { if (active) { if (!fresh) recentMinutes.set(session, { at: Date.now(), files: result }); setFiles(result); setLoadError(""); } })
       .catch(() => { if (active) setLoadError("No se pudieron consultar las actas."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [retry]);
+  }, [retry, session]);
 
-  return { files, loading, loadError, reload: () => { setLoading(true); setRetry(value => value + 1); } };
+  return { files, loading, loadError, reload: () => { recentMinutes.delete(session); setLoading(true); setRetry(value => value + 1); } };
 }
 
 export function ManagementReviewMinutes({ session, catalog, period }: {
@@ -32,6 +37,7 @@ export function ManagementReviewMinutes({ session, catalog, period }: {
   period: number;
 }) {
   const { files, loading, loadError, reload } = catalog;
+  useEffect(() => () => markDirty("review:minute", false), []);
   const selectedFiles = files.filter(item => Number(item.resourceKey) === period);
   const [error, setError] = useState("");
   const [year, setYear] = useState(String(new Date().getFullYear() - 1));
@@ -55,6 +61,7 @@ export function ManagementReviewMinutes({ session, catalog, period }: {
       const previous = existing.find(item => item.isCurrent && !item.deletedAt);
       await uploadAttachment({ moduleId: "management-review", resourceType, resourceKey: year }, file, previous,
         { displayName: responsible.trim(), validFrom: date, description: status });
+      markDirty("review:minute", false);
       setFile(null); reload();
     } catch { setError("No fue posible registrar el acta."); }
     finally { setSaving(false); }
@@ -97,7 +104,7 @@ export function ManagementReviewMinutes({ session, catalog, period }: {
 
   return <section className="management-history-panel work-panel" aria-label="Actas históricas adjuntas">
     <header className="management-panel-heading"><div><span className="module-kicker">Archivo original</span><h3>Actas históricas adjuntas</h3></div></header>
-    {isAdministrator ? <details><summary>Adjuntar acta histórica</summary><form className="historical-minutes-form" onSubmit={event => void submit(event)}>
+    {isAdministrator ? <details><summary>Adjuntar acta histórica</summary><form className="historical-minutes-form" onChange={() => markDirty("review:minute", true)} onSubmit={event => void submit(event)}>
       <label>Año<input required type="number" min="1900" max={new Date().getFullYear()} value={year} onChange={event => setYear(event.target.value)} /></label>
       <label>Fecha<input required type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
       <label>Responsable<input required value={responsible} onChange={event => setResponsible(event.target.value)} /></label>

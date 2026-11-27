@@ -24,7 +24,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
+import { qualityPolicyDocumentId } from "@/lib/home-institutional-images";
+import { AuthorizedDocumentPreview, DocumentHistoryModal, DocumentTypeWorkspace } from "@/components/modules/document-type-workspace";
 import { clearHomeImages } from "./home-institutional-images";
 import { FormIntelligenceDashboard } from "@/components/modules/form-intelligence-dashboard";
 import { GeneralInformationModule } from "@/components/modules/general-information-module";
@@ -56,7 +57,7 @@ import {
 import type { ActiveSession } from "@/lib/session-data";
 import { isAdministrator, isExternalUser } from "@/lib/session-data";
 import { documentVersionLabel } from "@/lib/document-replacement";
-import { loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
+import { currentReviewManualId, loadDocumentIndex, loadMasterCurrentIds, loadStoredControlledDocuments, loadStoredControlledDocument, restoreStoredDocument, type DocumentIndexEntry } from "@/lib/document-storage";
 import {
   loadProcessOrganizationSources,
   type ProcessOrganizationSource,
@@ -87,6 +88,7 @@ interface DocumentsModuleProps {
   controlledDocuments: ControlledDocument[];
   forms: AppFormDefinition[];
   focusId?: string;
+  reviewDocument?: "manual" | "policy";
   onControlledDocumentsChange: (documents: ControlledDocument[]) => void;
   session: ActiveSession;
   liveCatalog?: boolean;
@@ -142,6 +144,8 @@ function loadCatalogSelection(signal: AbortSignal, key: string) {
 }
 
 export function DocumentsModule(props: DocumentsModuleProps) {
+  if (props.reviewDocument && canReadControlledCatalog(props.session)) return <FocusedCatalog {...props} focusId={props.reviewDocument} />;
+  if (props.reviewDocument) return <p role="status">Sin acceso al documento vigente.</p>;
   if (props.focusId && props.liveCatalog) return <FocusedCatalog key={props.focusId} {...props} focusId={props.focusId} />;
   return <DocumentCatalog {...props} />;
 }
@@ -149,10 +153,28 @@ export function DocumentsModule(props: DocumentsModuleProps) {
 function FocusedCatalog(props: DocumentsModuleProps & { focusId: string }) {
   const [cache] = useState<CachedRows<ControlledDocument>>(() => new Map());
   const [attempt, setAttempt] = useState(0);
-  const load = useCallback(() => loadStoredControlledDocument(props.focusId), [props.focusId]);
+  const [viewerOpen, setViewerOpen] = useState(true);
+  const load = useCallback(async () => {
+    if (!props.reviewDocument) return loadStoredControlledDocument(props.focusId);
+    const id = props.reviewDocument === "policy" ? qualityPolicyDocumentId : await currentReviewManualId();
+    if (!id) throw new Error("No hay una revisión vigente vinculada.");
+    return loadStoredControlledDocument(id, true);
+  }, [props.focusId, props.reviewDocument]);
   const result = useCatalogRead(cache, props.focusId + ":" + attempt, load);
-  if (result?.error) return <p role="alert">{result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
+  if (result?.error) return <p role="alert">{props.reviewDocument ? "El documento vigente no está disponible en tu alcance." : result.error} <button type="button" onClick={() => setAttempt(value => value + 1)}>Reintentar</button></p>;
   if (!result?.value) return <p role="status">Consultando expediente…</p>;
+  if (props.reviewDocument) {
+    const doc = result.value;
+    const versions = doc.versions.filter(version => version.status === "current");
+    if (!canReadControlledCatalog(props.session) || !getDocumentPermissions(props.session, doc.processId).view
+      || doc.lifecycle?.isDeleted || doc.lifecycle?.status !== "active" || versions.length !== 1 || !versions[0].fileObjectId) {
+      return <p role="status">El documento vigente no está disponible en tu alcance.</p>;
+    }
+    return <section className="work-panel"><h2>{doc.name}</h2><p>{doc.code} · Revisión {versions[0].revision} · Vigente</p>
+      <button className="button button-secondary" type="button" onClick={() => setViewerOpen(true)}>Ver documento vigente</button>
+      {viewerOpen && <AuthorizedDocumentPreview document={{ ...doc, versions }} session={props.session} activeOnly onClose={() => setViewerOpen(false)} />}
+    </section>;
+  }
   return <DocumentCatalog {...props} controlledDocuments={[result.value]} />;
 }
 

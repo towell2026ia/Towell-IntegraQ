@@ -82,6 +82,7 @@ const masterProcesses = processCatalog.filter((process) => process.level === "pr
 const directionKindLabels: Record<DirectionCandidateKind, string> = { pending: "Pendiente", objective: "Objetivo", key_result: "Resultado clave", risk: "Riesgo", opportunity: "Oportunidad", initiative: "Iniciativa", control: "Control", activity: "Actividad" };
 
 interface Props {
+  initialTab?: RiskTab;
   indicators: ConfiguredIndicator[];
   indicatorResults: IndicatorResults;
   onChange: (state: RiskWorkspaceState) => void;
@@ -93,8 +94,8 @@ interface Props {
   state: RiskWorkspaceState;
 }
 
-export function RisksOpportunitiesModule({ indicators, indicatorResults, onActivate, onChange, onDeleteRisk, onNavigateToIndicators, serverConnected, session, state }: Props) {
-  const [tab, setTab] = useState<RiskTab>("summary");
+export function RisksOpportunitiesModule({ initialTab = "summary", indicators, indicatorResults, onActivate, onChange, onDeleteRisk, onNavigateToIndicators, serverConnected, session, state }: Props) {
+  const [tab, setTab] = useState<RiskTab>(initialTab);
   const [processId, setProcessId] = useState(() => accessibleProcesses(session)[0]?.id ?? masterProcesses[0]?.id ?? "P-01");
   const [riskEditorOpen, setRiskEditorOpen] = useState(false);
   const [contributionEditorOpen, setContributionEditorOpen] = useState(false);

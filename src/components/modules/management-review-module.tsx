@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   approveManagementReviewAsOperations,
@@ -30,13 +30,19 @@ import {
   type ManagementReviewRecord,
 } from "@/lib/management-review-data";
 import { ManagementReviewMinutes, useReviewMinutes } from "./management-review-minutes";
+import { hasUnsavedChanges } from "@/lib/workspace-continuity";
+import { getDocumentPermissions } from "@/lib/document-control-data";
+import { currentReviewManualId } from "@/lib/document-storage";
 import { canAccessModule } from "@/lib/access-policy";
-import { managementReviewGroups } from "@/lib/management-review-sections";
+import { useContinuityState } from "@/components/workspace-continuity";
+import { ReviewReturnButton, canReturnFromReview } from "./review-return-button";
+import { managementReviewGroups, type ReviewSection } from "@/lib/management-review-sections";
 import styles from "./management-review-portal.module.css";
 import { isExternalUser, type ActiveSession } from "@/lib/session-data";
 
 interface ManagementReviewModuleProps {
   session: ActiveSession;
+  onOpenSection?: (section: ReviewSection, year: number) => void;
   recordsReady: boolean;
   sourcesChanged?: (record: ManagementReviewRecord) => boolean;
   recordsError?: boolean;
@@ -56,11 +62,21 @@ export function ManagementReviewModule(props: ManagementReviewModuleProps) {
   return <ManagementReviewWorkspace {...props} />;
 }
 
-function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords }: ManagementReviewModuleProps) {
-  const [period, setPeriod] = useState(() => new Date().getFullYear());
+function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesChanged, recordsReady, recordsError, onRetryRecords, onOpenSection }: ManagementReviewModuleProps) {
+  const [period, setPeriod] = useContinuityState("review:period", () => new Date().getFullYear());
   const [view, setView] = useState<"portal" | "history" | "attachments">("portal");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const catalog = useReviewMinutes();
+  const catalog = useReviewMinutes(session);
+  const manualAllowed = getDocumentPermissions(session, "P-35").view;
+  const [manual, setManual] = useState<"checking" | "current" | "missing" | "error">("checking");
+  useEffect(() => {
+    if (!manualAllowed) return;
+    const controller = new AbortController();
+    void currentReviewManualId(controller.signal).then(id => {
+      if (!controller.signal.aborted) setManual(id ? "current" : "missing");
+    }).catch(() => { if (!controller.signal.aborted) setManual("error"); });
+    return () => controller.abort();
+  }, [manualAllowed]);
   const [editing, setEditing] = useState(false);
   const [workingDraft, setWorkingDraft] = useState<ManagementReviewAiDraft | null>(null);
   const [saveError, setSaveError] = useState("");
@@ -150,6 +166,7 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
     });
   };
 
+  const allowExit = () => !(editing || approvalComment.trim() || hasUnsavedChanges()) || window.confirm("Hay cambios sin guardar. ¿Deseas salir de esta vista?");
   if (!record) {
     const currentYear = new Date().getFullYear();
     const years = [...new Set([currentYear, period, ...records.map(item => item.period.year),
@@ -162,7 +179,7 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
           <p>{view === "portal" ? "Consulta los apartados del sistema de gestión para la revisión anual." :
             view === "history" ? "Informes de este navegador y actas históricas del período." : "Archivos históricos de la revisión. Gestión de nuevos adjuntos prevista para RE-03."}</p></div>
         <label className={styles.year}><CalendarDays size={16} />Período
-          <select value={period} onChange={event => setPeriod(Number(event.target.value))}>{years.map(year => <option key={year}>{year}</option>)}</select>
+          <select value={period} onChange={event => { if (allowExit()) setPeriod(Number(event.target.value)); }}>{years.map(year => <option key={year}>{year}</option>)}</select>
         </label>
       </header>
       {recordsError && <p role="alert">No se pudieron leer los informes de este navegador. <button type="button" onClick={onRetryRecords}>Reintentar</button></p>}
@@ -171,19 +188,22 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
       {view === "portal" ? <>
         <div className={styles.groups}>{managementReviewGroups.map(group => <section key={group.group} className={styles.group}>
           <h3>{group.group}</h3><div className={styles.cards}>{group.sections.map(section => {
-            const allowed = canAccessModule(session, section.module);
+            const allowed = canAccessModule(session, section.module) && (section.id !== "manual" || manualAllowed);
+            const status = section.id !== "manual" || manual === "current" ? section.availability :
+              manual === "checking" ? "Comprobando vigencia" : manual === "error" ? "Información no disponible" : "Sin revisión vigente vinculada";
             const target = section.view;
-            const available = allowed && (target === "history" || target === "attachments");
+            const local = target === "history" || target === "attachments";
+            const available = allowed && (local || (status === "Disponible" && !!onOpenSection));
             const body = <><span className={styles.icon}><section.icon size={19} /></span><span className={styles.copy}>
-              <strong>{section.title}</strong><span>{section.description}</span><small>{allowed ? section.availability : "Sin acceso"}</small>
+              <strong>{section.title}</strong><span>{section.description}</span><small>{allowed ? status : "Sin acceso"}</small>
             </span>{available && <ChevronRight size={16} />}</>;
-            return available ? <button key={section.id} type="button" className={styles.card} onClick={() => setView(target)}>{body}</button> :
+            return available ? <button key={section.id} type="button" className={styles.card} onClick={() => local ? setView(target) : onOpenSection?.(section, period)}>{body}</button> :
               <div key={section.id} className={styles.card}>{body}</div>;
           })}</div>
         </section>)}</div>
         <footer className={styles.footer}><button type="button" disabled className="button button-secondary"><Sparkles size={16} />Generar Revisión por la Dirección</button><span>Previsto para RE-05</span></footer>
       </> : <>
-        <button className="button button-secondary" type="button" onClick={() => setView("portal")}><ArrowLeft size={16} />Alcance de Dirección</button>
+        {canReturnFromReview(session, true, "management-review") ? <ReviewReturnButton onReturn={() => { if (allowExit()) setView("portal"); }} /> : <button className="button button-secondary" type="button" onClick={() => setView("portal")}><ArrowLeft size={16} />Alcance de Dirección</button>}
         {view === "history" && !recordsError && (recordsReady ? <ManagementReviewIndex records={records.filter(item => item.period.year === period)} onOpen={setSelectedId} /> : <progress aria-label="Cargando informes" />)}
         <ManagementReviewMinutes key={period} session={session} period={period} catalog={catalog} />
       </>}
@@ -194,6 +214,10 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
 
   return (
     <div className="management-review-module">
+      {canReturnFromReview(session, view === "history", "management-review") && <ReviewReturnButton onReturn={() => {
+        if (!allowExit()) return;
+        setEditing(false); setSelectedId(null); setView("portal"); setApprovalComment(""); setSaveError("");
+      }} />}
       <div className="module-heading management-review-heading print-hidden">
         <div>
           <span className="module-kicker">Gobierno del SGC</span>
@@ -203,7 +227,7 @@ function ManagementReviewWorkspace({ session, records, onRecordChange, sourcesCh
           </p>
         </div>
         <div className="module-heading-actions">
-          <button className="button button-secondary" type="button" onClick={() => { setSelectedId(null); setEditing(false); setSaveError(""); setApprovalComment(""); }}>
+          <button className="button button-secondary" type="button" onClick={() => { if (allowExit()) { setSelectedId(null); setEditing(false); setSaveError(""); setApprovalComment(""); } }}>
             <ArrowLeft size={16} />Historial
           </button>
           <span className={`management-review-status status-${record?.status ?? "not-generated"}`}>

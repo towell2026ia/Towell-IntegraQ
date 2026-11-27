@@ -90,6 +90,7 @@ const windowStateLabels: Record<IndicatorWindowState, string> = {
 };
 
 interface IndicatorsModuleProps {
+  initialYear?: number;
   captureDaysAfterClose: number;
   definitions: ConfiguredIndicator[];
   error: string;
@@ -106,6 +107,7 @@ interface IndicatorsModuleProps {
 }
 
 export function IndicatorsModule({
+  initialYear = 2026,
   captureDaysAfterClose,
   definitions,
   error,
@@ -123,7 +125,7 @@ export function IndicatorsModule({
   const canManageCatalog = canManageIndicatorCatalog(session);
   const focusedIndicator = definitions.find((indicator) => indicator.id === focusId);
   const [view, setView] = useState<IndicatorView>(focusId ? "sheet" : "dashboard");
-  const [year, setYear] = useState(2026);
+  const [year, setYear] = useState(initialYear);
   const [area, setArea] = useState(
     getDefaultIndicatorArea(session, focusedIndicator?.area),
   );
