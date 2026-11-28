@@ -11,7 +11,16 @@ function definition(file, pattern) {
   assert.ok(match,`Missing fixture definition in ${file}: ${pattern}`);
   return match[0];
 }
-sql.push(read("supabase/tests/rncp-matrix-fixture.sql"));
+const fixture = read("supabase/tests/rncp-matrix-fixture.sql");
+// PostgreSQL roles belong to the cluster. The preceding CI suite creates these
+// same roles in its own database on the shared PostgreSQL service.
+sql.push(fixture.replace(/^create role (anon|authenticated|service_role) nologin( bypassrls)?;$/gm,
+  (_, role, bypass = "") => `do $bootstrap$ begin
+    if not exists(select from pg_roles where rolname='${role}') then create role ${role} nologin${bypass}; end if;
+    if not exists(select from pg_roles where rolname='${role}' and not rolcanlogin and not rolsuper and rolbypassrls=${Boolean(bypass)}) then
+      raise exception 'Unexpected test role privileges: ${role}';
+    end if;
+  end $bootstrap$;`));
 sql.push(`alter table supplier_rncp_reports add column organization_id uuid,add column source_kind text, add column notified_at timestamptz;
 alter table auth.users add column raw_app_meta_data jsonb;
 create table areas(id uuid primary key);create table processes(id text primary key);create table positions(id text primary key);create table workspace_modules(id text primary key);
