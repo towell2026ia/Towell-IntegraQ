@@ -6,7 +6,6 @@ import { canPerformModuleAction } from "@/lib/module-permissions";
 import { isAdministrator } from "@/lib/session-data";
 import type { SupplierDashboardFilters, SupplierDashboardMetrics, SupplierDashboardRow, SupplierTimelineEvent } from "@/lib/supplier-dashboard-data";
 import { getAuthenticatedSession } from "@/lib/supabase/auth-session";
-import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 type CompanyRow = { id: string; code: string; name: string; active: boolean };
@@ -27,17 +26,22 @@ export async function GET(request: Request) {
   if (!canPerformModuleAction(session, "suppliers", "view")) return NextResponse.json({ error: "No tienes permiso para consultar proveedores." }, { status: 403 });
   const query = new URL(request.url).searchParams;
   const filters = readFilters(query);
-  const admin = createAdminClient();
-  const assessmentScope = await createClient();
-  const [companiesResult, profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult] = await Promise.all([
-    admin.from("organizations").select("id,code,name,active").eq("kind", "supplier").order("name"),
-    admin.from("supplier_quality_profiles").select("organization_id,category,active"),
-    admin.from("external_company_sites").select("id,company_id,code,name,active").order("name"),
-    admin.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,report_date,material_or_service,finding_type,description,response_due_date,responsible_name,status,submitted_at,closed_at,created_at").is("deleted_at", null).order("report_date", { ascending: false, nullsFirst: false }),
-    admin.from("supplier_rncp_actions").select("id,report_id,description,status,created_at,validated_at").order("created_at", { ascending: false }),
-    admin.from("audits").select("id,code,external_organization_id,external_site_id,scheduled_date,completed_at,status,score").eq("audit_type", "supplier").order("scheduled_date", { ascending: false }),
-    admin.from("supplier_quality_evaluations").select("id,supplier_id,site_id,period_end,effectiveness,quality_level,created_at").order("period_end", { ascending: false }),
-    assessmentScope.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification,audit_event_id,audit_event:supplier_audit_events(*)").order("assessment_date", { ascending: false }),
+  const reader = await createClient();
+  const scope = await reader.rpc("iq_rncp_actor_org",{p_admin:false});
+  if (scope.error || !scope.data || scope.data !== session.organizationId) return NextResponse.json({error:"No se pudo verificar el alcance de proveedores."},{status:scope.error && scope.error.code !== "42501" ? 503 : 403});
+  if (session.specificPermissions?.["rncp.consultar_dashboards"] === false || session.specificPermissions?.["rncp.consultar_rncp"] === false) return NextResponse.json({error:"Consulta de indicadores no autorizada."},{status:403});
+  const companiesResult = await reader.rpc("iq_supplier_dashboard_directory");
+  if (companiesResult.error) return NextResponse.json({error:"No fue posible consultar los proveedores autorizados."},{status:503});
+  const companies = (companiesResult.data ?? []) as CompanyRow[];
+  const companyIds = companies.map(company => company.id);
+  const [profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult] = await Promise.all([
+    reader.from("supplier_quality_profiles").select("organization_id,category,active").in("organization_id",companyIds),
+    reader.from("external_company_sites").select("id,company_id,code,name,active").in("company_id",companyIds).order("name"),
+    reader.from("supplier_rncp_reports").select("id,folio,supplier_id,site_id,report_date,material_or_service,finding_type,description,response_due_date,responsible_name,status,submitted_at,closed_at,created_at").eq("organization_id",scope.data).is("deleted_at", null).order("report_date", { ascending: false, nullsFirst: false }),
+    reader.from("supplier_rncp_actions").select("id,report_id,description,status,created_at,validated_at").order("created_at", { ascending: false }),
+    reader.from("audits").select("id,code,external_organization_id,external_site_id,scheduled_date,completed_at,status,score").eq("audit_type", "supplier").in("external_organization_id",companyIds).order("scheduled_date", { ascending: false }),
+    reader.from("supplier_quality_evaluations").select("id,supplier_id,site_id,period_end,effectiveness,quality_level,created_at").in("supplier_id",companyIds).order("period_end", { ascending: false }),
+    reader.from("supplier_assessments").select("id,supplier_id,site_id,assessment_type,assessment_date,score,classification,audit_event_id,audit_event:supplier_audit_events(*)").in("supplier_id",companyIds).order("assessment_date", { ascending: false }),
   ]);
   const failed = [companiesResult, profilesResult, sitesResult, reportsResult, actionsResult, auditsResult, evaluationsResult, assessmentsResult].find((result) => result.error);
   if (failed?.error) {
@@ -45,7 +49,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "No fue posible consultar el dashboard de proveedores." }, { status: 500 });
   }
 
-  const companies = (companiesResult.data ?? []) as CompanyRow[];
   const profiles = (profilesResult.data ?? []) as ProfileRow[];
   const sites = (sitesResult.data ?? []) as SiteRow[];
   const reports = (reportsResult.data ?? []) as ReportRow[];
@@ -69,7 +72,7 @@ export async function GET(request: Request) {
   const metrics = calculateMetrics(rows, filteredActions, scopedAudits, scopedEvaluations, scopedAssessments, reports);
 
   const historyResult = rowIds.size
-    ? await admin.from("audit_log").select("id,resource_id,action,created_at,reason").eq("resource_type", "supplier_rncp_report").in("resource_id", [...rowIds]).order("created_at", { ascending: false })
+    ? await reader.from("audit_log").select("id,resource_id,action,created_at,reason").eq("resource_type", "supplier_rncp_report").in("resource_id", [...rowIds]).order("created_at", { ascending: false })
     : { data: [], error: null };
   if (historyResult.error) return NextResponse.json({ error: "No fue posible consultar el histórico de proveedores." }, { status: 500 });
   const timeline = buildTimeline(rows, filteredActions, scopedAudits, scopedEvaluations, scopedAssessments, (historyResult.data ?? []) as HistoryRow[], companyMap);

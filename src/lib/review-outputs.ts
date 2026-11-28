@@ -96,6 +96,8 @@ export interface OutputEvent {
   detail: Record<string, string | number | boolean | null>;
 }
 export interface OutputContext {
+  reopenDecision?: boolean;
+  reopenAction?: boolean;
   admin: boolean;
   director: boolean;
   update: boolean;

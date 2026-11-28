@@ -463,7 +463,7 @@ function DecisionDetail({
               {control("cancel")}
             </>
           )}
-        {validator && d.execution === "completed" && control("reopen")}
+        {ctx.reopenDecision && d.execution === "completed" && control("reopen")}
         {validator && ongoing && control("close")}
       </div>
       {failed ? (
@@ -534,7 +534,7 @@ function DecisionDetail({
                   a.state === "review" &&
                   control("validate_action", a)}
                 {ongoing &&
-                  validator &&
+                  ctx.reopenAction &&
                   ["review", "completed"].includes(a.state) &&
                   control("reopen_action", a)}
               </div>

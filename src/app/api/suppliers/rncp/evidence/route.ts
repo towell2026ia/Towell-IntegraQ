@@ -17,7 +17,8 @@ const extensionMime: Record<string, string> = {
 export async function POST(request: Request) {
   const session = await getAuthenticatedSession();
   if (!session) return NextResponse.json({ error: "Sesión no válida." }, { status: 401 });
-  if (session.userType !== "Proveedor") return NextResponse.json({ error: "Sólo el proveedor puede adjuntar evidencias desde este portal." }, { status: 403 });
+  const staff = session.userType !== "Proveedor";
+  if (staff && session.specificPermissions?.["rncp.revisar_evidencias"] !== true) return NextResponse.json({ error: "Tu cuenta requiere permiso para adjuntar evidencias." }, { status: 403 });
   const form = await request.formData().catch(() => null);
   const actionId = form?.get("actionId");
   const file = form?.get("file");
@@ -48,8 +49,8 @@ export async function POST(request: Request) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!validRncpFileSignature(bytes, mimeType)) return NextResponse.json({ error: "El contenido del archivo no corresponde a un formato admitido." }, { status: 400 });
   const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const scope=await supabase.rpc("iq_supplier_portal_prepare_upload",{p_event:null,p_action:actionId,p_date:performedOn,p_sha:sha256,p_mime:mimeType,p_bytes:file.size});
-  if(scope.error)return NextResponse.json({error:"Expediente no autorizado."},{status:403});
+  const scope=staff ? await supabase.rpc("iq_rncp_faculty",{p_organization_id:reportResult.data.organization_id,p_action:"revisar_evidencias"}) : await supabase.rpc("iq_supplier_portal_prepare_upload",{p_event:null,p_action:actionId,p_date:performedOn,p_sha:sha256,p_mime:mimeType,p_bytes:file.size});
+  if(scope.error || staff && scope.data !== true)return NextResponse.json({error:"Expediente no autorizado."},{status:403});
   const admin=createAdminClient();
   const known=await supabase.from("file_objects").select("id").eq("resource_type",resourceType).eq("resource_id",actionId).eq("uploaded_by",userId).eq("sha256",sha256).is("deleted_at",null).limit(1);
   if(known.error)return NextResponse.json({error:"No se pudo comprobar la evidencia existente."},{status:503});
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
     const stored=await admin.storage.from(privateBucket).upload(path,bytes,{upsert:false,contentType:mimeType});
     if(stored.error&&String(stored.error.statusCode)!=="409"&&!/already exists/i.test(stored.error.message))return NextResponse.json({error:"No se pudo cargar la evidencia."},{status:503});
   }
-  const registered=await supabase.rpc("iq_supplier_portal_rncp_evidence",{p_action:actionId,p_date:performedOn,p_sha:sha256,p_name:file.name,p_mime:mimeType,p_bytes:file.size});
+  const registered=await supabase.rpc(staff ? "iq_rncp_staff_evidence" : "iq_supplier_portal_rncp_evidence",{p_action:actionId,p_date:performedOn,p_sha:sha256,p_name:file.name,p_mime:mimeType,p_bytes:file.size});
   if(registered.error)return NextResponse.json({error:"No se confirmó el vínculo de la evidencia. Comprueba el expediente y reintenta con el mismo archivo."},{status:registered.error.code==="42501"?403:409});
   const row=await supabase.from("file_objects").select("id,original_name,mime_type,size_bytes,uploaded_by,created_at").eq("id",registered.data).single();
   if(row.error||!row.data)return NextResponse.json({error:"No se pudo recuperar la evidencia registrada."},{status:503});

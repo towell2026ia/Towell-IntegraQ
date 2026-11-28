@@ -46,7 +46,7 @@ async function getActor(): Promise<Actor | null> {
   const supabase = await createClient();
   const { data } = await supabase.auth.getUser();
   if (!data.user) return null;
-  const profile = await supabase.from("profiles").select("user_type,status,organization_id,external_party_id,external_site_id").eq("id", data.user.id).maybeSingle();
+  const profile = await supabase.from("profiles").select("user_type,status,organization_id,external_party_id,external_site_id,overrides:user_permission_overrides!user_permission_overrides_user_id_fkey(allowed,permission:permissions(code))").eq("id", data.user.id).maybeSingle();
   if (!profile.data || profile.data.status !== "active") return null;
   const userType = profile.data.user_type as Actor["userType"];
   let readableKinds: Actor["readableKinds"] = [];
@@ -57,8 +57,12 @@ async function getActor(): Promise<Actor | null> {
       supabase.rpc("has_module_permission", { requested_module_id: "customers", requested_action: "view" }),
       supabase.rpc("has_module_permission", { requested_module_id: "suppliers", requested_action: "view" }),
     ]);
-    if (customers.data === true) readableKinds.push("customer");
-    if (suppliers.data === true) readableKinds.push("supplier");
+    const denied = new Set<string>((profile.data.overrides ?? []).flatMap((row: {allowed:boolean;permission:{code:string}|{code:string}[]|null})=>{
+      const permission = Array.isArray(row.permission) ? row.permission[0] : row.permission;
+      return !row.allowed && permission ? [permission.code] : [];
+    }));
+    if (customers.data === true && !denied.has("clientes.ver") && !denied.has("clientes.acceder")) readableKinds.push("customer");
+    if (suppliers.data === true && !denied.has("proveedores.ver") && !denied.has("proveedores.acceder")) readableKinds.push("supplier");
   }
   return {
     id: data.user.id,
@@ -153,7 +157,7 @@ export async function PATCH(request: Request) {
 async function mutate(request: Request, create: boolean) {
   try {
     const actor = await getActor();
-    if (!actor || actor.userType !== "administrator") {
+    if (!actor || !["internal","administrator"].includes(actor.userType)) {
       return NextResponse.json({ error: "Sólo un administrador puede modificar empresas externas." }, { status: 403 });
     }
     if (!actor.organizationId) return NextResponse.json({ error: "La cuenta administrativa no tiene una organización titular verificada." }, { status: 403 });
@@ -164,6 +168,21 @@ async function mutate(request: Request, create: boolean) {
     const payload = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!payload || (payload.entity !== "company" && payload.entity !== "site")) {
       return NextResponse.json({ error: "Solicitud no válida." }, { status: 400 });
+    }
+    if (actor.userType !== "administrator") {
+      if (payload.entity !== "company" || payload.kind !== "supplier" || payload.active === false || !actor.readableKinds.includes("supplier")) {
+        return NextResponse.json({error:"Operación no autorizada."},{status:403});
+      }
+      const client = await createClient();
+      const checks = await Promise.all([
+        client.rpc("has_module_permission",{requested_module_id:"suppliers",requested_action:create ? "create" : "update"}),
+        ...["proveedores.acceder","proveedores.ver",create ? "proveedores.crear" : "proveedores.editar"].map(code => client.rpc("has_permission",{requested_permission:code,requested_organization_id:actor.organizationId})),
+      ]);
+      if (checks.some(result => result.error || result.data !== true)) return NextResponse.json({error:"Operación no autorizada."},{status:403});
+      if (!create) {
+        const current = await admin.from("organizations").select("active").eq("id",payload.id).eq("kind","supplier").eq("owning_organization_id",actor.organizationId).maybeSingle();
+        if (current.error || !current.data?.active) return NextResponse.json({error:"Proveedor no disponible para edición."},{status:403});
+      }
     }
     const result = payload.entity === "company"
       ? await mutateCompany(payload, actor, create, admin)

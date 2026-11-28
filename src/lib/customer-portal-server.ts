@@ -1,13 +1,15 @@
 import "server-only";
 
 import type { ActiveSession } from "@/lib/session-data";
+import { canSupervisePortal, invitationPermissions, type InvitationPermissions } from "./portal-staff-permissions";
 import { canAccessModule } from "@/lib/access-policy";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type CustomerPortalActor = {
-  kind: "customer" | "administrator";
+  kind: "customer" | "administrator" | "internal";
+  invitations?: InvitationPermissions;
   userId: string;
   companyId?: string;
   workspaceId: string;
@@ -32,6 +34,12 @@ export async function resolveCustomerPortalActor(session: ActiveSession | null):
 
   if (session.userType === "Administrador" && profile.user_type === "administrator" && profile.organization_id) {
     return { kind: "administrator", userId: session.authUserId, workspaceId: profile.organization_id };
+  }
+
+  if (session.userType === "Usuario interno" && profile.user_type === "internal" && profile.organization_id === session.organizationId && canSupervisePortal(session,"customer")) {
+    const org = await admin.from("organizations").select("id").eq("id",profile.organization_id).eq("kind","internal").eq("active",true).maybeSingle();
+    if (org.error || !org.data) return null;
+    return { kind:"internal", userId:session.authUserId, workspaceId:profile.organization_id, invitations:invitationPermissions(session,"customer") };
   }
 
   if (session.userType !== "Cliente" || profile.user_type !== "customer" ||

@@ -20,7 +20,7 @@ export function notificationTemplate(report: MatrixReport, event: NotificationEv
   url.pathname = "/"; url.search = new URLSearchParams({ rncp: report.id }).toString();
   url.hash = recipient === "supplier" ? "supplier-portal" : "suppliers";
   const days = report.notifiedAt ? Math.floor((Date.parse(now) - Date.parse(report.notifiedAt)) / 86_400_000) : null;
-  const title = { unattended: "RNCP sin atención", overdue: "RNCP: incumplimiento del plazo de siete días", validation: "RNCP pendiente de validación de inspectormp" }[event];
+  const title = { unattended: "RNCP sin atención", overdue: "RNCP: incumplimiento del plazo de siete días", validation: "RNCP pendiente de validación por Calidad" }[event];
   return { subject: `${title} · ${report.folio}`, text: [title, `Folio: ${report.folio}`, `Proveedor: ${report.supplierName}`,
     `Emisión: ${report.reportDate ?? "No registrada"}`, `Notificación: ${report.notifiedAt ?? "No registrada"}`,
     `Días transcurridos: ${days ?? "No verificables"}`, `Pendientes: ${report.missingRequirements.join(", ") || "Revisión de Calidad"}`,

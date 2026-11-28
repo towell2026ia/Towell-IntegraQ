@@ -82,6 +82,7 @@ export async function GET(request?: Request) {
   try {
     const context = await rncpContext("view",true);
     const { supabase } = context;
+    if (!context.supplier && context.session?.specificPermissions?.["rncp.consultar_rncp"] === false) throw new RncpError("Consulta RNCP no autorizada.",403);
     const params = request ? new URL(request.url).searchParams : null;
     const reportId = params?.get("reportId");
     const portal = context.supplier && params?.get("view") === "portal";
@@ -269,6 +270,8 @@ function rncpError(message: string) {
     RNCP_DRAFT_LOCKED: "La RNCP ya fue registrada y no puede volver a borrador.",
     RNCP_ALREADY_SUBMITTED: "La RNCP ya fue registrada.",
     RNCP_TRANSITION_INVALID: "El cambio de estado solicitado no está permitido.",
+    RNCP_REOPEN_FORBIDDEN: "No tienes permiso para reabrir este RNCP.",
+    RNCP_REOPEN_REASON_REQUIRED: "Indica el motivo de la reapertura.",
     RNCP_ADMIN_REASON_REQUIRED: "Indica el motivo de la corrección administrativa.",
     RNCP_DELETE_ADMIN_ONLY: "Sólo un administrador puede eliminar o restaurar RNCP.",
     RNCP_DELETE_REASON_REQUIRED: "El motivo de eliminación o restauración es obligatorio.",

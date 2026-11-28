@@ -20,7 +20,7 @@ export function RncpEvidenceFile({ id, name, bytes }: { id: string; name: string
     try {
       const { signedUrl } = await getRncpEvidenceUrl(id);
       if (download) {
-        const response = await fetch(signedUrl, { cache: "no-store", credentials: "omit" });
+        const response = await fetch(signedUrl, { cache: "no-store", credentials: "same-origin" });
         if (!response.ok) throw new Error();
         const blob = await response.blob();
         if (blob.size !== bytes) throw new Error();

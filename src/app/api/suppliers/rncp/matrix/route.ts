@@ -17,6 +17,8 @@ export async function GET(request: Request) {
     const headers = () => ({ "Cache-Control": "private, no-store", "Server-Timing": [...phases, "total;dur=" + (performance.now() - started).toFixed(1)].join(", ") });
     const context = await rncpContext("view", false, record);
     const query = new URL(request.url).searchParams;
+    const readPermission = query.has("reportId") ? "rncp.consultar_expedientes" : "rncp.consultar_dashboards";
+    if (context.session?.specificPermissions?.[readPermission] === false || context.session?.specificPermissions?.["rncp.consultar_rncp"] === false) throw new RncpError("Consulta RNCP no autorizada.",403);
     if (query.get("part") === "pdfCounts") {
       const ids = query.has("ids") ? query.get("ids")!.split(",") : undefined;
       if (ids && (ids.length > 30 || ids.some(id => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)))) {

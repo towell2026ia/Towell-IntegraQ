@@ -13,7 +13,9 @@ export async function documentFile(actor: PortalReader, request: Request, { para
   const query = new URL(request.url).searchParams;
   const administratorPreview = actor.kind === "administrator" && query.get("admin") === "1";
   const general = query.get("scope") === "general";
-  const customer = administratorPreview && general ? actor.workspaceId : administratorPreview ? query.get("customerId") : actor.companyId;
+  const staffPreview = actor.kind === "internal" && query.get("admin") === "1";
+  const preview = administratorPreview || staffPreview;
+  const customer = preview && general ? actor.workspaceId : preview ? query.get("customerId") : actor.companyId;
   if (!customer || !certificationUuid.test(customer) || !certificationUuid.test(documentId)) return unavailable();
   try {
     await requireIndividualPublication();
@@ -37,7 +39,7 @@ export async function documentFile(actor: PortalReader, request: Request, { para
   if (fileResult.error || !file || !matchesPortalPublication({ ...row, publication_scope: general ? "general" : "individual" }, file, actor.workspaceId, customer, administratorPreview)) return unavailable();
   const download = query.get("disposition") === "download";
   const audit = await db.from("customer_portal_document_events").insert({ publication_id: documentId, workspace_id: actor.workspaceId,
-    customer_id: administratorPreview && general ? null : customer, actor_id: actor.userId, ...("linkId" in actor ? {portal_link_id: actor.linkId} : {}), action: "accessed", after_value: { fileId: file.id, disposition: download ? "download" : "view" } });
+    customer_id: preview && general ? null : customer, actor_id: actor.userId, ...("linkId" in actor ? {portal_link_id: actor.linkId} : {}), action: "accessed", after_value: { fileId: file.id, disposition: download ? "download" : "view" } });
   if (audit.error) return NextResponse.json({ error: "No fue posible registrar la consulta del documento." }, { status: 500, headers });
   const signed = await db.storage.from("integraq-private").createSignedUrl(file.object_path, 60, download ? { download: file.original_name } : { download: false });
   if (signed.error || !signed.data) return NextResponse.json({ error: "No fue posible abrir el archivo autorizado." }, { status: 500, headers });

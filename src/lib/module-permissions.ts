@@ -152,6 +152,14 @@ export function canPerformModuleAction(
   action: ModulePermissionAction,
 ) {
   if (isAdministrator(session)) return true;
+  if (moduleId === "suppliers" || moduleId === "customers") {
+    if (session.userType !== "Usuario interno") return false;
+    const family = moduleId === "suppliers" ? "proveedores" : "clientes";
+    const specific = session.specificPermissions;
+    if (specific?.[`${family}.acceder`] === false || specific?.[`${family}.ver`] === false) return false;
+    const key = action === "create" ? "crear" : action === "update" ? "editar" : action === "manage" ? "administrar" : null;
+    if (key && specific?.[`${family}.${key}`] === false) return false;
+  }
   if (moduleId === "corrective-actions" && (session.userType !== "Usuario interno" || action !== "view")) return false;
   if (action === "view" && session.assignedModuleIds?.includes(moduleId)) {
     return true;

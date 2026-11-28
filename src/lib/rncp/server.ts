@@ -12,7 +12,7 @@ function requireReadable(result: { error: { code?: string } | null }) {
   if (result.error.code === "42501") throw new RncpError("Acceso RNCP no autorizado.", 403);
   throw new RncpError("No fue posible verificar el acceso a RNCP. Reintenta.", 503);
 }
-export async function rncpContext(action: "view" | "update" | "admin" = "view", allowSupplier = false, timing?: (phase: string, ms: number) => void) {
+export async function rncpContext(action: "view" | "update" | "config" | "admin" = "view", allowSupplier = false, timing?: (phase: string, ms: number) => void) {
   const verified = await getVerifiedSessionContext(timing).catch(() => {
     throw new RncpError("No fue posible verificar el acceso a RNCP. Reintenta.", 503);
   });
@@ -30,6 +30,7 @@ export async function rncpContext(action: "view" | "update" | "admin" = "view", 
   if (supplier && !canAccessModule(session,"supplier-portal")) throw new RncpError("Acceso no autorizado.",403);
   if (supplier ? !allowSupplier || action === "admin" : !["administrator", "internal"].includes(profile.user_type) || !profile.organization_id || !canPerformModuleAction(session, "suppliers", action === "view" ? "view" : "update")) throw new RncpError("No tienes permiso para consultar o modificar RNCP.", 403);
   if (action === "admin" && profile.user_type !== "administrator") throw new RncpError("Operación exclusiva de administradores activos.", 403);
+  if (action === "config" && profile.user_type !== "administrator" && session.specificPermissions?.["rncp.configurar_modulo"] !== true) throw new RncpError("Configuración no autorizada.",403);
   const admin = createAdminClient();
   const ownerRead = admin.from("organizations").select("kind,active").eq("id", supplier ? profile.external_party_id : profile.organization_id).maybeSingle();
   const [owner, scope] = await Promise.all([ownerRead, supplier ? supabase.rpc("iq_supplier_portal_tenant") : supabase.rpc("iq_rncp_actor_org", { p_admin: action === "admin" })]);
@@ -190,6 +191,7 @@ export async function readAuthorizedReport(context: RncpContext, id: string) {
 }
 
 export async function loadMatrixReports(context: RncpContext, requestedId?: string, deferOriginalCounts = false, timing?: (phase: string, ms: number) => void, supplierId?: string) {
+  if (!context.supplier && (context.session?.specificPermissions?.["rncp.consultar_rncp"] === false || requestedId && context.session?.specificPermissions?.["rncp.consultar_expedientes"] === false)) throw new RncpError("Consulta del expediente no autorizada.",403);
   if (context.supplier && !requestedId) throw new RncpError("El portal sólo puede consultar un expediente autorizado.", 403);
   const listStart = performance.now();
   let rows: ReportRow[];

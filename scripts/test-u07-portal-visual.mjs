@@ -14,6 +14,7 @@ const root = process.cwd(), base = "91068cb97833f07686011b9af9a5427e70ef2284";
 const contactEditor = process.argv.includes("--contactos");
 const finalVisual = process.argv.includes("--ajustes-finales");
 const multiInvite = process.argv.includes("--destinatarios");
+const internalStaff = process.argv.includes("--personal-interno");
 const year = String(new Date().getFullYear()),
   previous = String(Number(year) - 1);
 const company = {
@@ -162,7 +163,7 @@ ${
     : 'import {ExternalPortalShell} from "@/components/modules/supplier-portal-view";'
 }
 const external=location.pathname==="/external";
-const session={...activeSession,workspaceMode:"production",userType:external?"Proveedor":"Administrador",authUserId:"qa-view",specificPermissions:{"portal_proveedores.acceder":true},externalParty:external?{kind:"supplier",companyId:"qa-a",companyName:"Textiles del Centro"}:undefined};
+const session={...activeSession,workspaceMode:"production",organizationId:"qa-workspace",userType:external?"Proveedor":${internalStaff ? '"Usuario interno"' : '"Administrador"'},assignedModuleIds:["suppliers","supplier-portal"],authUserId:"qa-view",specificPermissions:{"portal_proveedores.acceder":true,"portal_proveedores.consultar_invitaciones":true,"portal_proveedores.emitir_invitaciones":true,"portal_proveedores.reenviar_invitaciones":true,"portal_proveedores.revocar_invitaciones":true},externalParty:external?{kind:"supplier",companyId:"qa-a",companyName:"Textiles del Centro"}:undefined};
 const portal=<StakeholderPortalModule session={session} actions={[]} kind="supplier"/>;
 createRoot(document.getElementById("app")).render(${
   before
@@ -455,6 +456,7 @@ try {
               users: multiInvite && yes ? [{ id: "user", full_name: "Luis", email: "luis@example.invalid", status: "active" }] : [],
               invitations: multiInvite && yes ? tickets : [],
               accessReady: true,
+              permissions: {consultar:true,emitir:true,reenviar:true,revocar:true}, manageAccounts:!internalStaff,
               contacts: !yes ? [] : !multiInvite ? profile.contacts
                 : u.searchParams.has("recipients") || posts.length ? recipients : [],
               sites: multiInvite && yes ? [{id:"north", name:"Norte"}] : [],

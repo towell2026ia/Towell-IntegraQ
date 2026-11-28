@@ -22,6 +22,7 @@ export function invitationStatus(invitation: PortalInvitation, now: number) {
 }
 
 export type PortalContact = {
+  unavailable?: boolean;
   id: string;
   name: string;
   email: string;
@@ -71,13 +72,13 @@ export function SupplierInvitationDialog({
     const email = contact.email.trim().toLowerCase();
     const account = accounts.get(email);
     const status = completed.includes(email) ? "Pendiente" : states.get(email);
-    const eligible = supplierEmailPattern.test(email) && !account &&
+    const eligible = supplierEmailPattern.test(email) && !contact.unavailable && !account &&
       status !== "Pendiente";
     const access = account
       ? (account === "active" ? "Acceso activo" : "Acceso inactivo")
       : status
       ? `Invitación ${status.toLowerCase()}`
-      : "";
+      : contact.unavailable ? "No elegible" : "";
     return { contact, email, eligible, access };
   });
   const eligibleEmails = [

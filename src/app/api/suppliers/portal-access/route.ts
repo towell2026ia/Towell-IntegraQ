@@ -10,6 +10,7 @@ import {
   RncpError,
 } from "@/lib/rncp/server";
 import { auditContext, auditSuppliers } from "@/lib/supplier-audits/server";
+import { canSupervisePortal, invitationPermissions } from "@/lib/portal-staff-permissions";
 import { visibleSupplierContacts } from "@/lib/supplier-audits/contacts";
 import type { SupplierContacts } from "@/lib/supplier-audits/model";
 
@@ -117,9 +118,14 @@ async function adminDirectory(ctx: Awaited<ReturnType<typeof rncpContext>>, id: 
   );
   const contacts = (company.data?.metadata?.supplierQualityContacts ??
     {}) as Partial<SupplierContacts>;
+  const rights = invitationPermissions(ctx.session, "supplier");
+  const pending = (invites.data ?? []).filter(i => !i.withdrawn_at && !i.accepted_at && !i.blocked_at && Date.parse(i.expires_at) > Date.now());
+  const unavailable = new Set([...pending.map(i => i.email), ...users.map(u => u.email)].filter(Boolean).map(email => email!.toLowerCase()));
   return {
-    users,
-    invitations: invites.data ?? [],
+    permissions: rights,
+    manageAccounts: ctx.profile.user_type === "administrator",
+    users: ctx.profile.user_type === "administrator" ? users : [],
+    invitations: rights.consultar ? invites.data ?? [] : rights.reenviar || rights.revocar ? pending : [],
     accessReady: !invites.error,
     contacts: visibleSupplierContacts({
       ...contacts,
@@ -129,6 +135,7 @@ async function adminDirectory(ctx: Awaited<ReturnType<typeof rncpContext>>, id: 
       .filter((c) => !c.retired)
       .map((c) => ({
         id: c.id,
+        unavailable: rights.emitir && unavailable.has(c.email?.trim().toLowerCase() ?? ""),
         email: c.email?.trim() || "",
         name: c.name,
         phone: c.phone,
@@ -160,9 +167,11 @@ export async function GET(request: Request) {
       }
       return reply(profile.data);
     }
-    const ctx = await rncpContext("admin");
+    const ctx = await rncpContext("view");
+    if (!canSupervisePortal(ctx.session,"supplier")) throw new RncpError("Alcance",403);
     const contactSupplier = params.get("contactSettings");
     if (contactSupplier !== null) {
+      if (ctx.profile.user_type !== "administrator") throw new RncpError("Alcance",403);
       const settings = await ctx.supabase.rpc("iq_supplier_contact_publication_settings", { p_supplier: contactSupplier });
       if (["PGRST202", "42883"].includes(settings.error?.code ?? "")) return reply({ available: false });
       if (settings.error || !settings.data) {
@@ -171,8 +180,11 @@ export async function GET(request: Request) {
       return reply(settings.data);
     }
     const id = params.get("supplier");
+    const recipients = params.has("recipients");
+    const allowed = await ctx.supabase.rpc("iq_supplier_portal_staff", { p_supplier: id, p_action: recipients ? "emitir" : "ver" });
+    if (allowed.error || allowed.data !== ctx.organizationId) throw new RncpError("Alcance", allowed.error && allowed.error.code !== "42501" ? 503 : 403);
     if (!id) {
-      const rows = await auditSuppliers(await auditContext("admin"));
+      const rows = await auditSuppliers(await auditContext("view"));
       return reply({
         suppliers: rows
           .filter((s) => s.active)
@@ -184,16 +196,7 @@ export async function GET(request: Request) {
           })),
       });
     }
-    const allowed = await ctx.supabase.rpc("iq_supplier_portal_admin", {
-      p_supplier: id,
-    });
-    if (allowed.error || allowed.data !== ctx.organizationId) {
-      throw new RncpError(
-        "Alcance",
-        allowed.error && allowed.error.code !== "42501" ? 503 : 403,
-      );
-    }
-    if (params.has("recipients")) {
+    if (recipients) {
       return reply(await adminDirectory(ctx, id));
     }
     const [directory, reports, audits, assessments] = await Promise.all([
@@ -263,9 +266,13 @@ export async function GET(request: Request) {
 }
 export async function POST(request: Request) {
   try {
-    const ctx = await rncpContext("admin");
+    const ctx = await rncpContext("view");
+    if (!canSupervisePortal(ctx.session,"supplier")) throw new RncpError("Alcance",403);
     const body = await request.json();
     const { supplier, site, action, id } = body;
+    const rights = invitationPermissions(ctx.session, "supplier");
+    const authorized = action === "invite" ? rights.emitir : action === "reissue" ? rights.reenviar : action === "withdraw" ? rights.revocar : ["revoke","reactivate"].includes(action) && ctx.profile.user_type === "administrator";
+    if (!authorized) throw new RncpError("Operación",403);
     const email = typeof body.email === "string"
       ? body.email.trim().toLowerCase()
       : "";

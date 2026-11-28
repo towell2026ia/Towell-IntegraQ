@@ -50,6 +50,10 @@ jobs:
         run: node scripts/test-supplier-audit-db.mjs
       - name: Verify supplier portal with concurrent PostgreSQL connections in the same database
         run: node scripts/test-u07-portal-concurrency.mjs
+      - name: Verify individual portal grants, RNCP access and rollback
+        run: |
+          createdb seg01_test
+          PGDATABASE=seg01_test node scripts/test-prd-seg-01.mjs
 
   rncp-database:
     name: Isolated RNCP history / RLS / lifecycle

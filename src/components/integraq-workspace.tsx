@@ -757,7 +757,7 @@ export function IntegraQWorkspace({
           {activeModule === "home" ? <HomeModule baseRetry={productionHome.retry} baseFailed={productionHome.failed} baseDashboard={productionHome.dashboard} loading={demoMode && !storageReady} onNavigate={changeModule} sources={homeSources} /> : null}
           {activeModule === "processes" ? <ProcessesModule /> : null}
           {activeModule === "organization" ? <OrganizationModule session={session} /> : null}
-          {activeModule === "access" ? <AccessModule /> : null}
+          {activeModule === "access" ? <AccessModule session={session} /> : null}
           {activeModule === "home-settings" ? <HomeSettingsModule onChangeDocument={(updated) => {
             clearHomeImages(session);
             catalogCache.index.clear();

@@ -12,7 +12,7 @@ vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({
 }) }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: m.client }));
 vi.mock("@/lib/rncp/server", () => ({
-  RncpError: Error, rncpContext: async () => ({ supabase: {rpc: m.asUser} }),
+  RncpError: Error, rncpContext: async () => ({ supabase: {rpc: m.asUser}, profile: {user_type:"internal"}, session: {userType:"Usuario interno", workspaceMode:"production", organizationId:"local", assignedModuleIds:["supplier-portal","suppliers"], specificPermissions:{"portal_proveedores.acceder":true,"portal_proveedores.emitir_invitaciones":true,"portal_proveedores.reenviar_invitaciones":true}} }),
 }));
 vi.mock("@/lib/supplier-audits/server", () => ({}));
 

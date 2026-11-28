@@ -1,5 +1,7 @@
 "use client";
 
+import { canPerformRncp } from "@/lib/rncp/permissions";
+
 import {
   AlertTriangle,
   CalendarClock,
@@ -74,8 +76,10 @@ function SupplierWorkspace({ session, initialYear }: { session: ActiveSession; i
   const [createSupplierOpen, setCreateSupplierOpen] = useState(false);
   const [auditFocus, setAuditFocus] = useState<AuditFocus | null>(null);
   const demo = isDemoSession(session);
-  const canCreateSupplier = isAdministrator(session) && !demo;
-  const canUpdateRncp = canPerformModuleAction(session, "suppliers", "update");
+  const canCreateSupplier = !demo && canPerformModuleAction(session,"suppliers","create");
+  const canEditSupplier = !demo && canPerformModuleAction(session,"suppliers","update");
+  const canUpdateRncp = canPerformRncp(session, "rncp.editar_rncp");
+  const canCreateRncp = canPerformRncp(session, "rncp.crear_rncp");
   const companyDirectory = useExternalCompanies("supplier");
   const globalDashboard = view === "dashboard" && !matrixSupplierId;
   const rncpDirectory = useRncpReports(!demo && !globalDashboard, "directory");
@@ -167,13 +171,13 @@ function SupplierWorkspace({ session, initialYear }: { session: ActiveSession; i
         <div className={styles.buttons}>
           {!demo && (view === "directory" || view === "dashboard") && <label className={styles.year}>Año RNCP<select value={year} onChange={event => setYear(event.target.value)}><option value="">Todos</option>{years.map(option => <option key={option}>{option}</option>)}</select></label>}
           {canCreateSupplier ? <button className="button button-secondary" type="button" onClick={() => { setSupplierError(""); setSupplierNotice(""); setEditingSupplier(undefined); setCreateSupplierOpen(true); }}><Plus size={17} /> Nuevo proveedor</button> : null}
-          {canUpdateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}><Plus size={17} /> Nuevo RNCP</button> : null}
+          {canCreateRncp ? <button className="button button-primary" type="button" onClick={() => { setEditingRncpId(undefined); setView("rncp"); }}><Plus size={17} /> Nuevo RNCP</button> : null}
         </div>
       </section>
       {!globalDashboard && rncpDirectory.error ? <div role="alert">No se pudieron consultar los reportes de los proveedores. <button type="button" className="button button-secondary" onClick={() => void rncpDirectory.refresh()}>Reintentar</button></div> : null}
       {supplierNotice ? <p role="status">{supplierNotice}</p> : null}
       {supplierError ? <p role="alert">{supplierError}</p> : null}
-      {createSupplierOpen && canCreateSupplier ? <NewSupplierDialog company={editingSupplier} onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
+      {createSupplierOpen && (editingSupplier ? canEditSupplier : canCreateSupplier) ? <NewSupplierDialog company={editingSupplier} onClose={() => setCreateSupplierOpen(false)} onSaved={(company, companies) => {
         matrixCache.clear();
         companyDirectory.setCompanies(companies);
         setSelectedId(company.id); setQuery(""); setView("directory"); setCreateSupplierOpen(false);
@@ -191,7 +195,7 @@ function SupplierWorkspace({ session, initialYear }: { session: ActiveSession; i
       <div className="quality-view-tabs supplier-tabs" aria-label="Vistas de calidad de proveedores">
         <button className={view === "directory" ? "active" : ""} type="button" onClick={() => setView("directory")}>Proveedores</button>
         <button className={view === "audits" ? "active" : ""} type="button" onClick={() => setView("audits")}>Calendario de auditorías</button>
-        <button className={view === "dashboard" ? "active" : ""} type="button" onClick={() => { setMatrixSupplierId(""); setView("dashboard"); }}>Dashboard RNCP</button>
+        <button disabled={!canPerformRncp(session,"rncp.consultar_dashboards")} className={view === "dashboard" ? "active" : ""} type="button" onClick={() => { setMatrixSupplierId(""); setView("dashboard"); }}>Dashboard RNCP</button>
         <button className={view === "rncp" ? "active" : ""} type="button" onClick={() => setView("rncp")}>Formulario RNCP</button>
         <button className={view === "results" ? "active" : ""} type="button" onClick={() => setView("results")}>Resultados y planes</button>
       </div>
@@ -216,10 +220,10 @@ function SupplierWorkspace({ session, initialYear }: { session: ActiveSession; i
             </div>
           </div>
           {selected ? <div className="party-detail-panel">
-            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · {effectivenessUnavailable ? "En proceso: —" : "En proceso: " + (demo ? selected.rncpOpen : selectedInProcess)}</p><div className={styles.profileActions}>{!demo ? <button className="button button-secondary" type="button" onClick={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }}><FileText size={14} /> Consultar expediente RNCP</button> : null}{canCreateSupplier ? <details className={styles.moreActions}><summary>Más acciones</summary><div><button className="button button-secondary" type="button" onClick={() => {
+            <header><span className="detail-eyebrow"><ShieldCheck size={14} /> {selected.code}</span><h3>{selected.name}</h3><p>{selected.category} · {effectivenessUnavailable ? "En proceso: —" : "En proceso: " + (demo ? selected.rncpOpen : selectedInProcess)}</p><div className={styles.profileActions}>{!demo ? <button className="button button-secondary" type="button" onClick={() => { setMatrixSupplierId(selected.id); setView("dashboard"); }}><FileText size={14} /> Consultar expediente RNCP</button> : null}{canEditSupplier ? <details className={styles.moreActions}><summary>Más acciones</summary><div><button className="button button-secondary" type="button" onClick={() => {
               const company = companyDirectory.companies.find(item => item.id === selected.id && item.kind === "supplier");
               if (company) { setEditingSupplier(company); setCreateSupplierOpen(true); }
-            }}><Pencil size={14} /> Editar proveedor</button><button className={"button button-secondary " + styles.danger} type="button" onClick={() => void deactivateSupplier()}>Desactivar proveedor</button></div></details> : null}</div></header>
+            }}><Pencil size={14} /> Editar proveedor</button>{isAdministrator(session) && <button className={"button button-secondary " + styles.danger} type="button" onClick={() => void deactivateSupplier()}>Desactivar proveedor</button>}</div></details> : null}</div></header>
             <div className={"party-detail-facts supplier-facts " + styles.supplierFacts}>
               <div><small>RNCP</small><strong>{effectivenessUnavailable ? "—" : selected.rncpTotal}</strong></div>
               <div><small>Cerrados</small><strong>{effectivenessUnavailable ? "—" : selected.rncpClosed}</strong></div>

@@ -50,6 +50,7 @@ export async function readPhotoUpload(request:Request) {
 export async function photoReport(reportId:string,edit=false) {
  if (!/^[a-f0-9-]{36}$/i.test(reportId)) throw new RncpError("RNCP no válido.");
  const context=await rncpContext(edit?"update":"view");
+ if(context.session?.specificPermissions?.["rncp.consultar_expedientes"]===false || edit && context.session?.specificPermissions?.["rncp.revisar_evidencias"]===false) throw new RncpError("Evidencia fuera de las facultades autorizadas.",403);
  const r=await context.supabase.from("supplier_rncp_reports").select("id,organization_id,supplier_id,folio,status,source_kind,deleted_at,notified_at").eq("id",reportId).eq("organization_id",context.organizationId).maybeSingle();
  if (r.error || !r.data || r.data.id!==reportId || r.data.organization_id!==context.organizationId || r.data.deleted_at || r.data.source_kind!=="native") throw new RncpError("Fotografías iniciales disponibles únicamente en RNCP nativos autorizados.",403);
  if (edit && (r.data.status!=="draft" || r.data.notified_at)) throw new RncpError("Las fotografías iniciales quedan conservadas después del registro. No se modifican desde una corrección.",409);

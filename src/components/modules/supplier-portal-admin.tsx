@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import type { InvitationPermissions } from "@/lib/portal-staff-permissions";
 import { SupplierActionEvidence } from "./supplier-action-evidence";
 import { invitationStatus, SupplierInvitationDialog, type PortalContact, type PortalInvitation } from "./supplier-invitation-dialog";
 import { getSupplierAssessmentFileUrl } from "@/lib/supplier-assessment-data";
@@ -30,6 +31,8 @@ const DetailModal = dynamic(() =>
 );
 type Company = { id: string; name: string; code: string; category: string };
 type Detail = {
+  permissions: InvitationPermissions;
+  manageAccounts: boolean;
   users: {
     id: string;
     full_name: string;
@@ -150,7 +153,7 @@ function CompanyPortal({
     [attempt, reload] = useState(0),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const [links, setLinks] = useState<Record<string, { path: string; code: string }>>({});
+  const [links, setLinks] = useState<Record<string, { path: string; code: string; email: string }>>({});
   useEffect(() => {
     const c = new AbortController();
     access<Detail>("?supplier=" + encodeURIComponent(company.id), {
@@ -211,7 +214,7 @@ function CompanyPortal({
         try {
           const { id, path, verificationCode } = await command(replaceId ? "reissue" : "invite", replaceId, email, site);
           if (!id || !path || !verificationCode) throw new Error();
-          setLinks(old => ({ ...old, [id]: { path, code: verificationCode } }));
+          setLinks(old => ({ ...old, [id]: { path, code: verificationCode, email } }));
           issued.push(email);
         } catch (cause) {
           failures.push(email + " · " + (cause instanceof Error && cause.message === issuanceLimit
@@ -528,7 +531,7 @@ function CompanyPortal({
         <DetailModal
           deferPdf
           report={report}
-          administrator
+          administrator={Boolean(data?.manageAccounts)}
           inspector={false}
           onClose={() => setReport(null)}
           onChanged={async () => {
@@ -543,7 +546,7 @@ function CompanyPortal({
           aside={
             <button
               className="button button-primary"
-              disabled={busy || !data.accessReady}
+              disabled={busy || !data.accessReady || !data.permissions.emitir}
               onClick={() => void openInvitations()}
             >
               Invitar usuario
@@ -580,7 +583,7 @@ function CompanyPortal({
                         <td>
                           <button
                             className="button button-secondary"
-                            disabled={busy || !data.accessReady}
+                            disabled={busy || !data.accessReady || !data.manageAccounts}
                             onClick={() =>
                               void change(
                                 u.status === "active" ? "revoke" : "reactivate",
@@ -598,6 +601,7 @@ function CompanyPortal({
                 </table>
               </div>
             )}
+          {!data.permissions.consultar && Object.entries(links).filter(([id])=>!data.invitations.some(invitation=>invitation.id===id)).map(([id, receipt]) => <p key={id}><strong>{receipt.email}</strong> <a href={"mailto:"+encodeURIComponent(receipt.email)+"?subject="+encodeURIComponent("Invitación al portal de "+company.name)+"&body="+encodeURIComponent("Tu enlace individual: "+location.origin+receipt.path+"\\nRecibirás el código por separado.")}>Preparar correo individual</a> <button type="button" onClick={() => void navigator.clipboard.writeText(location.origin + receipt.path)}>Copiar enlace individual</button> <button type="button" onClick={() => void navigator.clipboard.writeText(receipt.code)}>Copiar código individual</button></p>)}
           <h4>Invitaciones</h4>
           {data.invitations.map((i) => {
             const status = invitationStatus(i, now);
@@ -630,11 +634,11 @@ function CompanyPortal({
                         </button>
                         <small>Entrega el enlace y el código por separado a {i.email}.</small>
                       </>}
-                      <button className="button button-secondary" disabled={busy}
+                      <button className="button button-secondary" disabled={busy || !data.permissions.reenviar}
                         onClick={() => void issue([i.email], i.site_id ?? "", i.id)}>
                         Reemitir invitación
                       </button>
-                      <button className="button button-secondary" disabled={busy}
+                      <button className="button button-secondary" disabled={busy || !data.permissions.revocar}
                         onClick={() => void change("withdraw", i.id)}>
                         Revocar invitación
                       </button>
@@ -644,7 +648,7 @@ function CompanyPortal({
               </article>
             );
           })}
-          {!data.invitations.length && (
+          {data.permissions.consultar && !data.invitations.length && (
             <Empty>Sin invitaciones registradas.</Empty>
           )}
           {invite && (

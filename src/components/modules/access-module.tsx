@@ -1,5 +1,7 @@
 "use client";
 
+import { applySupplierLevel, supplierLevels } from "@/lib/rncp/permission-presets";
+
 import {
   Building2,
   CheckCircle2,
@@ -42,6 +44,7 @@ import {
 import { workspaceModuleMeta } from "@/lib/navigation";
 import {
   editableSpecificPermissionGroups,
+  isReopeningPermission,
   type SpecificPermissionKey,
   type SpecificPermissionState,
 } from "@/lib/specific-permissions";
@@ -51,6 +54,7 @@ import {
   normalizeModulePermissions,
 } from "@/lib/module-permissions";
 import type {
+  ActiveSession,
   ContinuousImprovementRole,
   DocumentAccessRole,
   ModuleActionPermission,
@@ -68,7 +72,8 @@ import {
 
 type AccessTab = "types" | "permissions" | "rules" | "companies" | "users";
 
-export function AccessModule() {
+export function AccessModule({session}:{session:ActiveSession}) {
+  const canAdminister = session.userType === "Administrador";
   const [activeTab, setActiveTab] = useState<AccessTab>("types");
   const [query, setQuery] = useState("");
   const [accounts, setAccounts] = useState<UserAccessAccount[]>([]);
@@ -104,11 +109,11 @@ export function AccessModule() {
     };
   }, [refreshPositions]);
 
-  async function loadAccounts(preferredUserId?: string) {
+  async function loadAccounts(preferredUserId?: string, revision?: string) {
     setLoadingAccounts(true);
     setLoadError("");
     try {
-      const response = await fetch("/api/admin/users", { cache: "no-store" });
+      const response = await fetch("/api/admin/users", { cache: "no-store", signal: AbortSignal.timeout(25000) });
       const payload = await readApiPayload<{
         accounts?: UserAccessAccount[];
         error?: string;
@@ -116,16 +121,18 @@ export function AccessModule() {
       if (!response.ok || !payload.accounts) {
         throw new Error(payload.error ?? "No fue posible cargar los usuarios.");
       }
+      if (revision && !payload.accounts.some(item => item.authUserId === preferredUserId && item.revision === revision)) throw new Error("El servidor guardó la solicitud pero no se pudo verificar la cuenta. Recarga antes de repetirla.");
       setAccounts(payload.accounts);
       setSelectedUserId((current) =>
-        preferredUserId && payload.accounts?.some((item) => item.id === preferredUserId)
-          ? preferredUserId
+        preferredUserId && payload.accounts?.some((item) => item.id === preferredUserId || item.authUserId === preferredUserId)
+          ? payload.accounts.find(item => item.id === preferredUserId || item.authUserId === preferredUserId)!.id
           : payload.accounts?.some((item) => item.id === current)
             ? current
             : payload.accounts?.[0]?.id ?? "",
       );
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "No fue posible cargar los usuarios.");
+      if (revision) throw error;
     } finally {
       setLoadingAccounts(false);
     }
@@ -161,12 +168,13 @@ export function AccessModule() {
       method: account.authUserId ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(account),
+      signal: AbortSignal.timeout(35000),
     });
-    const payload = await readApiPayload<{ error?: string; message?: string }>(response);
-    if (!response.ok) {
-      throw new Error(payload.error ?? "No fue posible guardar el usuario.");
+    const payload = await readApiPayload<{ ok?: boolean; userId?: string; revision?: string; error?: string; message?: string }>(response);
+    if (!response.ok || payload.ok !== true || !payload.userId || !payload.revision) {
+      throw new Error(payload.error ?? "No fue posible confirmar el guardado del usuario.");
     }
-    await loadAccounts(account.id);
+    await loadAccounts(payload.userId, payload.revision);
     setActionNotice(
       payload.message ??
         (creating
@@ -185,7 +193,7 @@ export function AccessModule() {
           <h2>Usuarios y acceso</h2>
           <p>El puesto del organigrama determina procesos, menús y permisos documentales.</p>
         </div>
-        <button className="button button-primary" type="button" onClick={() => { setEditingAccount(null); setActiveTab("users"); }}>
+        <button disabled={!canAdminister} className="button button-primary" type="button" onClick={() => { setEditingAccount(null); setActiveTab("users"); }}>
           <UserPlus size={17} /> Nuevo usuario
         </button>
       </section>
@@ -226,8 +234,9 @@ export function AccessModule() {
                   allAccounts={accounts}
                   selectedUserId={selectedUserId}
                   onSelect={setSelectedUserId}
+                  canEdit={account=>canAdminister && account.authUserId!==session.authUserId}
                   onEdit={(account) => setEditingAccount(account)}
-                  onChange={saveAccount}
+                  onChange={async account=>{try{await saveAccount(account);}catch(cause){setLoadError(cause instanceof Error ? cause.message : "No se pudo guardar el cambio.");}}}
                   positions={positions}
                 />
         ) : null}
@@ -270,6 +279,7 @@ async function readApiPayload<T extends { error?: string }>(response: Response):
 function UserAccountsWorkspace({
   accounts,
   allAccounts,
+  canEdit,
   selectedUserId,
   onSelect,
   onEdit,
@@ -278,6 +288,7 @@ function UserAccountsWorkspace({
 }: {
   accounts: UserAccessAccount[];
   allAccounts: UserAccessAccount[];
+  canEdit:(account:UserAccessAccount)=>boolean;
   selectedUserId: string;
   onSelect: (id: string) => void;
   onEdit: (account: UserAccessAccount) => void;
@@ -300,7 +311,7 @@ function UserAccountsWorkspace({
         {accounts.length === 0 ? <div className="access-empty compact"><Users size={22} /><p>No hay usuarios que coincidan con la búsqueda.</p></div> : null}
       </div>
       {selected ? (
-        <UserAccessDetail account={selected} positions={positions} onEdit={() => onEdit(selected)} onChange={onChange} />
+        <UserAccessDetail editable={canEdit(selected)} account={selected} positions={positions} onEdit={() => onEdit(selected)} onChange={onChange} />
       ) : (
         <div className="access-empty"><Users size={24} /><h3>Sin usuarios configurados</h3><p>Utiliza Nuevo usuario para iniciar la carga.</p></div>
       )}
@@ -308,7 +319,7 @@ function UserAccountsWorkspace({
   );
 }
 
-function UserAccessDetail({ account, positions, onEdit, onChange }: { account: UserAccessAccount; positions: OrganizationPosition[]; onEdit: () => void; onChange: (account: UserAccessAccount) => Promise<void> }) {
+function UserAccessDetail({ account, positions, onEdit, onChange, editable }: { editable:boolean; account: UserAccessAccount; positions: OrganizationPosition[]; onEdit: () => void; onChange: (account: UserAccessAccount) => Promise<void> }) {
   const position = positions.find((item) => item.id === account.positionId);
   const parent = position?.parentId ? positions.find((item) => item.id === position.parentId) : undefined;
   return (
@@ -318,8 +329,8 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
         <h3>{account.fullName}</h3>
         <p><Mail size={13} /> {account.email || "Correo pendiente"}</p>
         <div className="user-detail-actions">
-          <button className="icon-button" type="button" title="Editar usuario" aria-label="Editar usuario" onClick={onEdit}><Pencil size={16} /></button>
-          <button className="icon-button" type="button" title={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} aria-label={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} onClick={() => void onChange({ ...account, status: account.status === "active" ? "inactive" : "active" })}><Power size={16} /></button>
+          <button disabled={!editable} className="icon-button" type="button" title="Editar usuario" aria-label="Editar usuario" onClick={onEdit}><Pencil size={16} /></button>
+          <button disabled={!editable} className="icon-button" type="button" title={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} aria-label={account.status === "active" ? "Desactivar usuario" : "Reactivar usuario"} onClick={() => void onChange({ ...account, status: account.status === "active" ? "inactive" : "active" })}><Power size={16} /></button>
         </div>
       </header>
       <div className="user-access-facts">
@@ -330,7 +341,7 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
       </div>
 
       {account.userType === "Usuario interno" ? (
-        <button className="organization-refresh" type="button" onClick={() => void onChange(refreshAccountFromOrganization(account, positions))}>
+        <button disabled={!editable} className="organization-refresh" type="button" onClick={() => void onChange(refreshAccountFromOrganization(account, positions))}>
           <RefreshCw size={15} /><span><strong>Restablecer desde organigrama</strong><small>Vuelve a aplicar la propuesta de procesos y permisos del puesto {account.positionId}.</small></span>
         </button>
       ) : null}
@@ -350,7 +361,7 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
       {(account.userType === "Administrador" || account.userType === "Usuario interno") ? (
         <section className="user-access-section">
           <div className="section-title-row"><h4>Acciones por módulo</h4><span className="count-badge">{account.userType === "Administrador" ? "Todas" : account.moduleActionPermissions.length}</span></div>
-          {account.userType === "Administrador" ? <div className="user-full-access"><SlidersHorizontal size={17} /> Puede consultar, crear, modificar, autorizar y administrar todos los módulos.</div> : (
+          {account.userType === "Administrador" ? <div className="user-full-access"><SlidersHorizontal size={17} /> Visibilidad global y administración del sistema. Las facultades de negocio se evalúan por operación.</div> : (
             <div className="user-capability-summary">
               {editableModulePermissionGroups.map((group) => {
                 const enabled = group.capabilities.filter((capability) => hasModuleAction(account.moduleActionPermissions, group.moduleId, capability.action));
@@ -363,7 +374,7 @@ function UserAccessDetail({ account, positions, onEdit, onChange }: { account: U
       ) : null}
 
       <section className="user-access-section">
-        <div className="section-title-row"><h4>Roles y permisos específicos</h4><span className="count-badge">{account.userType === "Administrador" ? "Todos" : Object.values(account.specificPermissions ?? {}).filter(Boolean).length}</span></div>
+        <div className="section-title-row"><h4>Roles y permisos específicos</h4><span className="count-badge">{Object.values(account.specificPermissions ?? {}).filter(Boolean).length}</span></div>
         <div className="user-capability-summary">
           {editableSpecificPermissionGroups.map((group) => {
             const enabled = group.permissions.filter(([key]) => account.specificPermissions?.[key]);
@@ -398,7 +409,8 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
   const [showCompanyCreator, setShowCompanyCreator] = useState(false);
   const [companyCreatorError, setCompanyCreatorError] = useState("");
   const [documentAccess, setDocumentAccess] = useState<ProcessDocumentAccess[]>(account?.documentAccess ?? []);
-  const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(account?.moduleActionPermissions ?? []);
+  const [moduleActionPermissions, setModuleActionPermissions] = useState<ModuleActionPermission[]>(() => normalizeModulePermissions([...(account?.moduleActionPermissions ?? []),...(account?.assignedModuleIds ?? []).map(moduleId => ({ moduleId, action:"view" as const }))]));
+  const [moduleAssignmentsTouched, setModuleAssignmentsTouched] = useState(false);
   const [specificPermissions, setSpecificPermissions] = useState<SpecificPermissionState>(account?.specificPermissions ?? {});
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -415,6 +427,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
 
   function selectPosition(nextPositionId: string) {
     setPositionId(nextPositionId);
+    setModuleAssignmentsTouched(true);
     const suggested = derivePositionAccess(nextPositionId, positions);
     setDocumentAccess(suggested?.documentAccess ?? []);
     setModuleActionPermissions(suggested?.moduleActionPermissions ?? []);
@@ -422,6 +435,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
 
   function changeUserType(nextType: UserType) {
     setUserType(nextType);
+    setModuleAssignmentsTouched(true);
     setPositionId("");
     setCompanyId("");
     setSiteId("");
@@ -452,6 +466,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
   }
 
   function toggleModuleAction(permission: ModuleActionPermission) {
+    setModuleAssignmentsTouched(true);
     setModuleActionPermissions((current) => {
       const enabled = hasModuleAction(
         current,
@@ -470,6 +485,15 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
     });
   }
 
+  function applySupplierPreset(level: string) {
+    const selected = supplierLevels.find(item => item === level);
+    if (!selected) return;
+    const updated = applySupplierLevel(selected, specificPermissions, moduleActionPermissions);
+    setModuleAssignmentsTouched(true);
+    setSpecificPermissions(updated.permissions);
+    setModuleActionPermissions(updated.modules);
+  }
+
   function toggleSpecificPermission(permission: SpecificPermissionKey) {
     const enabling = !specificPermissions[permission];
     setSpecificPermissions((current) => ({
@@ -478,6 +502,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
     }));
     const modulePermission = specificPermissionModuleAction(permission);
     if (!modulePermission) return;
+    setModuleAssignmentsTouched(true);
     setModuleActionPermissions((current) => {
       if (enabling) return normalizeModulePermissions([...current, modulePermission]);
       if (modulePermission.action === "view") {
@@ -522,6 +547,9 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
         ...built,
         id: account.id,
         authUserId: account.authUserId,
+        revision: account.revision,
+        preserveModuleAssignments: !moduleAssignmentsTouched,
+        inheritPermissions: (Object.keys(account.specificPermissions ?? {}) as SpecificPermissionKey[]).filter(key => isReopeningPermission(key) && specificPermissions[key] === undefined),
         status: account.status,
       } : built);
     } catch (error) {
@@ -548,7 +576,7 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
           {!internal && showCompanyCreator ? <QuickCompanyCreator kind={companyKind} onCancel={() => setShowCompanyCreator(false)} onError={setCompanyCreatorError} onSaved={async (company) => { await onCompaniesChange(); setCompanyId(company.id); setSiteId(company.sites[0]?.id ?? ""); setShowCompanyCreator(false); }} /> : null}
           {companyCreatorError ? <div className="form-error" role="alert">{companyCreatorError}</div> : null}
 
-          {userType === "Administrador" ? <div className="user-inheritance-preview"><div><ShieldCheck size={18} /><span><strong>Acceso total</strong><small>Todos los procesos, menús, acciones y configuraciones.</small></span></div></div> : null}
+          {userType === "Administrador" ? <div className="user-inheritance-preview"><div><ShieldCheck size={18} /><span><strong>Acceso total</strong><small>Visibilidad global y configuración de accesos.</small></span></div></div> : null}
 
           {userType === "Usuario interno" ? (
             <div className="user-permission-editor">
@@ -587,15 +615,38 @@ function UserAccountModal({ account, companies, onCompaniesChange, positions, on
             </div>
           ) : null}
 
-          {userType !== "Administrador" ? (
+          {internal ? (
             <section className="specific-permission-editor">
               <header><div><span>Rol base + excepciones</span><h4>Roles y permisos</h4></div><strong>{Object.values(specificPermissions).filter(Boolean).length}</strong></header>
               <p>Los controles muestran la configuración real guardada. Puedes agregar o retirar permisos sin recrear al usuario.</p>
+              {userType === "Usuario interno" && <label>Aplicar plantilla de proveedores
+                <select value="" onChange={event => applySupplierPreset(event.target.value)}>
+                  <option value="">Seleccionar plantilla</option>
+                  {supplierLevels.map(level => <option key={level}>{level}</option>)}
+                </select></label>}
               <div className="specific-permission-groups">
-                {editableSpecificPermissionGroups.map((group) => (
+                {editableSpecificPermissionGroups.filter(group => userType !== "Administrador" || group.id === "rncp" || group.id === "revision_direccion").map((group) => (
                   <fieldset key={group.id}>
                     <legend>{group.label}</legend>
-                    {group.permissions.map(([key, label]) => (
+                    {group.permissions.map(([key, label]) => isReopeningPermission(key) ? (
+                      <label key={key}>
+                        <span><strong>{label}</strong></span>
+                        <select value={specificPermissions[key] === undefined ? "inherit" : String(specificPermissions[key])}
+                          onChange={event => {
+                            const value = event.target.value;
+                            setSpecificPermissions(current => {
+                              const next = { ...current };
+                              if (value === "inherit") delete next[key];
+                              else next[key] = value === "true";
+                              return next;
+                            });
+                          }}>
+                          <option value="inherit">{userType === "Administrador" ? "Heredar del rol (permitido)" : "Heredar del rol"}</option>
+                          <option value="true">Permitir</option>
+                          <option value="false">Denegar</option>
+                        </select>
+                      </label>
+                    ) : (
                       <label className={specificPermissions[key] ? "enabled" : ""} key={key}>
                         <input checked={Boolean(specificPermissions[key])} onChange={() => toggleSpecificPermission(key)} type="checkbox" />
                         <span><strong>{label}</strong><small>{key}</small></span>
@@ -713,7 +764,7 @@ function specificPermissionModuleAction(permission: SpecificPermissionKey): Modu
         : family === "portal_clientes" ? "customer-portal"
           : family === "portal_proveedores" ? "supplier-portal"
             : null;
-  if (!moduleId) return null;
+  if (!moduleId || action.endsWith("_invitaciones")) return null;
   if ((family === "clientes" || family === "proveedores") && action === "ver") return null;
   const moduleAction = action === "acceder" || action === "ver" ? "view"
     : action === "crear" ? "create"

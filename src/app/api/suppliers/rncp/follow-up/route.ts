@@ -20,9 +20,10 @@ export async function GET(request: Request) {
       if(files.error)throw new RncpError("No se pudieron consultar los archivos.",files.error.code==="42501"?403:503);
       return NextResponse.json({originalFiles:(files.data??[]).filter((f:{kind:string})=>f.kind==="supplier_rncp_original").map((f:{id:string;name:string})=>({id:f.id,fileName:f.name}))},{headers:{"Cache-Control":"private, no-store"}})
     }
+    if (context.session?.specificPermissions?.["rncp.consultar_expedientes"] === false) throw new RncpError("Consulta del expediente no autorizada.",403);
     const reports = await loadMatrixReports(context, id);
-    type Action = { id: string; description: string; root_cause: string | null; action_plan: string | null; containment: string | null; commitments: string | null; status: string; created_at: string; validated_at: string | null; validation_comment: string | null };
-    const actions = await paginatedRows<Action>((from, to) => context.admin.from("supplier_rncp_actions").select("id,description,root_cause,action_plan,containment,commitments,status,created_at,validated_at,validation_comment", { count: "exact" }).eq("report_id", id).order("id").range(from, to));
+    type Action = { id: string; created_by:string; responsible_name:string; due_date:string; description: string; root_cause: string | null; action_plan: string | null; containment: string | null; commitments: string | null; status: string; created_at: string; validated_at: string | null; validation_comment: string | null };
+    const actions = await paginatedRows<Action>((from, to) => context.admin.from("supplier_rncp_actions").select("id,created_by,responsible_name,due_date,description,root_cause,action_plan,containment,commitments,status,created_at,validated_at,validation_comment", { count: "exact" }).eq("report_id", id).order("id").range(from, to));
     const evidence: Array<{ id: string; resource_id: string; original_name: string; mime_type: string; size_bytes: number; created_at: string }> = [];
     for (let offset = 0; offset < actions.length; offset += 100) {
       const batch = actions.slice(offset, offset + 100).map(action => action.id);
@@ -34,7 +35,7 @@ export async function GET(request: Request) {
       context.admin.from("audit_log").select("id,action,reason,created_at,user_name_snapshot,metadata").eq("resource_type", "supplier_rncp_report").eq("resource_id", id).order("created_at", { ascending: false }),
     ]);
     if (notifications.error || history.error) throw new RncpError("No se pudo consultar la trazabilidad completa.", 503);
-    return NextResponse.json({ originalFiles: reports[0].originalFiles, actions: actions.map(action => ({ ...action, evidence: evidence.filter(file => file.resource_id === action.id) })), notifications: notifications.data, history: history.data }, { headers: { "Cache-Control": "private, no-store" } });
+    return NextResponse.json({ originalFiles: reports[0].originalFiles, actions: actions.map(({created_by,...action}) => ({ ...action, editable:created_by===context.profile.id && ["pending","in_progress"].includes(action.status), evidence: evidence.filter(file => file.resource_id === action.id) })), notifications: notifications.data, history: history.data }, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return failure(error); }
 }
 export async function POST(request: Request) {
@@ -42,8 +43,17 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null) as Record<string, unknown> | null;
     if (!body || typeof body.command !== "string") throw new RncpError("Operación RNCP inválida.");
     const command = body.command;
-    const context = await rncpContext(["config", "review_alert", "evaluate"].includes(command) ? "admin" : "update", ["save_response", "submit_delivery"].includes(command));
+    const context = await rncpContext(["review_alert", "evaluate"].includes(command) ? "admin" : command === "config" ? "config" : "update", ["save_response", "submit_delivery"].includes(command));
+    if (command === "prepare_mail" || command === "confirm_mail") {
+      const result = await context.supabase.rpc("iq_rncp_manual_mail", {
+        p_report:body.reportId, p_kind:body.kind, p_request:body.requestId,
+        p_reference:command === "confirm_mail" ? String(body.reference ?? "") : null,
+      });
+      if (result.error) throw new RncpError(result.error.message.includes("RECIPIENT") ? "Falta un contacto verificado en el expediente." : "No se pudo registrar esta comunicación.",result.error.code === "42501" ? 403 : 409);
+      return NextResponse.json(result.data,{headers:{"Cache-Control":"private, no-store"}});
+    }
     if (command === "config") {
+      if (context.profile.user_type !== "administrator" && context.session?.specificPermissions?.["rncp.configurar_modulo"] !== true) throw new RncpError("Configuración no autorizada.",403);
       const current = await readRncpSettings(context);
       if (body.emailEnabled) throw new RncpError("La activación de correos reales requiere autorización independiente.", 403);
       const semanticAiApproved = body.semanticAiApproved === true;
@@ -81,16 +91,18 @@ export async function POST(request: Request) {
       if (result.error) throw new RncpError("El avance no se guardó: verifica expediente, campos y permisos.", 409);
       return NextResponse.json({ actionId: result.data });
     }
-    if (!["record_manual_notification", "submit_delivery", "approve", "reject", "reconcile"].includes(command)) throw new RncpError("Operación RNCP no permitida.");
+    if (!["record_manual_notification", "submit_delivery", "approve", "manage_plan", "validate_actions", "verify_effectiveness", "close_plan", "close_report", "reject", "reconcile"].includes(command)) throw new RncpError("Operación RNCP no permitida.");
     if (command === "record_manual_notification" && process.env.RNCP_FLOW_ENABLED !== "true") throw new RncpError("El registro de comunicación todavía no está habilitado.", 409);
     const result = await context.supabase.rpc("iq_rncp_followup_command", { p_report_id: reportId, p_command: command, p_payload: payload });
     if (result.error) {
       const msg = result.error.message;
       throw new RncpError(msg.includes("REQUIREMENTS_INCOMPLETE") ? "Faltan requisitos o evidencias válidas. La entrega no pasó a validación."
+        : msg.includes("PLAN_CLOSURE_REQUIRED") ? "Primero cierra el plan de acción."
+        : msg.includes("EFFECTIVENESS_REQUIRED") ? "Registra la verificación de efectividad antes de cerrar el plan."
         : msg.includes("CURRENT_OFFICIAL_PDF_REQUIRED") ? "Comprueba la versión vigente del PDF y que la fecha de comunicación sea posterior a su emisión."
         : msg.includes("REGISTERED_REPORT_REQUIRED") ? "Primero registra el reporte y genera su PDF oficial."
         : msg.includes("IMMUTABLE") ? "La notificación original y su vencimiento no pueden reiniciarse."
-        : msg.includes("INSPECTOR") ? "Sólo inspectormp puede validar y cerrar una entrega completa."
+        : msg.includes("INSPECTOR") ? "Se requieren las facultades correspondientes y una entrega completa pendiente de validación."
         : msg.includes("HISTORICAL") ? "Los registros importados conservan su estado histórico; no se les aplica un temporizador nuevo."
         : "La operación no se completó. Verifica permisos, estado y datos obligatorios.", msg.includes("FORBIDDEN") || msg.includes("INSPECTOR") ? 403 : 409);
     }

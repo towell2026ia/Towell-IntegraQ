@@ -4,7 +4,7 @@ import { ExternalPortalShell } from "./modules/supplier-portal-view";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ContinuityProvider } from "@/components/workspace-continuity";
-import { clearContinuity, confirmLeaving, continuityIdentity, sessionAccessKey, traceContinuity } from "@/lib/workspace-continuity";
+import { clearContinuity, listenForBackgroundRefresh, confirmLeaving, continuityIdentity, sessionAccessKey, traceContinuity } from "@/lib/workspace-continuity";
 
 import { StakeholderPortalModule } from "@/components/modules/stakeholder-portal-module";
 import { LoginScreen } from "@/components/auth/login-screen";
@@ -33,6 +33,22 @@ export function IntegraQApp({ initialSession }: IntegraQAppProps) {
   const [authIdentity,setAuthIdentity]=useState(initialSession?.authUserId??null);
   const verifiedIdentity=initialSession?.authUserId;
   const previousAccess=useRef<string|null>(null);
+  useEffect(()=>{
+    if (!initialSession?.authUserId || initialSession.workspaceMode !== "production") return;
+    const current = sessionAccessKey(initialSession);
+    let mounted = true;
+    async function verify() {
+      const result = await fetch("/api/session/access",{cache:"no-store",signal:AbortSignal.timeout(12000)});
+      if (result.status !== 401 && !result.ok) return;
+      const changed = result.status === 401 || (await result.json()).access !== current;
+      if (mounted && changed) {
+        clearContinuity("permission-change");
+        router.refresh();
+      }
+    }
+    const stop=listenForBackgroundRefresh("permissions",verify,1500);
+    return ()=>{mounted=false;stop();};
+  },[initialSession,router]);
   useEffect(()=>{
     const access=initialSession?sessionAccessKey(initialSession):null;
     traceContinuity("server-session-snapshot",access===previousAccess.current?"same-access":"access-change");previousAccess.current=access;

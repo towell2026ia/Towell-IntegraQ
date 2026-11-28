@@ -96,7 +96,7 @@ export async function getVerifiedSessionContext(timing?: (phase: string, ms: num
   const specificPermissionData: { allowed: boolean; permission: Permission | Permission[] | null }[] | undefined = profileData?.overrides;
   timing?.("permissions", performance.now() - claimsChecked);
   const profile = profileData as ProfileRow | null;
-  if (profile?.status === "inactive") return { session: null, supabase, profile: null, failure: "inactive" as const };
+  if (!profile || profile.status !== "active") return { session: null, supabase, profile: null, failure: "inactive" as const };
   // A supplier membership can read its public identity without receiving the private directory row.
   if (profile?.user_type === "supplier" && profile.workspace_mode === "production" &&
       profile.external_party_id && !profile.external_party) {
@@ -115,13 +115,7 @@ export async function getVerifiedSessionContext(timing?: (phase: string, ms: num
     (typeof userMetadata.full_name === "string"
       ? userMetadata.full_name
       : "Usuario IntegraQ");
-  const rawUserType = profile?.user_type ??
-    (appMetadata.user_type === "administrator" ||
-    appMetadata.user_type === "internal" ||
-    appMetadata.user_type === "customer" ||
-    appMetadata.user_type === "supplier"
-      ? appMetadata.user_type
-      : "internal");
+  const rawUserType = profile.user_type;
 
   const assignedProcessIds = (processData ?? []).map(
     (row) => row.process_id as string,
@@ -151,6 +145,11 @@ export async function getVerifiedSessionContext(timing?: (phase: string, ms: num
     }),
   );
 
+  if (profile.workspace_mode === "production" && (profile.user_type === "internal" || profile.user_type === "administrator")) {
+    const current = await supabase.rpc("iq_quality_session_permissions");
+    if (current.error) return { session: null, supabase, profile: null, failure: "unavailable" as const };
+    Object.assign(specificPermissions, current.data);
+  }
   const session: ActiveSession = {
     userId: profile?.external_id || claims.sub,
     authUserId: claims.sub,

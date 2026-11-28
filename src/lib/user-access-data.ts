@@ -17,13 +17,16 @@ import type {
   ProcessDocumentAccess,
   UserType,
 } from "@/lib/session-data";
-import type { SpecificPermissionState } from "@/lib/specific-permissions";
+import type { SpecificPermissionKey, SpecificPermissionState } from "@/lib/specific-permissions";
 
 export type UserAccountStatus = "active" | "inactive";
 
 export interface UserAccessAccount {
   id: string;
   authUserId?: string;
+  revision?: string;
+  preserveModuleAssignments?: boolean;
+  inheritPermissions?: SpecificPermissionKey[];
   fullName: string;
   email: string;
   userType: UserType;

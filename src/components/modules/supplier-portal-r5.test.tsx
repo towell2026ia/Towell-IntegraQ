@@ -25,6 +25,8 @@ function page(userType: ActiveSession["userType"], access = true) {
     authUserId: "user-a",
     workspaceMode: "production",
     userType,
+    organizationId: "workspace",
+    assignedModuleIds: ["suppliers","supplier-portal"],
     specificPermissions: { "portal_proveedores.acceder": access },
     externalParty:
       userType === "Proveedor"
@@ -41,10 +43,11 @@ function page(userType: ActiveSession["userType"], access = true) {
   );
 }
 describe("U07-R5 portal entry", () => {
-  it("requires an administrator for the internal selector and starts without an expediente", () => {
+  it("shows the selector to scoped internal staff and starts without an expediente", () => {
     expect(page("Administrador")).toContain("Seleccionar proveedor");
     expect(page("Administrador")).not.toContain("Usuarios con acceso");
-    expect(page("Usuario interno")).toContain("Acceso no disponible");
+    expect(page("Usuario interno")).toContain("Seleccionar proveedor");
+    expect(page("Usuario interno",false)).not.toContain("Seleccionar proveedor");
   });
   it("respects an explicit denial and renders published records for the current calendar year", () => {
     const now = new Date().getFullYear();

@@ -7,7 +7,7 @@ export const maxDuration=60;
 export async function GET(_request:Request,{params}:{params:Promise<{reportId:string}>}){
  if(!mailConfiguration())return new Response(null,{status:404});
  try{const {reportId}=await params;if(!/^[a-f0-9-]{36}$/i.test(reportId))throw new RncpError("RNCP no válido.");
-  const context=await rncpContext("update");const prepared=await prepareInitialNotification(context,reportId),config=mailConfiguration(),connected=await connectedMailbox(context),sender=await loginMailbox(context);
+  const context=await rncpContext("update");if(context.session?.specificPermissions?.["rncp.enviar_rncp"]!==true)throw new RncpError("Envío de RNCP no autorizado.",403);const prepared=await prepareInitialNotification(context,reportId),config=mailConfiguration(),connected=await connectedMailbox(context),sender=await loginMailbox(context);
   let job:Awaited<ReturnType<typeof initialMailJob>>=null,activationError="";try{job=await initialMailJob(context,reportId);}catch(e){activationError=e instanceof Error?e.message:"Activación pendiente";}
   const pending=prepared.pending.filter(p=>!p.startsWith("Transporte corporativo")&&!p.startsWith("Activación individual"));
   if(!config)pending.push("Microsoft 365 pendiente de configuración y activación autorizada");else if(!connected)pending.push("Conectar el buzón de la cuenta que inició sesión");if(activationError)pending.push(activationError);if(job&&job.attempts>=5&&job.initial_phase!=="accepted")pending.push("Se agotaron cinco intentos. Requiere revisión antes de otra operación.");
@@ -21,6 +21,7 @@ export async function POST(request:Request,{params}:{params:Promise<{reportId:st
   if(request.headers.get("origin")!==new URL(config.redirect).origin)throw new RncpError("Origen de solicitud no autorizado.",403);
   const {reportId}=await params;if(!/^[a-f0-9-]{36}$/i.test(reportId))throw new RncpError("RNCP no válido.");
   const context=await rncpContext("update"),body=await request.json().catch(()=>null) as {command?:string;confirmed?:boolean;expected?:Record<string,unknown>;reason?:string}|null;
+  if(context.session?.specificPermissions?.["rncp.enviar_rncp"]!==true)throw new RncpError("Envío de RNCP no autorizado.",403);
   if(!body)throw new RncpError("Solicitud no válida.");
   if(body.command==="reconcile")return Response.json(await reconcileInitialMail(context,reportId),{headers:{"Cache-Control":"private, no-store"}});
   if(body.command!=="send"||body.confirmed!==true||!body.expected||typeof body.reason!=="string"||body.reason.trim().length<5)throw new RncpError("Confirma el envío individual, destinatario, PDF y motivo.");

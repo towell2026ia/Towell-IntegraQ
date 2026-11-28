@@ -11,16 +11,16 @@ const maxBytes = 25 * 1024 * 1024;
 
 class AdministratorRequired extends Error {}
 
-async function requirePortalAdministrator() {
+async function requirePortalAdministrator(readOnly = false) {
   const actor = await resolveCustomerPortalActor(await getAuthenticatedSession());
-  if (actor?.kind !== "administrator") throw new AdministratorRequired();
+  if (!actor || (actor.kind !== "administrator" && !(readOnly && actor.kind === "internal"))) throw new AdministratorRequired();
   await requireIndividualPublication();
-  return { id: actor.userId, workspaceId: actor.workspaceId };
+  return { id: actor.userId, workspaceId: actor.workspaceId, publishedOnly: actor.kind === "internal" };
 }
 
 export async function GET(request: Request) {
   try {
-    const actor = await requirePortalAdministrator();
+    const actor = await requirePortalAdministrator(true);
     const db = createAdminClient();
     const customerId = new URL(request.url).searchParams.get("customerId");
     const general = new URL(request.url).searchParams.get("scope") === "general";
@@ -34,6 +34,7 @@ export async function GET(request: Request) {
       .select("id,customer_id,display_name,description,version,status,file_id,created_at,published_at,withdrawn_at,withdrawal_reason,created_by,published_by,withdrawn_by,revision")
       .eq("workspace_id", actor.workspaceId);
     pubs = general ? pubs.eq("publication_scope","general").is("customer_id",null) : pubs.eq("customer_id",customerId);
+    if (actor.publishedOnly) pubs = pubs.eq("status","published");
     const result = await pubs.order("created_at", { ascending: false });
     if (result.error) throw result.error;
     const publicationRows = result.data ?? [];

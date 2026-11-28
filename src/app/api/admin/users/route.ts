@@ -15,6 +15,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 import {
   editableSpecificPermissionKeys,
+  isReopeningPermission,
   type SpecificPermissionKey,
 } from "@/lib/specific-permissions";
 import type { UserAccessAccount } from "@/lib/user-access-data";
@@ -56,6 +57,7 @@ type ProfileRow = {
   external_party_name: string | null;
   external_site_id: string | null;
   created_at: string;
+  updated_at: string;
 };
 
 async function requireUserPermission(permission: SpecificPermissionKey) {
@@ -64,15 +66,15 @@ async function requireUserPermission(permission: SpecificPermissionKey) {
   if (!userData.user) return null;
   const { data: profile } = await supabase
     .from("profiles")
-    .select("user_type,status")
+    .select("user_type,status,organization_id,workspace_mode")
     .eq("id", userData.user.id)
     .maybeSingle();
-  if (profile?.status !== "active") return null;
-  if (profile.user_type === "administrator") return userData.user;
+  if (profile?.status !== "active" || profile.workspace_mode !== "production" || !["internal","administrator"].includes(profile.user_type)) return null;
+  if (profile.user_type === "administrator") return {id:userData.user.id,global:true,org:profile.organization_id};
   const { data: allowed } = await supabase.rpc("has_permission", {
     requested_permission: permission,
   });
-  return allowed ? userData.user : null;
+  return allowed ? {id:userData.user.id,global:false,org:profile.organization_id} : null;
 }
 
 export async function GET() {
@@ -93,6 +95,7 @@ async function listAccounts() {
     return NextResponse.json({ error: "Acceso exclusivo para administrador." }, { status: 403 });
   }
   const admin = createAdminClient();
+  const profileQuery = admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at,updated_at").order("full_name");
   const [
     profilesResult,
     positionsResult,
@@ -103,7 +106,7 @@ async function listAccounts() {
     externalSitesResult,
     authUsersResult,
   ] = await Promise.all([
-    admin.from("profiles").select("id,external_id,full_name,position_id,position_name,department,company,user_type,status,continuous_improvement_role,external_party_id,external_party_name,external_site_id,created_at").order("full_name"),
+    actor.global ? profileQuery : profileQuery.eq("organization_id",actor.org).eq("user_type","internal"),
     admin.from("positions").select("id,name,branch"),
     admin.from("user_process_permissions").select("user_id,process_id,document_role,inherited_from_position_id"),
     admin.from("user_module_permissions").select("user_id,module_id,can_view"),
@@ -167,17 +170,11 @@ async function listAccounts() {
           )
           .map((permission) => permission.module_id)
           .filter(isWorkspaceModuleId);
-    const specificPermissions = Object.fromEntries(
-      editableSpecificPermissionKeys.map((key) => [
-        key,
-        profile.user_type === "administrator"
-          ? true
-          : (permissionOverridesResult.data ?? []).find((row) => {
-              const relation = Array.isArray(row.permission) ? row.permission[0] : row.permission;
-              return row.user_id === profile.id && relation?.code === key;
-            })?.allowed ?? false,
-      ]),
-    );
+    const specificPermissions = Object.fromEntries((permissionOverridesResult.data ?? []).flatMap(row => {
+      const permission = Array.isArray(row.permission) ? row.permission[0] : row.permission;
+      return row.user_id === profile.id && permission && editableSpecificPermissionKeys.includes(permission.code as SpecificPermissionKey)
+        ? [[permission.code,row.allowed]] : [];
+    }));
 
     return {
       ...(() => {
@@ -186,6 +183,7 @@ async function listAccounts() {
       })(),
       id: profile.external_id,
       authUserId: profile.id,
+      revision: profile.updated_at,
       fullName: profile.full_name,
       email: emails.get(profile.id) ?? "",
       userType: userTypeFromDatabase[profile.user_type],
@@ -249,6 +247,15 @@ async function saveAccount(request: Request, create: boolean) {
     return NextResponse.json({ error: "Nombre y correo son obligatorios." }, { status: 400 });
   }
   const admin = createAdminClient();
+  if (!actor.global) return NextResponse.json({error:"La configuración integral de una cuenta requiere administración global."},{status:403});
+  if (account.authUserId === actor.id) return NextResponse.json({error:"No puedes cambiar tus propias autorizaciones."},{status:403});
+  if (!create && !account.revision) return NextResponse.json({error:"Recarga la cuenta para editar su versión vigente."},{status:409});
+  if (Object.keys(account.specificPermissions ?? {}).some(code => !editableSpecificPermissionKeys.includes(code as SpecificPermissionKey))) return NextResponse.json({error:"Permiso fuera del catálogo."},{status:400});
+  const inherited = account.inheritPermissions ?? [];
+  if (!Array.isArray(inherited) || inherited.some(key => !isReopeningPermission(key) || account.specificPermissions?.[key] !== undefined)
+      || Object.values(account.specificPermissions ?? {}).some(value => typeof value !== "boolean")) {
+    return NextResponse.json({error:"Configuración de permisos no válida."},{status:400});
+  }
   const external = account.userType === "Cliente" || account.userType === "Proveedor";
   if (external && !isUuid(account.companyId)) {
     return NextResponse.json(
@@ -277,6 +284,11 @@ async function saveAccount(request: Request, create: boolean) {
       account.siteName = siteResult.data.name;
     }
   }
+  const databaseUserType = userTypeToDatabase[account.userType];
+  const { data: position, error: positionError } = account.positionId
+    ? await admin.from("positions").select("name,branch,organization_id").eq("id", account.positionId).maybeSingle()
+    : { data: null, error: null };
+  if (!external && (!position?.organization_id || positionError)) return NextResponse.json({error:"El puesto no tiene organización vigente."},{status:400});
   let userId = account.authUserId;
   if (create) {
     const siteUrl = getPublicSiteUrl(request);
@@ -296,23 +308,12 @@ async function saveAccount(request: Request, create: boolean) {
     return NextResponse.json({ error: "Usuario de autenticación inválido." }, { status: 400 });
   }
 
-  const databaseUserType = userTypeToDatabase[account.userType];
-  const { error: authError } = await admin.auth.admin.updateUserById(userId, {
-    email: account.email.trim().toLocaleLowerCase("es-MX"),
-    user_metadata: { full_name: account.fullName.trim() },
-    app_metadata: { user_type: databaseUserType },
-  });
-  if (authError) {
-    return NextResponse.json({ error: authError.message }, { status: 400 });
-  }
-
-  const { data: position } = account.positionId
-    ? await admin.from("positions").select("name,branch,organization_id").eq("id", account.positionId).maybeSingle()
-    : { data: null };
+  const identity = await admin.auth.admin.getUserById(userId);
+  if (identity.error || !identity.data.user) return NextResponse.json({error:"Cuenta de autenticación no disponible."},{status:409});
+  // Permission-only saves do not touch Auth or replace the active session.
+  const emailChanged = identity.data.user.email?.toLowerCase() !== account.email.trim().toLowerCase();
   const names = account.fullName.trim().split(/\s+/).filter(Boolean);
-  const { error: profileError } = await admin
-    .from("profiles")
-    .update({
+  const profile = {
       full_name: account.fullName.trim(),
       short_name: names.length > 1 ? `${names[0]} ${names[1][0]}.` : names[0],
       initials: names.slice(0, 2).map((name) => name[0]).join("").toLocaleUpperCase("es-MX"),
@@ -339,120 +340,35 @@ async function saveAccount(request: Request, create: boolean) {
       external_party_name: external ? account.companyName ?? null : null,
       external_site_id: external ? account.siteId ?? null : null,
       site: external ? account.siteName ?? null : null,
-    })
-    .eq("id", userId);
-  if (profileError) {
-    return NextResponse.json({ error: profileError.message }, { status: 400 });
-  }
-
-  if (account.userType === "Usuario interno") {
-    const normalizedActions = normalizeModulePermissions(
-      account.moduleActionPermissions,
-    );
-    const visibleModules = new Set<WorkspaceModuleId>([
-      "home",
-      ...account.assignedModuleIds,
-      ...normalizedActions.map((permission) => permission.moduleId),
-    ]);
-    const deletes = await Promise.all([
-      admin.from("user_process_permissions").delete().eq("user_id", userId),
-      admin.from("user_module_permissions").delete().eq("user_id", userId),
-      admin.from("user_module_action_permissions").delete().eq("user_id", userId),
-    ]);
-    const deleteError = deletes.find((result) => result.error)?.error;
-    if (deleteError) {
-      return NextResponse.json({ error: deleteError.message }, { status: 400 });
-    }
-
-    const inserts = await Promise.all([
-      account.documentAccess.length
-        ? admin.from("user_process_permissions").insert(
-            account.documentAccess.map((permission) => ({
-              user_id: userId,
-              process_id: permission.processId,
-              document_role: permission.role,
-              source: "direct",
-              inherited_from_position_id: null,
-            })),
-          )
-        : Promise.resolve({ error: null }),
-      visibleModules.size
-        ? admin.from("user_module_permissions").insert(
-            [...visibleModules].map((moduleId) => ({
-              user_id: userId,
-              module_id: moduleId,
-              can_view: true,
-              can_manage: normalizedActions.some(
-                (permission) =>
-                  permission.moduleId === moduleId &&
-                  permission.action === "manage",
-              ),
-              source: "direct",
-              inherited_from_position_id: null,
-            })),
-          )
-        : Promise.resolve({ error: null }),
-      normalizedActions.length
-        ? admin.from("user_module_action_permissions").insert(
-            normalizedActions.map((permission) => ({
-              user_id: userId,
-              module_id: permission.moduleId,
-              action: permission.action,
-              source: "direct",
-              inherited_from_position_id: null,
-            })),
-          )
-        : Promise.resolve({ error: null }),
-    ]);
-    const insertError = inserts.find((result) => result.error)?.error;
-    if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 400 });
-    }
-  }
-
-  {
-    const { data: permissionRows, error: permissionError } = await admin
-      .from("permissions")
-      .select("id,code")
-      .in("code", editableSpecificPermissionKeys);
-    if (permissionError) {
-      return NextResponse.json({ error: permissionError.message }, { status: 400 });
-    }
-    if (permissionRows?.length) {
-      const { error: overrideError } = await admin
-        .from("user_permission_overrides")
-        .upsert(permissionRows.map((permission) => ({
-          user_id: userId,
-          permission_id: permission.id,
-          allowed: account.userType === "Administrador"
-            ? true
-            : Boolean(account.specificPermissions?.[permission.code as SpecificPermissionKey]),
-          granted_by: actor.id,
-        })), { onConflict: "user_id,permission_id" });
-      if (overrideError) {
-        return NextResponse.json({ error: overrideError.message }, { status: 400 });
-      }
-    }
-  }
-
-  await admin.from("audit_log").insert({
-    actor_id: actor.id,
-    action: create ? "user.created" : "user.access_updated",
-    resource_type: "profile",
-    resource_id: userId,
-    metadata: {
-      user_type: databaseUserType,
-      process_count: account.documentAccess.length,
-      module_action_count: account.moduleActionPermissions.length,
-      specific_permissions: account.specificPermissions ?? {},
-      external_company_id: external ? account.companyId : null,
-      external_site_id: external ? account.siteId ?? null : null,
-    },
+  };
+  const internal = databaseUserType === "internal";
+  const actions = internal ? normalizeModulePermissions(account.moduleActionPermissions) : [];
+  const modules = internal ? [...new Set(["home",...account.assignedModuleIds,...actions.map(item => item.moduleId)])] : [];
+  const preserveModules = !create && account.preserveModuleAssignments === true;
+  const result = await admin.rpc("iq_save_account_permissions",{
+    p_actor:actor.id,p_user:userId,p_revision:account.revision ?? null,p_profile:profile,
+    p_processes:internal ? account.documentAccess : [],p_modules:preserveModules ? null : modules,p_actions:preserveModules ? null : actions,
+    p_specific:{...account.specificPermissions,...Object.fromEntries(inherited.map(key => [key,null]))},p_create:create,
   });
+  if (result.error || !result.data) {
+    const conflict = result.error?.code === "40001";
+    return NextResponse.json({error: conflict ? "La cuenta cambió. Recarga antes de guardar." : "No se pudieron confirmar los permisos."},{status:conflict ? 409 : 400});
+  }
+  const nameChanged = identity.data.user.user_metadata?.full_name !== account.fullName.trim();
+  const typeChanged = identity.data.user.app_metadata?.user_type !== databaseUserType;
+  if (emailChanged || nameChanged || typeChanged) {
+    const changed = await admin.auth.admin.updateUserById(userId,{
+      ...(emailChanged && {email:account.email.trim().toLowerCase()}),
+      ...(nameChanged && {user_metadata:{full_name:account.fullName.trim()}}),
+      ...(typeChanged && {app_metadata:{user_type:databaseUserType}}),
+    });
+    if (changed.error) return NextResponse.json({error:"Los permisos se guardaron. La identidad de acceso requiere sincronización. Recarga la cuenta."},{status:409});
+  }
 
   return NextResponse.json({
     ok: true,
     userId,
+    revision: result.data,
     message: create
       ? `Invitación enviada a ${account.email.trim().toLocaleLowerCase("es-MX")}.`
       : "Usuario actualizado.",

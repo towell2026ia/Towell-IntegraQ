@@ -92,6 +92,12 @@ const report = randomUUID(),
 await execute(`insert into public.management_reviews values('${report}',2025,'${admin}','external','2025');
  insert into public.management_review_decisions(id,review_id,description,priority,due_date) values('${legacy}','${report}','Original','low','2025-01-01');`);
 await execute(read("docs/database/proposals/IQ-RE-04-SALIDAS.sql"));
+await execute(`create schema if not exists integraq_private;
+ create table public.permissions(id uuid primary key default gen_random_uuid(),code text unique,module text,action text,description text,risk_level text,status text default 'active');
+ create table public.user_permission_overrides(user_id uuid,permission_id uuid references public.permissions,allowed boolean,primary key(user_id,permission_id));`);
+const facultyMigration=read("supabase/migrations/20261128020100_prd_seg_01_1_rncp_faculties.sql");
+await execute(facultyMigration.slice(facultyMigration.indexOf("create function integraq_private.may_reopen"),facultyMigration.indexOf("create function public.iq_rncp_faculty")));
+await execute(read("supabase/migrations/20261128023000_prd_seg_01_1_reaperturas_direccion.sql"));
 const session = (actor, query) =>
   `begin;set local role authenticated;set local request.jwt.claim.sub='${actor}';${query};commit;`;
 async function check(actor, predicate, label) {
@@ -251,7 +257,15 @@ await denied(
 await send(admin, "validate_action", 7, { note: "Resultado revisado" }, action);
 await send(admin, "cancel_action", 8, { note: "Motivo documentado" }, second);
 await send(director, "close", 9, { note: "Conclusión documentada" });
-await send(admin, "reopen", 10, { note: "Revisar de nuevo" });
+await denied(assignee, rpc("reopen", 10, {note:"Otra revisión"}), /VALIDATE/);
+await denied(admin, rpc("reopen", 10, {note:" "}), /VALIDATE/);
+const override = (actor, action, allowed) => execute(`insert into public.user_permission_overrides select '${actor}',id,${allowed} from public.permissions where code='revision_direccion.'||'${action}' on conflict(user_id,permission_id) do update set allowed=excluded.allowed`);
+await override(admin, "reabrir_acuerdos", false);
+await denied(admin, rpc("reopen", 10, {note:"Revisar acuerdo"}), /VALIDATE/);
+await check(admin, "(iq_re04_context()->>'reopenAction')::boolean and not (iq_re04_context()->>'reopenDecision')::boolean", "denegación específica del administrador");
+await override(assignee, "reabrir_acuerdos", true);
+await send(assignee, "reopen", 10, { note: "Revisar de nuevo" });
+await execute(`select public.test_assert(exists(select 1 from public.audit_log where action='reopen' and actor_id='${assignee}' and resource_id='${decision}' and reason='Revisar de nuevo' and metadata->>'previous_state'='completed' and metadata->'previous_closure'->>'resolution'='Conclusión documentada' and metadata->>'occurred_at' is not null),'historial anterior al reabrir acuerdo');`);
 await check(
   admin,
   `(select count(*)=11 from public.review_output_events where decision_id='${decision}')`,
@@ -281,6 +295,10 @@ await check(
   `not exists(select from public.management_review_decisions where id='${decision}')`,
   "el cambio de permisos surte efecto",
 );
+await override(admin,"reabrir_acciones",false);
+await denied(admin, rpc("reopen_action",11,{note:"Nueva evidencia"},action),/VALIDATE/);
+await send(director,"reopen_action",11,{note:"Nueva evidencia"},action);
+await execute(`select public.test_assert(exists(select from public.audit_log where action='reopen_action' and actor_id='${director}' and metadata->>'previous_state'='completed' and metadata->'previous_closure'->>'validated_by'='${admin}'),'historial previo de la acción');`);
 const info = randomUUID();
 await send(
   admin,
@@ -376,7 +394,7 @@ await check(
   "la asignación no concede permiso sobre el proceso",
 );
 if (embedded) {
-  const same = rpc("assign", 11, {
+  const same = rpc("assign", 12, {
     owner: viewer,
     note: "Cambio de responsable",
   });
@@ -386,12 +404,12 @@ if (embedded) {
   ]);
   await check(
     admin,
-    `(select revision=12 from public.management_review_decisions where id='${decision}')`,
+    `(select revision=13 from public.management_review_decisions where id='${decision}')`,
     "dos reintentos desde el cliente local conservan un recibo",
   );
 }
 if (native) {
-  const identical = rpc("assign", 11, {
+  const identical = rpc("assign", 12, {
     owner: viewer,
     note: "Responsable vigente",
   });
@@ -399,11 +417,11 @@ if (native) {
   await Promise.all([run(identical), run(identical)]);
   await check(
     admin,
-    `(select revision=12 from public.management_review_decisions where id='${decision}')`,
+    `(select revision=13 from public.management_review_decisions where id='${decision}')`,
     "dos conexiones con la misma operación",
   );
   const competing = () =>
-    run(rpc("assign", 12, { owner: viewer, note: "Confirmación documentada" }));
+    run(rpc("assign", 13, { owner: viewer, note: "Confirmación documentada" }));
   const results = await Promise.allSettled([competing(), competing()]);
   assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
   assert.match(
@@ -412,7 +430,7 @@ if (native) {
   );
   await check(
     admin,
-    `(select revision=13 from public.management_review_decisions where id='${decision}')`,
+    `(select revision=14 from public.management_review_decisions where id='${decision}')`,
     "dos conexiones con la misma revisión",
   );
   const newIds = [randomUUID(), randomUUID()];
@@ -446,4 +464,5 @@ if (process.argv.includes("--reports")) {
   const {testReviewReports}=await import("./test-re05-reports.mjs");
   await testReviewReports({execute,session,admin,director,viewer,external,other,org,check,native});
 }
+await execute(read("supabase/operations/prd_seg_01_1_reaperturas_direccion_rollback.sql"));
 await embedded?.close();

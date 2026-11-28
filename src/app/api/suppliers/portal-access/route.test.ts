@@ -22,13 +22,13 @@ describe("administrative invitation directory", () => {
   const read = () => GET(new Request("https://integraq.test/api/suppliers/portal-access?supplier=company&recipients=1"));
   beforeEach(() => {
     vi.resetAllMocks();
-    mock.context.mockResolvedValue({ organizationId: "org", supabase: { rpc: mock.rpc }, admin: { from: mock.from } });
+    mock.context.mockResolvedValue({ organizationId: "org", profile:{user_type:"internal"}, session:{workspaceMode:"production",organizationId:"org",userType:"Usuario interno",assignedModuleIds:["suppliers","supplier-portal"],specificPermissions:{"portal_proveedores.emitir_invitaciones":true}}, supabase: { rpc: mock.rpc }, admin: { from: mock.from } });
   });
   it("requires access to the selected supplier before reading contacts", async () => {
     mock.rpc.mockResolvedValue({ data: null, error: { code: "42501" } });
     expect((await read()).status).toBe(403);
-    expect(mock.context).toHaveBeenCalledWith("admin");
-    expect(mock.rpc).toHaveBeenCalledWith("iq_supplier_portal_admin", {p_supplier:"company"});
+    expect(mock.context).toHaveBeenCalledWith("view");
+    expect(mock.rpc).toHaveBeenCalledWith("iq_supplier_portal_staff", {p_supplier:"company",p_action:"emitir"});
     expect(mock.from).not.toHaveBeenCalled();
   });
   it("projects all active contacts from the current dossier, including contacts without an address", async () => {
@@ -48,8 +48,8 @@ describe("administrative invitation directory", () => {
     expect(response.status).toBe(200);
     const result = await response.json();
     expect(result.contacts).toEqual([
-      { id:"a", name:"Ana", email:"a@example.invalid", purpose:"Supervisión" },
-      { id:"b", name:"Bruno", email:"", purpose:"Logística" },
+      { id:"a", unavailable:false, name:"Ana", email:"a@example.invalid", purpose:"Supervisión" },
+      { id:"b", unavailable:false, name:"Bruno", email:"", purpose:"Logística" },
     ]);
     expect(result).not.toHaveProperty("reports");
     expect(mock.from.mock.calls.map(([table]) => table)).toEqual([

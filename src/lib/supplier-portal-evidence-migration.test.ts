@@ -12,10 +12,12 @@ const portal = readFileSync(join(process.cwd(), "src/components/modules/stakehol
 const fileRoute = readFileSync(join(process.cwd(), "src/app/api/suppliers/rncp/evidence/[fileId]/route.ts"), "utf8");
 
 describe("supplier portal evidence contract", () => {
-  it("keeps evidence private and returns an expiring signed URL", () => {
+  it("rechecks private evidence access when the file is read", () => {
     expect(migration).toContain("bucket_id = 'integraq-private'");
     expect(migration).toContain("can_upload_supplier_rncp_evidence");
-    expect(fileRoute).toContain("createSignedUrl(record.data.object_path, 120)");
+    expect(fileRoute).toContain("storage.download(record.data.object_path)");
+    expect(fileRoute).toContain('supabase.rpc("iq_rncp_read_scope"');
+    expect(fileRoute).not.toContain("createSignedUrl");
     expect(fileRoute).not.toContain("getPublicUrl");
   });
 

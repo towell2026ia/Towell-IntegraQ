@@ -6,6 +6,8 @@ import { SupplierPendingFiles, supplierFileTypes } from "./supplier-pending-file
 import supplierStyles from "./supplier-portal.module.css";
 import type { Dispatch, SetStateAction } from "react";
 import { SupplierReportFiles } from "./supplier-report-files";
+import { CustomerAccessPanel } from "./customer-access-panel";
+import { canSupervisePortal, invitationPermissions } from "@/lib/portal-staff-permissions";
 import { SupplierPortalAdmin } from "./supplier-portal-admin";
 import { canAccessModule } from "@/lib/access-policy";
 import { reportOperationalState, reportStateLabel } from "@/lib/rncp/flow";
@@ -49,18 +51,18 @@ type PortalKind = "customer" | "supplier";
 
 type CustomerPublication = { id: string; customer_id: string | null; display_name: string; description: string | null; version: number; status: "draft" | "published" | "withdrawn" | "superseded"; file_id: string; original_name?: string; size_bytes?: number; revision: number; withdrawal_reason?: string | null; created_at: string; published_at?: string | null; withdrawn_at?: string | null; created_by_name?: string; published_by_name?: string; withdrawn_by_name?: string };
 
-function CustomerPortalAdmin({ initialCustomerId = "" }: { initialCustomerId?: string }) {
+function CustomerPortalAdmin({ initialCustomerId = "", session }: { initialCustomerId?: string; session?: ActiveSession }) {
   const [general, setGeneral] = useState(false);
   return <section className="party-detail-section">
     <div className="quality-view-tabs" aria-label="Alcance documental">
       <button type="button" className={general ? "active" : ""} aria-pressed={general} onClick={() => setGeneral(true)}>Generales para clientes</button>
       <button type="button" className={!general ? "active" : ""} aria-pressed={!general} onClick={() => setGeneral(false)}>Por cliente</button>
     </div>
-    <PublicationLibrary key={general ? "general" : initialCustomerId} general={general} initialCustomerId={general ? "" : initialCustomerId}/>
+    <PublicationLibrary session={session} key={general ? "general" : initialCustomerId} general={general} initialCustomerId={general ? "" : initialCustomerId}/>
   </section>;
 }
 
-function PublicationLibrary({general, initialCustomerId}: {general: boolean; initialCustomerId: string}) {
+function PublicationLibrary({general, initialCustomerId, session}: {general: boolean; initialCustomerId: string; session?: ActiveSession}) {
   const [customers, setCustomers] = useState<Array<{ id: string; name: string; code: string }>>([]);
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [search, setSearch] = useState("");
@@ -127,13 +129,13 @@ function PublicationLibrary({general, initialCustomerId}: {general: boolean; ini
       {!general && loadedCustomer === "" ? <p>Selecciona un cliente destinatario antes de publicar</p> : null}
       {loadedCustomer === null && !error ? <p role="status">Consultando publicaciones…</p> : null}
       {loadedCustomer === null && error ? <button type="button" onClick={reload}>Reintentar consulta</button> : null}
-      {recipient && loadedCustomer === customerId ? <><form className={portalStyles.documentUpload} onSubmit={event => void upload(event)}>
+      {recipient && loadedCustomer === customerId ? <>{!general && session && <CustomerAccessPanel customerId={customerId} name={recipient.name} permissions={invitationPermissions(session,"customer")}/>}<form hidden={Boolean(session)} className={portalStyles.documentUpload} onSubmit={event => void upload(event)}>
         {versionParent ? <p>Se preparará la versión {versionParent.version + 1} de «{versionParent.display_name}»; la versión publicada anterior permanece disponible hasta publicar la nueva.</p> : null}
         <label><span>Nombre visible</span><input name="name" defaultValue={versionParent?.display_name ?? ""} required maxLength={200}/></label><label><span>Descripción</span><textarea name="description" defaultValue={versionParent?.description ?? ""} maxLength={1000}/></label>
         <label><span>PDF original</span><input name="file" type="file" accept="application/pdf,.pdf" required/></label>
         <button className="button button-primary" type="submit" disabled={busy}>{busy ? "Procesando…" : "Cargar privado como borrador"}</button>
       </form>
-      <h4>Publicaciones e historial</h4>{publications.map(item => <article key={item.id}><div><code>Versión {item.version} · {item.status === "published" ? `Publicado para ${recipient.name}` : item.status === "draft" ? "Privado / borrador" : item.status === "withdrawn" ? "Retirado" : "Sustituido"}</code><h4>{item.display_name}</h4>{item.description ? <p>{item.description}</p> : null}<small>{item.original_name ?? item.file_id} · {item.size_bytes ? formatFileSize(item.size_bytes) : ""}<br/>Cargado {formatTimestamp(item.created_at)} · {item.created_by_name ?? "Administrador"}{item.published_at ? <><br/>Publicado {formatTimestamp(item.published_at)} · {item.published_by_name ?? "Administrador"}</> : null}{item.withdrawn_at ? <><br/>Retirado {formatTimestamp(item.withdrawn_at)} · {item.withdrawn_by_name ?? "Administrador"}</> : null}{item.withdrawal_reason ? ` · Motivo: ${item.withdrawal_reason}` : ""}</small></div><div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&${general ? "scope=general" : "customerId=" + encodeURIComponent(customerId)}`} target="_blank" rel="noreferrer">Vista previa</a><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&${general ? "scope=general" : "customerId=" + encodeURIComponent(customerId)}&disposition=download`}>Descargar</a>{item.status === "draft" ? <button className="button button-primary" disabled={busy} onClick={() => void transition(item,"publish")}>Publicar para {recipient.name}</button> : item.status === "published" ? <><button className="button button-ghost" disabled={busy} onClick={() => void transition(item,"withdraw")}>Retirar publicación</button><button className="button button-ghost" type="button" disabled={busy} onClick={() => setVersionParent(item)}>Cargar nueva versión</button></> : null}</div></article>)}{publications.length===0 ? <PortalEmpty message={general ? "No hay documentos generales cargados." : "Este cliente aún no tiene documentos cargados."}/> : null}</> : null}
+      <h4>Publicaciones e historial</h4>{publications.map(item => <article key={item.id}><div><code>Versión {item.version} · {item.status === "published" ? `Publicado para ${recipient.name}` : item.status === "draft" ? "Privado / borrador" : item.status === "withdrawn" ? "Retirado" : "Sustituido"}</code><h4>{item.display_name}</h4>{item.description ? <p>{item.description}</p> : null}<small>{item.original_name ?? item.file_id} · {item.size_bytes ? formatFileSize(item.size_bytes) : ""}<br/>Cargado {formatTimestamp(item.created_at)} · {item.created_by_name ?? "Administrador"}{item.published_at ? <><br/>Publicado {formatTimestamp(item.published_at)} · {item.published_by_name ?? "Administrador"}</> : null}{item.withdrawn_at ? <><br/>Retirado {formatTimestamp(item.withdrawn_at)} · {item.withdrawn_by_name ?? "Administrador"}</> : null}{item.withdrawal_reason ? ` · Motivo: ${item.withdrawal_reason}` : ""}</small></div><div className={portalStyles.documentLinks}><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&${general ? "scope=general" : "customerId=" + encodeURIComponent(customerId)}`} target="_blank" rel="noreferrer">Vista previa</a><a className="button button-secondary" href={`/api/customer-portal/documents/${item.id}/file?admin=1&${general ? "scope=general" : "customerId=" + encodeURIComponent(customerId)}&disposition=download`}>Descargar</a>{session ? null : item.status === "draft" ? <button className="button button-primary" disabled={busy} onClick={() => void transition(item,"publish")}>Publicar para {recipient.name}</button> : item.status === "published" ? <><button className="button button-ghost" disabled={busy} onClick={() => void transition(item,"withdraw")}>Retirar publicación</button><button className="button button-ghost" type="button" disabled={busy} onClick={() => setVersionParent(item)}>Cargar nueva versión</button></> : null}</div></article>)}{publications.length===0 ? <PortalEmpty message={general ? "No hay documentos generales cargados." : "Este cliente aún no tiene documentos cargados."}/> : null}</> : null}
       {message ? <p role="status">{message}</p> : null}{error ? <div className="form-error" role="alert">{error}</div> : null}
     </section></>;
 }
@@ -153,10 +155,11 @@ export function StakeholderPortalModule({
   if (kind === "customer" && session.userType === "Administrador" && session.workspaceMode === "production") {
     return <CustomerPortal isAdministrator initialCustomerId={initialCustomerId} />;
   }
+  if (kind === "customer" && canSupervisePortal(session,kind)) return <CustomerPortalAdmin session={session} initialCustomerId={initialCustomerId}/>;
   if(kind==="supplier" && session.workspaceMode==="production"){
     if(!canAccessModule(session,"supplier-portal"))return <PortalAccessDenied/>;
-    if(session.userType==="Administrador")return <SupplierPortalAdmin/>;
-    if(session.userType!=="Proveedor")return <PortalAccessDenied/>;
+    if(canSupervisePortal(session,"supplier"))return <SupplierPortalAdmin key={JSON.stringify([session.authUserId,session.specificPermissions])}/>;
+    if(session.userType!=="Proveedor")return <PortalAccessDenied internal/>;
   }
   const company = resolvePortalCompany(session, kind);
   if (!company || (kind === "customer" && (session.userType !== "Cliente" || session.externalParty?.kind !== "customer"))) return <PortalAccessDenied />;
@@ -1397,8 +1400,8 @@ function PortalEmpty({ message }: { message: string }) {
   return <div className="access-empty portal-empty"><LockKeyhole size={22} /><p>{message}</p></div>;
 }
 
-function PortalAccessDenied() {
-  return <section className="access-empty portal-access-denied"><LockKeyhole size={28} /><h2>Acceso no disponible</h2><p>La sesión no tiene una empresa válida vinculada para este portal.</p></section>;
+function PortalAccessDenied({internal=false}:{internal?:boolean}={}) {
+  return <section className="access-empty portal-access-denied"><LockKeyhole size={28} /><h2>Acceso no disponible</h2><p>{internal ? "Tu cuenta requiere acceso al módulo y al portal de esta empresa." : "La sesión no tiene una empresa válida vinculada para este portal."}</p></section>;
 }
 
 function formatDate(value: string) {
